@@ -126,7 +126,11 @@ or debugging an adapter, or when a status line or pane word is unclear.
 
 At the start of a coordinator session, call `open_pane` (ToolSearch:
 `mcp__session-orchestration__open_pane`). When that turn ends it renames you `<project>-coordinator`
-(the root folder's name, lowercased, e.g. `myproj-coordinator`): name that in briefs. The pane
+(the root folder's name, lowercased, other characters as `-`, e.g. `myproj-coordinator`): name
+that in briefs. The root is `session-status --root`: the nearest folder up with an adapter or a
+`.claude/coordination.local.json`, else the git top. It also sets what you see, so a coordinator for
+one subfolder of a set-up project needs its own setup in that subfolder first (the outer root's
+coordinator still sees it). The pane
 shows the queued approvals (see Messaging), the status output grouped by what each task needs, and
 the adapter's `pending` text (the handoff file, below). Its Ask button submits "Coordinator pane: where does <item> stand, and what's
 next?" as this plugin's prompt: answer it briefly. In a narrow terminal `open_pane` says the pane is
