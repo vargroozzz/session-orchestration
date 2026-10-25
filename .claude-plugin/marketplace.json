@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "session-orchestration",
+  "description": "Coordinate parallel Claude Code sessions.",
+  "owner": {
+    "name": "vargroozzz"
+  },
+  "plugins": [
+    {
+      "name": "session-orchestration",
+      "description": "Coordinate parallel Claude Code sessions: a reply protocol for sessions that receive cross-session messages, and a playbook for the coordinator.",
+      "source": "./plugins/session-orchestration",
+      "category": "productivity"
+    }
+  ]
+}

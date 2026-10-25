@@ -1,0 +1,22 @@
+name: test
+on: [push, pull_request]
+jobs:
+  shell:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scrub-check.sh
+      - name: shell suites
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+          fail=0
+          while IFS= read -r t; do
+            echo "== $t"
+            bash "$t" || fail=1
+          done < <(git ls-files '*.test.sh')
+          exit $fail

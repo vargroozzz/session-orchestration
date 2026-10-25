@@ -1,0 +1,449 @@
+#!/usr/bin/env bash
+# session-status --init: sets a folder up for coordination (skill setting-up-coordination).
+# No model call, no tracker call: everything comes from the folder, its git repos and their remotes.
+#   session-status --init --check   one line, exit 0 configured, 1 unconfigured or partial, 3 covered by a parent;
+#                                   configured adds the active line (`active: tracker=… host=… delegate=…
+#                                   terminal=… messages=… features=…`, naming the terminal's, the messages module's
+#                                   and each enabled feature's doc) and
+#                                   a line per warning (a config value not valid, a module that doesn't load whole,
+#                                   delegation still in CLAUDE.md, a second account with features.accounts off, a
+#                                   terminal detected but not recorded)
+#   session-status --init           the proposal: what it found and what it would write, numbered for one reply
+#   session-status --init --write [--delegate] [--own] [--shared] [--trust=REL@SHA…] [--review-brief] [--rnd-brief]
+#                                 [KEY=VALUE…]
+#                                   writes the missing files from templates/ (never over an existing one; the
+#                                   CLAUDE.md section is appended to a CLAUDE.md/CLAUDE.local.md that lacks one),
+#                                   keeps new files out of git (.git/info/exclude), prints what it wrote. KEY=VALUE overrides an
+#                                   inferred fact (the names `--init` prints under "Facts"). The optional briefs (PR
+#                                   reviewer sessions, the R&D run's units) are written only when asked, also into a
+#                                   folder set up already. The config (lib.sh), each key only when it's unset:
+#                                   .claude/coordination/coordination.json (tracker, host, features.review_inbox) and
+#                                   .claude/coordination.local.json (features.accounts, terminal, approvals.delegate: true with
+#                                   --delegate, which also turns it on when set); both excluded up front, also in a
+#                                   folder set up already. --shared (shared mode) keeps the repo file out of the
+#                                   exclude, to be committed (a tracked one is never written). --trust=REL@SHA records
+#                                   a committed .claude/coordination/REL (an adapter or module) as trusted, refused
+#                                   when its sha256 is no longer the SHA the proposal showed. In a workspace, the one
+#                                   repo one level down with a committed .claude/coordination/ becomes the team key.
+# Configured: the nearest adapter (.claude/session-status-adapter, as session-status finds the root) is in this
+# folder, and its CLAUDE.md or CLAUDE.local.md names a replies folder (the line --handover reads). A folder with its
+# own adapter is its own project even when a parent folder has one too (a subproject coordinator); with no adapter
+# of its own under a parent's, it is covered by that parent, and --write needs --own.
+set -uo pipefail
+shopt -u patsub_replacement 2>/dev/null   # bash 5.2+ would expand & in a fill() value; 3.2 has no such option
+here=$(cd "$(dirname "$0")" && pwd)
+tpl=$here/templates
+. "$here/../../lib.sh" || exit 1
+root=$(pwd -P)
+
+mode=propose own= delegate= shared= review_brief= rnd_brief= over=() trust=() team_over=
+for a; do
+  case $a in
+    --check) mode=check ;; --write) mode=write ;; --own) own=1 ;; --delegate) delegate=1 ;; --shared) shared=1 ;;
+    --trust=?*@?*) trust+=("${a#--trust=}") ;;
+    --review-brief) review_brief=1 ;; --rnd-brief) rnd_brief=1 ;;
+    team=?*) team_over=${a#team=}; over+=("$a") ;;
+    *=*) over+=("$a") ;;
+    *) echo "unknown argument: $a"; exit 2 ;;
+  esac
+done
+
+# --- State -------------------------------------------------------------------------------------------------------
+cfg_person=$root/.claude/coordination.local.json
+# A committed one is ignored (lib.sh tracked), and never written to: that would publish it.
+person_src=$cfg_person
+if tracked "$cfg_person"; then
+  [ "$mode" != write ] || { echo "refused: .claude/coordination.local.json is committed: git rm --cached it first"; exit 1; }
+  person_src=/dev/null
+fi
+# A workspace (not a repo itself): the repos one level down with a committed .claude/coordination/, for the team key.
+team_found=()
+if ! git -C "$root" rev-parse --git-dir >/dev/null 2>&1 && ! jq -e '.team' "$person_src" >/dev/null 2>&1; then
+  for d in "$root"/*/; do
+    git -C "$d" ls-files --error-unmatch .claude/coordination/coordination.json >/dev/null 2>&1 && team_found+=("$(basename "$d")")
+  done
+fi
+team=; [ "${#team_found[@]}" = 1 ] && team=${team_found[0]}
+[ -z "$team_over" ] || team=$team_over
+# The committed files' folder (lib.sh shared_dir; the team found or given, before it is recorded), and its code not
+# trusted yet: REL@SHA each, shown for review. One further up than this folder is a parent project's: not this one's.
+sd=$(cd "$root" && shared_dir 2>/dev/null)
+jq -e '.team' "$person_src" >/dev/null 2>&1 || [ "$sd" = "$root/.claude/coordination" ] || sd=
+[ -z "$team" ] || sd=$root/$team/.claude/coordination
+review=()
+if [ -n "$sd" ]; then
+  while IFS= read -r f; do
+    r=${f#"$sd"/} want=$(jq -r --arg k "${f#"$sd"/}" '.trusted[$k] // empty | strings' "$person_src" 2>/dev/null)
+    sha=$(sha256_of "$f"); [ "$sha" = "$want" ] || review+=("$r@$sha")
+  done < <(find "$sd" -maxdepth 2 -type f \( -path "$sd/session-status-adapter" -o -path "$sd/*/*.sh" \) 2>/dev/null | sort)
+fi
+parent= d=$(dirname "$root")
+while [ "$d" != / ]; do [ -x "$d/.claude/session-status-adapter" ] && { parent=$d; break; }; d=$(dirname "$d"); done
+# --trust: recorded first, so the adapter below counts a committed one trusted now. Only files still as shown, and
+# not in a folder a parent covers (that exits below, writing nothing).
+if [ "$mode" = write ] && [ "${#trust[@]}" -gt 0 ] && { [ -z "$parent" ] || [ -n "$own" ] || [ -e "$root/.claude/session-status-adapter" ]; }; then
+  for t in "${trust[@]}"; do
+    r=${t%@*} sha=${t##*@}
+    case $r in ../*|*/../*|/*) echo "--trust=$t: not a path under .claude/coordination/"; exit 2 ;; esac
+    [ -f "$sd/$r" ] || { echo "--trust=$t: no ${sd:-.claude/coordination}/$r"; exit 1; }
+    [ "$(sha256_of "$sd/$r")" = "$sha" ] || { echo "--trust=$t: $r changed since it was shown: run session-status --init again and review it"; exit 1; }
+  done
+  for t in "${trust[@]}"; do
+    mkdir -p "$root/.claude" && { [ -e "$cfg_person" ] || echo '{}' > "$cfg_person"; } &&
+      jq --arg k "${t%@*}" --arg v "${t##*@}" '.trusted[$k] = $v' "$cfg_person" > "$cfg_person.tmp" && mv "$cfg_person.tmp" "$cfg_person" || exit 1
+  done
+fi
+# The adapter: the local one, else a committed one the person trusts (lib.sh adapter_path).
+adapter=; [ -n "$(adapter_path "$root" 2>/dev/null)" ] && adapter=1
+noexec=; [ -e "$root/.claude/session-status-adapter" ] && [ -z "$adapter" ] && noexec=1   # never rewritten: chmod +x
+replies=$(cd "$root" && sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
+slug() { tr 'A-Z' 'a-z' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g'; }
+# A delegation line left in CLAUDE.md from before the approvals.delegate key (the old template's wording).
+deleg_line=; (cd "$root" && grep -qiE 'delegates approvals' CLAUDE.md CLAUDE.local.md 2>/dev/null) && deleg_line=1
+deleg_set=; jq -e '.approvals.delegate != null' "$person_src" >/dev/null 2>&1 && deleg_set=1
+name=$(slug "$(basename "$root")")
+# Claude accounts sharing this transcript store, whatever features.accounts says (its loop, in a subshell).
+accounts_n=$( . "$LIB_DIR/features/accounts.sh" && list_accounts | grep -c .)
+# A review inbox the project names already: "Review inbox" and a claude.ai page on one line of one of its docs.
+inbox= o=.claude/orchestration; [ -d "$root/docs/claude" ] && o=docs/claude/orchestration
+[ -z "$replies" ] || o=$(dirname "${replies%/}")
+for f in CLAUDE.md CLAUDE.local.md "$o/memory.md" "$o/coordinator.md"; do
+  grep -qiE 'review inbox.*claude\.ai/(code/)?artifact/' "$root/$f" 2>/dev/null && inbox=1
+done
+# The terminal this runs in: Ghostty by TERM_PROGRAM, on macOS (its module drives AppleScript); tmux has no module
+# yet (plain, with a note). Plain isn't written, so a later run in Ghostty can still record it.
+term_found=plain term_note=
+[ "${TERM_PROGRAM:-}" = ghostty ] && [ "$(uname)" = Darwin ] && term_found=ghostty
+[ -z "${TMUX:-}" ] || [ "$term_found" != plain ] || term_note=" (tmux found: no tmux terminal yet, so plain)"
+term_set=; jq -e '.terminal != null' "$person_src" >/dev/null 2>&1 && term_set=1
+if [ -n "$adapter" ] && [ -n "$replies" ]; then state=configured
+elif [ -z "$adapter$noexec" ] && [ -n "$parent" ] && [ -z "$own" ]; then state=parent
+elif [ -n "$adapter$replies$noexec" ]; then state=partial
+else state=unconfigured; fi
+
+if [ "$mode" = check ]; then
+  case $state in
+    configured) w=; [ -z "$parent" ] || w="; its own adapter wins over the one in $parent"
+                echo "configured: $root (${name}-coordinator)$w"
+                cd "$root" || exit 1
+                wf=$(mktemp) || exit 1
+                t=$(config tracker 2>>"$wf") h=$(config host 2>>"$wf") d=$(config approvals.delegate 2>>"$wf")
+                a=$(config features.accounts 2>>"$wf") r=$(config features.review_inbox 2>>"$wf")
+                te=$(config terminal 2>>"$wf") m=$(config messages 2>>"$wf")
+                # The modules in use, loaded as they will be: a syntax error, a missing function or a shadowed
+                # plugin module shows here.
+                [ "$te" = plain ] || ( load_terminal ) 2>>"$wf"
+                [ "$a" != true ] || ( load_module features accounts list_accounts ) 2>>"$wf"
+                [ "$m" = none ] || ( load_module messages "$m" messages_notices ) 2>>"$wf"
+                sort -u "$wf"; rm -f "$wf"   # the warnings
+                [ "${#review[@]}" = 0 ] || echo "committed code new or changed upstream: ${review[*]%@*}: run setup to review it"
+                [ "$d" = true ] && d=on || d=off
+                f= docs=
+                # A module's doc: the .md beside the file found (terminals/ghostty.md).
+                [ "$te" = plain ] || { md=$(find_module terminals "$te") && md=${md%.sh}.md && [ -f "$md" ] && docs=$md; }
+                [ "$m" = none ] || { md=$(find_module messages "$m") && md=${md%.sh}.md && [ -f "$md" ] && docs=${docs:+$docs, }$md; }
+                [ "$a" != true ] || { md=$(find_module features accounts) && md=${md%.sh}.md && [ -f "$md" ] && docs=${docs:+$docs, }$md; f=accounts; }
+                [ "$r" != true ] || f=${f:+$f,}review_inbox docs=${docs:+$docs, }$LIB_DIR/features/review-inbox.md
+                echo "active: tracker=$t host=$h delegate=$d terminal=$te messages=$m features=${f:-none}${docs:+ → read $docs}"
+                [ -n "$term_set" ] || [ "$term_found" = plain ] || echo "detected $term_found: run setup to record it (session-status --init --write adds terminal=$term_found)"
+                [ "$a" = true ] || [ "$accounts_n" -lt 2 ] || echo "second account found, accounts off: set features.accounts to true in .claude/coordination.local.json (session-status --init --write adds it when unset)"
+                [ "$r" = true ] || [ -z "$inbox" ] || [ "$h" != bitbucket ] || echo "review inbox found, review_inbox off: set features.review_inbox to true in .claude/coordination/coordination.json (session-status --init --write adds it when unset)"
+                [ -z "$deleg_line" ] || [ -n "$deleg_set" ] || echo "delegation found in CLAUDE.md: run setup to move it (session-status --init --write --delegate)"
+                exit 0 ;;
+    parent) echo "covered by a parent: $parent ($(slug "$(basename "$parent")")-coordinator) covers this folder"; exit 3 ;;
+    partial) m="the CLAUDE.md section naming a replies folder"; [ -n "$adapter" ] || m="the adapter (.claude/session-status-adapter)"
+             [ -n "$adapter" ] || [[ " ${review[*]-} " != *" session-status-adapter@"* ]] || m="the committed .claude/coordination/session-status-adapter isn't trusted yet: run setup to review it"
+             [ -z "$noexec" ] || m=".claude/session-status-adapter is not executable: chmod +x it"
+             echo "partial: $m"; exit 1 ;;
+    *) echo "unconfigured: $root has no adapter and no replies folder line"; exit 1 ;;
+  esac
+fi
+if [ "$state" = parent ]; then
+  p=$(slug "$(basename "$parent")")-coordinator
+  echo "This folder is inside $parent, whose coordinator ($p) covers it. Should it get a coordinator of its own"
+  echo "(${name}-coordinator, its own adapter and files)? If so: session-status --init --own (proposal), then --write --own."
+  exit 3
+fi
+
+# --- Facts -------------------------------------------------------------------------------------------------------
+top=$(git -C "$root" rev-parse --show-toplevel 2>/dev/null) && top=$(cd "$top" && pwd -P)
+if [ -n "$top" ]; then repos=("$top"); layout="one repo"
+else
+  repos=(); while IFS= read -r g; do repos+=("$(cd "${g%/.git}" && pwd -P)"); done < <(cd "$root" && find . -mindepth 2 -maxdepth 3 -name .git 2>/dev/null | sed "s#^\.#$root#" | sort)
+  layout="workspace of ${#repos[@]} repos"
+fi
+first=${repos[0]:-}
+url=; [ -n "$first" ] && url=$(git -C "$first" remote get-url origin 2>/dev/null)
+case $url in
+  *github.com*) host=github ;; *bitbucket*) host=bitbucket ;; *gitlab*) host=gitlab ;; *) host=none ;;
+esac
+cfg_host=$host cfg_note=   # the config's host: GitLab isn't one yet (TODO: GitLab support)
+[ "$host" = gitlab ] && cfg_host=none cfg_note=" (host=none: GitLab support is a TODO)"
+repo_slug=$(sed -E 's#\.git$##; s#^[a-z+]+://[^/]+/##; s#^[^@]+@[^:]+:##; s#^[A-Za-z0-9.-]+:##' <<<"$url")
+gh=; [ "$host" = github ] && command -v gh >/dev/null && gh=1
+# The briefs' commands: a PR merge and a review post, by code host; `rnd.py units` counts these by default
+# (TODO: gitlab's are unchecked).
+case $host in
+  github) merge_cmd="gh pr merge" post_cmd="gh pr review" ;;
+  bitbucket) merge_cmd="bitbucketdc-cli pr merge" post_cmd="bitbucketdc-cli pr comment create" ;;
+  gitlab) merge_cmd="glab mr merge" post_cmd="glab mr note" ;;
+  *) merge_cmd= post_cmd= ;;
+esac
+default_branch=
+[ -n "$first" ] && default_branch=$(git -C "$first" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null) && default_branch=${default_branch#origin/}
+if [ -z "$default_branch" ]; then
+  default_branch=main
+  [ -n "$first" ] && ! git -C "$first" rev-parse -q --verify main >/dev/null && git -C "$first" rev-parse -q --verify master >/dev/null && default_branch=master
+fi
+
+# Task keys: the commonest tracker prefix over the last 200 commit subjects and the remote branches, if it's in 20%.
+words=$(for r in ${repos[@]+"${repos[@]}"}; do git -C "$r" log --format=%s -200 2>/dev/null; git -C "$r" branch -r --format='%(refname:short)' 2>/dev/null; done)
+total=$(grep -c . <<<"$words")
+best=$(grep -oE '\b[A-Z][A-Z0-9]+-[0-9]+' <<<"$words" | sed 's/-[0-9]*$//' | sort | uniq -c | sort -rn | head -1)
+prefix=${best##* }
+share=0; [ "$total" -gt 0 ] && [ -n "$prefix" ] && share=$(( $(grep -cE "\b$prefix-[0-9]+" <<<"$words") * 100 / total ))
+issues=0; [ "$total" -gt 0 ] && issues=$(( $(grep -cE '#[0-9]+' <<<"$words") * 100 / total ))
+if [ "$share" -ge 20 ]; then
+  keys=tracker key_re="$prefix-[0-9]+" key_example="$prefix-123" key_note="$prefix-123 (in $share% of commits and branches)"
+else
+  keys=session key_re="$name-[a-z0-9]+(-[a-z0-9]+)*" key_example="$name-<short-desc>"
+  key_note="session names, $name-<short-desc> (no tracker key in 20% of commits and branches${prefix:+; the commonest, $prefix, is in $share%})"
+  [ "$host" = github ] && [ "$issues" -ge 20 ] && key_note="$key_note; #N issue references are in $issues%, which session names don't track"
+fi
+# The tracker's ticket URL, from the project's docs.
+tracker_url=
+if [ "$keys" = tracker ]; then
+  docs=$(cd "$root" && { ls CLAUDE.md CLAUDE.local.md README* 2>/dev/null; find docs -name '*.md' 2>/dev/null | head -200; })
+  tracker_url=$(cd "$root" && [ -n "$docs" ] && grep -hoE "https?://[^ )>\"'\`]+/browse/$prefix-" $docs 2>/dev/null | head -1 | sed 's#/browse/.*#/browse/{key}#')
+  [ -n "$tracker_url" ] || tracker_url=$(cd "$root" && [ -n "$docs" ] && grep -hoE "https://linear\.app/[^/ ]+/issue/$prefix-" $docs 2>/dev/null | head -1 | sed 's#/issue/.*#/issue/{key}#')
+fi
+# The config's tracker: jira for tracker keys, github for #N issue refs on GitHub, else none. Linear isn't one yet.
+tracker=none
+if [ "$keys" = tracker ]; then
+  case $tracker_url in *linear.app*) cfg_note="$cfg_note (tracker=none: Linear support is a TODO)" ;; *) tracker=jira ;; esac
+elif [ "$host" = github ] && [ "$issues" -ge 20 ]; then tracker=github; fi
+# Branches: the commonest shape among remote branches.
+br=$(for r in ${repos[@]+"${repos[@]}"}; do git -C "$r" branch -r --format='%(refname:short)' 2>/dev/null; done | sed 's#^[^/]*/##' | grep -v '^HEAD$')
+if [ "$keys" = tracker ]; then
+  shape=$(grep -oE "^([a-z]+/)?$prefix-[0-9]+" <<<"$br" | sed -E "s#$prefix-[0-9]+##" | sort | uniq -c | sort -rn | head -1 | awk '{print $2}')
+  branch_pattern="${shape}$prefix-123-<desc>"
+else branch_pattern="<key>"; fi
+# Worktrees: a script CLAUDE.md names, an existing .worktrees/, else EnterWorktree (one repo) or git worktree add.
+worktree_cmd= worktree_line=
+script=$(cd "$root" && grep -hoE '[~/A-Za-z0-9_.-]*-wt\b' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
+if [ -n "$script" ]; then worktree_cmd="$script <key>" worktree_line=1
+elif [ "${#repos[@]}" = 0 ]; then worktree_cmd="none (no git repo here)"
+elif [ "${#repos[@]}" -gt 1 ] || [ -d "$first/.worktrees" ]; then
+  worktree_cmd="git -C <repo> worktree add <repo>/.worktrees/<branch>" worktree_line=1
+else worktree_cmd="EnterWorktree (under .claude/worktrees/)"; fi
+# Where things go: the section in CLAUDE.local.md when CLAUDE.md is tracked; the files in docs/claude/ if it exists.
+section_file=CLAUDE.md
+[ -n "$top" ] && git -C "$root" ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1 && section_file=CLAUDE.local.md
+orch=.claude/orchestration; [ -d "$root/docs/claude" ] && orch=docs/claude/orchestration
+[ -z "$replies" ] || orch=$(dirname "${replies%/}")   # an existing section's paths win
+urls=-   # built after the corrections, from a corrected repo_slug or tracker_url too, unless urls itself is given
+
+# Corrections from the reply: KEY=VALUE.
+for kv in ${over[@]+"${over[@]}"}; do
+  k=${kv%%=*} v=${kv#*=}
+  case $k in
+    name|key_re|key_example|tracker_url|default_branch|branch_pattern|worktree_cmd|section_file|orch|urls|repo_slug|merge_cmd|post_cmd|tracker|team) printf -v "$k" '%s' "$v" ;;
+    host) cfg_host=$v ;;
+    terminal) term_found=$v term_note= ;;
+    *) echo "unknown fact: $k (one of name key_re key_example tracker_url default_branch branch_pattern worktree_cmd section_file orch urls repo_slug merge_cmd post_cmd tracker host terminal team)"; exit 2 ;;
+  esac
+done
+if [ "$urls" = - ]; then
+  urls=
+  [ -n "$tracker_url" ] && urls="'ticket $tracker_url'"
+  [ "$host" = github ] && [ -n "$repo_slug" ] && urls="${urls:+$urls }'pr https://github.com/${repo_slug%/*}/{repo}/pull/{id}'"
+fi
+enc_root=$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root")
+done_rule="its session's done-when held (no command to count)"
+[ -n "$merge_cmd" ] && done_rule="its PR merged (the merge is the unit)"
+[ "$keys" = tracker ] && done_rule="its $key_example ticket moved to done (pass that command's regex as \`--done RX\`)"
+briefs=$( [ -n "$review_brief" ] || [ -e "$root/$orch/review-brief.md" ] || echo "--review-brief: a brief for PR reviewer sessions ($orch/review-brief.md)"
+          [ -n "$rnd_brief" ] || [ -e "$root/.claude/rnd-brief.md" ] || echo "--rnd-brief: what the weekly R&D run counts (.claude/rnd-brief.md)")
+# The repo file: the team's or the nearest committed one when there is one, else this folder's. A tracked one is the
+# repo's, never written here.
+cfg_repo=$root/.claude/coordination/coordination.json
+[ -n "$team" ] && cfg_repo=$root/$team/.claude/coordination/coordination.json
+[ -z "$sd" ] || [ -n "$team" ] || cfg_repo=$sd/coordination.json
+repo_tracked=; git -C "$(dirname "$cfg_repo")" ls-files --error-unmatch coordination.json >/dev/null 2>&1 && repo_tracked=1
+# A repo file there already that git sees: an earlier --shared made it visible, so a later --write doesn't hide it.
+repo_visible=; [ -e "$cfg_repo" ] && ! (cd "$root" && git check-ignore -q "$cfg_repo" 2>/dev/null) && repo_visible=1
+# key_pattern isn't written: the adapter answers it for session keys, and a tracker key's prefix would narrow the
+# default PROJ-123 pattern. It's the user's override only.
+# The features: the review inbox where the project names one (Bitbucket only), accounts with a second one.
+review_inbox=false
+[ -z "$inbox" ] || { [ "$cfg_host" = bitbucket ] && review_inbox=true || cfg_note="$cfg_note (review inbox found: off, it needs host=bitbucket; GitHub support is a TODO)"; }
+accounts=false; [ "$accounts_n" -lt 2 ] || accounts=true
+cfg_repo_json=$(jq -cn --arg t "$tracker" --arg h "$cfg_host" --argjson r "$review_inbox" '{tracker: $t, host: $h, features: {review_inbox: $r}}')
+# approvals.delegate: true with --delegate (over a value set too, below); false when unset, unless CLAUDE.md still
+# delegates in words: then it stays unset without --delegate, as false would revoke that unasked.
+deleg=null; [ -n "$deleg_line" ] || deleg=false; [ -z "$delegate" ] || deleg=true
+cfg_person_json=$(jq -cn --argjson a "$accounts" --argjson d "$deleg" --arg t "$term_found" --arg team "$team" '{features: {accounts: $a}} + if $t == "plain" then {} else {terminal: $t} end + if $d == null then {} else {approvals: {delegate: $d}} end + if $team == "" then {} else {team: $team} end')
+# FILE JSON [--write]: the keys of JSON the file doesn't have yet (an existing value is the user's), as `k=v …`;
+# --write adds them.
+missing_keys() {
+  local old='{}' add
+  [ ! -e "$1" ] || old=$(jq -c . "$1") || return 1
+  add=$(jq -cn --argjson o "$old" --argjson n "$2" 'reduce ($n | paths(type != "object")) as $p ({}; if ($o | getpath($p)) == null then setpath($p; $n | getpath($p)) else . end)')
+  [ "$add" != '{}' ] || return 0
+  jq -rn --argjson a "$add" '[$a | paths(type != "object") as $p | "\($p | join("."))=\($a | getpath($p))"] | join(" ")'
+  [ "${3:-}" != --write ] || { mkdir -p "$(dirname "$1")" && jq --argjson a "$add" '. * $a' <<<"$old" > "$1.tmp" && mv "$1.tmp" "$1"; }
+}
+miss_repo=; [ -n "$repo_tracked" ] || miss_repo=$(missing_keys "$cfg_repo" "$cfg_repo_json")
+miss_person=$(missing_keys "$cfg_person" "$cfg_person_json")
+[ -z "$repo_tracked" ] || cfg_note="$cfg_note (repo keys: the committed ${cfg_repo#"$root"/})"
+# The trust round and shared mode, the same lines in both proposals (each ending in its newline).
+shared_lines=
+[ -z "$team" ] || shared_lines+="   Team: $team/.claude/coordination/ is committed there, so its repo keys apply here (team=$team)."$'\n'
+[ "${#team_found[@]}" -lt 2 ] || shared_lines+="   Team: ${team_found[*]} each commit .claude/coordination/: say team=<folder> to use one."$'\n'
+if [ "${#review[@]}" -gt 0 ]; then
+  shared_lines+="   Committed code to review: it runs on your machine only once you trust it. Read each file first:"$'\n'
+  for t in "${review[@]}"; do shared_lines+="     ${sd#"$root"/}/${t%@*} (sha256 ${t##*@})"$'\n'; done
+  shared_lines+="   To trust them as they are now: --trust=$(sed 's/ / --trust=/g' <<<"${review[*]}")$( [[ " ${review[*]} " == *" session-status-adapter@"* ]] && [ -z "$(adapter_path "$root" 2>/dev/null)" ] && printf ' (the committed adapter is then used, no local one written)')"$'\n'
+fi
+[ -z "$shared" ] || [ -n "$repo_tracked" ] || shared_lines+="   Shared: ${cfg_repo#"$root"/} stays out of the exclude, for you to commit (repo keys only: tracker, host, features.review_inbox)."$'\n'
+[ -z "$shared" ] || [ -z "$repo_tracked" ] || shared_lines+="   Shared: ${cfg_repo#"$root"/} is committed already: nothing to write there."$'\n'
+cfg_line="tracker=$tracker host=$cfg_host features.review_inbox=$review_inbox features.accounts=$accounts terminal=$term_found$cfg_note$term_note"
+if [ "$state" = configured ] && [ "$mode" = propose ]; then
+  if [ -z "$miss_repo$miss_person$shared_lines" ] && [ -n "$deleg_set" ]; then
+    echo "This folder is set up for coordination already ($root, ${name}-coordinator): nothing to propose."
+  else
+    echo "This folder is set up for coordination already ($root, ${name}-coordinator), but its config isn't recorded:"
+    [ -z "$miss_repo" ] || echo "  $miss_repo$cfg_note → .claude/coordination/coordination.json"
+    [ -z "$miss_person" ] || echo "  $miss_person → .claude/coordination.local.json"
+    [ -n "$deleg_set" ] || [ -z "$deleg_line" ] || echo "  approvals.delegate=true (CLAUDE.md delegates; write with --delegate) → .claude/coordination.local.json"
+    printf '%s' "$shared_lines"
+    echo "  Write: session-status --init --write$([ -n "$deleg_line" ] && printf ' --delegate')${shared:+ --shared} [--trust=…] [KEY=VALUE…]"
+  fi
+  [ -z "$briefs" ] || { echo "Optional, on request (session-status --init --write FLAG):"; sed 's/^/  /' <<<"$briefs"; }
+  exit 0
+fi
+
+# --- Plan: each file, written only if it's missing --------------------------------------------------------------
+plan=()   # "template<TAB>target"
+at() { case $1 in /*) echo "$1" ;; *) echo "$root/$1" ;; esac; }
+[ -n "$replies" ] || plan+=("claude-section.md	$section_file")
+# One GitHub repo with gh: the adapter that puts its PRs in the pane. Else the minimal one (pending, keys, links).
+adapter_tpl=session-status-adapter; [ -n "$gh" ] && [ "${#repos[@]}" = 1 ] && adapter_tpl=github-adapter
+[ -n "$adapter$noexec" ] || plan+=("$adapter_tpl	.claude/session-status-adapter")
+plan+=("pending.md	$orch/pending.md" "memory.md	$orch/memory.md" "memory-topic.md	$orch/memory/coordinator.md" "memory-topic.md	$orch/memory/misc.md")
+[ -z "$review_brief" ] || plan+=("review-brief.md	$orch/review-brief.md")
+[ -z "$rnd_brief" ] || plan+=("rnd-brief.md	.claude/rnd-brief.md")
+todo=()
+for p in ${plan[@]+"${plan[@]}"}; do
+  t=${p#*	}
+  # The section goes into an existing CLAUDE.md/CLAUDE.local.md too (appended); every other file only when missing.
+  [ "${p%%	*}" = claude-section.md ] || [ ! -e "$(at "$t")" ] || continue
+  todo+=("$p")
+done
+targets=$(for p in ${todo[@]+"${todo[@]}"}; do t=${p#*	}; [ -e "$(at "$t")" ] && t="$t (section appended)"; echo "$t"; done
+          [ -d "$(at "$orch/replies")" ] || echo "$orch/replies/")
+
+if [ "$mode" = propose ]; then
+  # lines that are there only sometimes, each ending in its newline (a $(…) in the text below would drop it)
+  extra=
+  [ -z "$noexec" ] || extra+=$'   .claude/session-status-adapter exists but is not executable: chmod +x it (not rewritten).\n'
+  extra+=$shared_lines
+  [ "$term_found" = plain ] || extra+="   Terminal: $term_found found, so the pane's Attach in tab and Logs in split open there (terminal=$term_found). Say \"plain\" to copy the commands instead."$'\n'
+  [ -z "$briefs" ] || extra+="6. Optional, off unless you say:"$'\n'"$(sed 's/^/   /' <<<"$briefs")"$'\n'
+  cat <<EOF
+This folder isn't set up for coordination yet${adapter:+ (it has an adapter but no CLAUDE.md section)}${replies:+ (its CLAUDE.md section is there, the adapter is not)}. From the repo I found:
+1. Task keys: $key_note.${tracker_url:+ Tickets: $tracker_url.} Branches $branch_pattern from $default_branch.
+2. Code host: ${url:-none} ($host, $layout)$([ -n "$gh" ] && printf ', gh installed')$([ "$host" = github ] && [ -z "$gh" ] && printf ', gh not installed')$([ "$adapter_tpl" = github-adapter ] && [ -z "$adapter$noexec" ] && printf ' → GitHub adapter: open PRs, approvals, conflicts and CI in the pane').
+3. Files: $(paste -sd, - <<<"$targets" | sed 's/,/, /g')$([ -n "$top" ] && printf '; the new ones added to .git/info/exclude'). Config: $cfg_line.
+4. Approvals: not delegated (approvals.delegate=false): a coordinator's message alone approves nothing. Say "delegate" to let
+   my messages count as yours (merges into $default_branch, deploys and messages as you stay reserved either way).
+5. Worktrees: $worktree_cmd.
+${extra}Reply "yes" to write all of this, "yes, delegate" to delegate approvals too, or corrections.
+Facts (correct one with KEY=VALUE): name=$name${team:+ team=$team} tracker=$tracker host=$cfg_host terminal=$term_found key_re=$key_re key_example=$key_example tracker_url=${tracker_url:--} default_branch=$default_branch branch_pattern=$branch_pattern section_file=$section_file orch=$orch worktree_cmd='$worktree_cmd' urls=${urls:--}$([ "$adapter_tpl" = github-adapter ] && printf ' repo_slug=%s' "$repo_slug") merge_cmd='${merge_cmd:--}' post_cmd='${post_cmd:--}'
+Write: session-status --init --write [--delegate]${own:+ --own}${shared:+ --shared}$([ "${#review[@]}" = 0 ] || printf ' [--trust=…]') [--review-brief] [--rnd-brief] [KEY=VALUE…]
+EOF
+  exit 0
+fi
+
+# --- Write -------------------------------------------------------------------------------------------------------
+key_re_flag=; [ "$keys" = session ] && key_re_flag=1   # the default pattern already matches PROJ-123
+tracker_keys=; [ "$keys" = tracker ] && tracker_keys=1
+fill() { # template, then flags: lines starting {{?FLAG}} kept when FLAG is set, {{?!FLAG}} when it isn't
+  local line out= f
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ $line =~ ^\{\{\?(!?)([a-z_]+)\}\}(.*)$ ]]; then
+      f=${BASH_REMATCH[2]}; f=${!f:-}
+      if [ -n "${BASH_REMATCH[1]}" ]; then [ -z "$f" ] || continue; else [ -n "$f" ] || continue; fi
+      line=${BASH_REMATCH[3]}
+    fi
+    out+=$line$'\n'
+  done < "$tpl/$1"
+  for v in name orch default_branch key_example key_re branch_pattern worktree_cmd enc_root urls repo_slug topic_title topic_trigger merge_cmd post_cmd done_rule; do
+    out=${out//"{{$v}}"/${!v:-}}
+  done
+  printf '%s' "$out"
+}
+wrote=()
+for p in ${todo[@]+"${todo[@]}"}; do
+  t=${p%%	*} f=$(at "${p#*	}")
+  topic_title= topic_trigger=
+  case $f in
+    */memory/coordinator.md) topic_title="coordinating sessions" topic_trigger="acting as the coordinator, or messaging, resuming or handing work to another session" ;;
+    */memory/misc.md) topic_title="everything else" topic_trigger="nothing else fits" ;;
+  esac
+  mkdir -p "$(dirname "$f")" || exit 1
+  if [ "$t" = claude-section.md ] && [ -e "$f" ]; then
+    { echo; fill "$t"; } >> "$f" || exit 1; wrote+=("${p#*	} (section appended)")
+  else
+    fill "$t" > "$f" || exit 1
+    case $f in */session-status-adapter) chmod +x "$f" || exit 1 ;; esac
+    wrote+=("${p#*	}")
+  fi
+done
+[ -d "$(at "$orch/replies")" ] || { mkdir -p "$(at "$orch/replies")" && wrote+=("$orch/replies/"); }
+# The config: each key only when unset (an existing value is the user's); approvals.delegate also when --delegate
+# turns it on.
+[ -z "$miss_repo" ] || { missing_keys "$cfg_repo" "$cfg_repo_json" --write >/dev/null || exit 1; wrote+=(".claude/coordination/coordination.json ($miss_repo$cfg_note)"); }
+[ -z "$miss_person" ] || { missing_keys "$cfg_person" "$cfg_person_json" --write >/dev/null || exit 1; wrote+=(".claude/coordination.local.json ($miss_person)"); }
+if [ -n "$delegate" ] && [ "$(jq -r .approvals.delegate "$cfg_person")" != true ]; then
+  jq '.approvals.delegate = true' "$cfg_person" > "$cfg_person.tmp" && mv "$cfg_person.tmp" "$cfg_person" || exit 1
+  wrote+=(".claude/coordination.local.json (approvals.delegate=true)")
+fi
+# Keep them out of git: the repo's own .git/info/exclude (shared .gitignore untouched).
+if [ -n "$top" ]; then
+  ex=$(git -C "$root" rev-parse --git-path info/exclude); case $ex in /*) ;; *) ex=$root/$ex ;; esac
+  mkdir -p "$(dirname "$ex")"
+  # The config files up front, written or not: the repo file until shared mode commits it, the person's always.
+  rel=${root#"$top"}; rel=${rel#/}; rel=${rel:+$rel/}
+  for f in "/${rel}.claude/coordination/" "/${rel}.claude/coordination.local.json" "/${rel}.claude/coordination.local/"; do
+    git -C "$root" ls-files --error-unmatch "$top$f" >/dev/null 2>&1 && continue   # tracked (shared mode): not ours to hide
+    [ -n "$shared" ] && [ "$f" = "/${rel}.claude/coordination/" ] && continue
+    [ -n "$repo_visible" ] && [ "$f" = "/${rel}.claude/coordination/" ] && continue   # shared mode, still to commit
+    grep -qxF "$f" "$ex" 2>/dev/null || echo "$f" >> "$ex"
+  done
+  # Shared mode: the repo file must be visible to git. Our own exclude line goes; an ignore from elsewhere (SAIL's
+  # exclude has .claude/*) gets a negation; one git can't undo (a whole folder above it ignored) is named.
+  neg=
+  if [ -n "$shared" ] && [ -z "$repo_tracked" ] && [ "$cfg_repo" = "$root/.claude/coordination/coordination.json" ]; then
+    f="/${rel}.claude/coordination/"
+    grep -qxF "$f" "$ex" 2>/dev/null && { grep -vxF "$f" "$ex" > "$ex.tmp"; mv "$ex.tmp" "$ex"; }
+    if (cd "$root" && git check-ignore -q "$cfg_repo"); then
+      echo "!$f" >> "$ex"; neg="${ex#"$top"/} (!$f: ${cfg_repo#"$root"/} was ignored)"
+      (cd "$root" && git check-ignore -q "$cfg_repo") && echo "warning: ${cfg_repo#"$root"/} is still ignored ($(cd "$root" && git check-ignore -v "$cfg_repo" | cut -f1)): git can't re-include a file under an ignored folder, so change that line"
+    fi
+  fi
+  for w in ${wrote[@]+"${wrote[@]}"}; do
+    case $w in *" (section appended)"|.claude/coordination*) continue ;; esac   # the user's file / the config, above
+    case $w in "$orch"/*) w=$orch/ ;; esac   # the whole folder, so files added there later stay out too
+    f=$(at "$w")
+    case $f in "$top"/*) ;; *) continue ;; esac   # outside this repo
+    (cd "$root" && git check-ignore -q "$f") && continue
+    git -C "$root" ls-files --error-unmatch "$f" >/dev/null 2>&1 && continue   # tracked: not ours to hide
+    grep -qxF "/${f#"$top"/}" "$ex" 2>/dev/null || echo "/${f#"$top"/}" >> "$ex"
+  done
+  [ -z "$neg" ] || wrote+=("$neg")
+fi
+for t in ${trust[@]+"${trust[@]}"}; do wrote+=(".claude/coordination.local.json (trusted ${t%@*})"); done
+printf 'Wrote:\n'; printf '  %s\n' ${wrote[@]+"${wrote[@]}"}
+[ -z "$shared" ] || [ -n "$repo_tracked" ] || echo "Shared: commit ${cfg_repo#"$root"/} yourself (git add, then your usual commit and PR)."
+echo "Next: session-status --init --check (expect configured), then open_pane."

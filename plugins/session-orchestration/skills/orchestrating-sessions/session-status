@@ -1,0 +1,980 @@
+#!/usr/bin/env bash
+# One line per task: status, local worktree state, owning session. Then: sessions waiting on the user, and
+# leftovers (sessions/worktrees of finished tasks). No LLM involved.
+#
+# The project root is the nearest directory up from $PWD holding an executable .claude/session-status-adapter,
+# else the git toplevel, else $PWD. The adapter (that one, else a committed .claude/coordination/session-status-adapter
+# once trusted: lib.sh adapter_path) answers (one call per run, cwd = project root):
+#   tasks [ARG…]   KEY<TAB>STATUS<TAB>TITLE<TAB>EXTRA per task, in display order. EXTRA is printed verbatim
+#                  between STATUS and the worktree column (end it with its own separator, e.g. "| ").
+#                  On failure: exit non-zero with the message on stdout; it is printed as is (none: `adapter tasks
+#                  failed (exit N)` and stderr's last line). Exit 2 with nothing on stderr = not answered: the
+#                  no-adapter rows below (an adapter with only `pending`, `urls` or `key-pattern` needs no `tasks`).
+#                  After a sweep exits 2, the pointed-at keys that `done` doesn't report are looked up
+#                  (`tasks KEY…`); its rows replace the bare ones, and the finished keys go to Leftovers.
+#                  The coordinator pane groups and acts on these words in EXTRA, whitespace-separated:
+#                    REPO#ID OPEN|MERGED   a PR (OPEN: In review; +NAME too: Landing)
+#                    +NAME / !NAME         approved by / changes asked by NAME (!: Address comments)
+#                    no-human-approval     open, waiting for a reviewer
+#                    CONFLICT              merge conflict (Resolve conflicts)
+#                    CI-FAILED             the PR's latest build failed (Fix CI)
+#                    ↩MM-DD NAME→STATUS    the tracker sent it back
+#                    (PRs as of HH:MM)     the PR words are from that time
+#                  Anything else shows only in the item's details.
+#                  A line `fix: LABEL → COMMAND` instead of a task (on success or failure) is printed as is after the
+#                  rows; the coordinator pane offers it as an action while it's there. Never print outside text
+#                  (a tracker's error, a message) at the start of a line: indent it, so it can't pose as one.
+#   done KEY…      KEY[<TAB>LABEL] for each key that's finished; feeds "Leftovers" and "Resolved".
+#   key-pattern    one ERE matching a task key (default: the config's key_pattern, else [A-Z][A-Z0-9]+-[0-9]+).
+#   status-names   regex of the project's own status-command names (its wrapper); see below.
+#   repos          git repos to look for worktrees in, one per line, relative to the root (default: the root
+#                  if it's a repo, else its child repos).
+#   pending        the coordinator's handoff text, printed as is by --pending (the coordinator pane shows it).
+#   urls           link templates for the coordinator pane, one per line: `ticket URL` with {key}, `pr URL`
+#                  with {repo} and {id} (a PR shows in EXTRA as repo#id). Printed as is by --urls.
+#   session-dirs   more directories whose sessions belong to the project (absolute or ~/…, one per line), e.g. a
+#                  tooling repo its coordinator starts sessions in. Their sessions never own a task: they show
+#                  under "Other sessions". Default: the root only.
+#   notices        short lines about things outside the tracker (new chat messages, mentions), one per item, on
+#                  the sweep only; printed under "Notices". A line should stay the same while its item does.
+#                  --changes reports a new or changed notice but not one that went away (read, answered).
+#                  Exit 1 = failed, reason on stdout: the last good notices are shown, plus the reason. Other
+#                  non-zero = not supported. Capped at 60s, which counts as a failure.
+#                  A messages module (`messages` in the config: lib.sh, messages/msgraph.md) runs beside it, the
+#                  same way; its lines come first. --messages-file prints where it keeps the message behind each line.
+#   pr-keys REPO#ID  the task keys a PR names (branch, title), one per line; exit non-zero when it can't tell. For
+#                  a messages module tagging PR links.
+#   mine           the task keys you own, one per line; a messages module marks notices for them. Default: the
+#                  keys of the last sweep's rows.
+# "Waiting on you" leaves out a task's worker at rest whose row only waits on a reviewer (no-human-approval, nothing
+# to fix): its row shows it idle. It adds `— blocked: TOOL `INPUT`` while hooks/blocked.sh's record of the prompt is newer than the
+# session's transcript; that line appearing is a change. Any other blocked session is listed only while verdict
+# (below) says it waits on the user; a prompt unanswered SESSION_STATUS_STALE_HOURS (6) goes under "Stale prompts"
+# with its stop command instead (not compared by --changes).
+# --changes also skips a row whose only change is its session flipping between working, idle and blocked, or entering
+# `working`, or its worktree's counts
+# changing while it works, and "Waiting on you" churn: an entry appearing, or going away while its session
+# lives on (states of the sweep's sessions are kept in ~/.cache/session-status/<project>.agents).
+# "Resolved (idle a week)": leftovers idle 7 days (SESSION_STATUS_RESOLVE_DAYS) whose removal loses nothing (a
+# session idle or done; a clean worktree whose commits are merged or on origin): by transcript, last commit and folder times.
+# --changes doesn't compare that section: an item moving there, or going away from it, isn't news.
+# "Other sessions": live sessions that own no row (no task, a reviewer, a session dir) and aren't blocked (Waiting
+# on you has those), coordinators (ran --changes, --watch or --owner, or opened the pane) left out: `"NAME" STATE AGE[ · reviews KEY][ — LAST TEXT] (PREFIX attach ID)`.
+# AGE is since start while working, else since its transcript was last written; idle or done ones drop off at
+# SESSION_STATUS_OTHER_HOURS (3). --changes doesn't compare it either.
+# Owners: a review session (`Session task: KEY review`, "review" ending the marker) never owns KEY. Task markers
+# count only from a session's own text and the messages it received (its prompts, a SendMessage brief), not its
+# tool inputs (a brief it sends names another session's task). A first prompt names a key only at its start, and
+# beats any marker. The `maybe` guess skips a session whose first prompt names another key. A session in a
+# session-dir never owns a task.
+# A call the adapter doesn't answer exits non-zero and the default applies. With no adapter (or `tasks` exiting 2),
+# rows are the keys named by running sessions and worktree branches; no "Leftovers".
+#
+# Usage: session-status              all open tasks
+#        session-status KEY [KEY…]   these tasks; no footer (it covers all sessions)
+#        session-status ARG…         other args go to the adapter's `tasks`
+#        session-status --changes [args]   only lines changed since the previous --changes run
+#        session-status --watch [--every SECS] [args]   block until --changes reports something at two polls in a
+#                       row (or fails 3 in a row), print it and exit; checks every SECS (default 1800). Run it in
+#                       the background, re-arm; no loop around it.
+#        session-status --pending       the adapter's `pending` text only
+#        session-status --urls          the adapter's `urls` text only
+#        session-status --root          the project root: where the adapter and .claude/coordinator-actions.json are
+#        session-status --agents        the sessions the last sweep saw: id, name, state, command prefix, started
+#                       (epoch s), cwd, kind, status, pid (tabs)
+#        session-status --activity      what each live session is doing, fresh, no tracker calls: id, name, state,
+#                       transcript written (epoch s), doing, since (epoch s, 0 unknown), last text line, context
+#                       tokens, context window, status (idle/busy/waiting), kind, cwd, command prefix (tabs); see
+#                       session-activity.jq. --activity --all-projects: every project's sessions, not only this one's
+#        session-status --peek ID [N]   a session's last N (12) prompts, texts and tool calls as Markdown, then
+#                       what it's doing now (session-peek.jq); any project, any account
+#        session-status --dir KEY|ID…   the folder a task or session works in (the first argument that resolves):
+#                       KEY's worktree; for an ID, the git top of its latest cwd (its transcript), else that cwd
+#        session-status --diff KEY|ID…  that folder's changes since its merge-base with origin/HEAD, committed or
+#                       not: `DIR · vs BASE`, the --stat lines and untracked `?? FILE`s, a blank line, the patch
+#        session-status --compact ID   an idle background session runs /compact (stopped, resumed with it)
+#        session-status --send-when-idle ID TEXT   wait until it isn't busy, then deliver TEXT without forking it
+#        session-status --coordinator   names of this account's live coordinator sessions (ran --changes,
+#                       --watch or --owner, or opened the pane), newest first, excluding the caller; no tracker calls
+#        session-status --owner KEY…   who owns each task and why: the row's session, then each candidate
+#                       (first prompt, marker, review, maybe) with its state, first prompt line and markers
+#        session-status --handover ID [--] 'WHAT NEXT'   a task session too big to resume is stopped and a fresh
+#                       one takes its task over, under its name, from the replies folder's KEY.md (see the block)
+#        session-status --init [--check | --write …]   set this folder up for coordination: the setting-up-coordination
+#                       skill's session-init documents the modes; runs in the cwd, not the root
+#        session-status --config KEY   a config value (lib.sh at the plugin root lists the keys), e.g. approvals.delegate
+#        session-status --open view [--account DIR] TITLE DIR -- CMD…   (or `--open split [--account DIR] DIR -- CMD…`)
+#                       opens CMD in a tab or split of the configured terminal (config terminal; lib.sh's
+#                       load_terminal), with its exit code: 2 means nothing opened and CMD is printed to copy
+# Superseded: a first prompt's `Supersedes: ID` line (--handover writes it) or `You replace session ID` marks session
+# ID replaced. It never owns
+# a task, nor shows as a leftover: under Other sessions it reads `· superseded by NEWID`.
+# Transcripts that ran session-status (or a status-names command) with --changes, --watch or --owner, or that
+# opened the pane (open_pane), are a coordinator's and never own a task; a plain run (a worker checking its own
+# task) doesn't count.
+# The default key pattern also matches UTF-8 or SHA-256; a project with real keys should answer key-pattern.
+set -uo pipefail
+[ "${1:-}" = --init ] && { shift; exec bash "$(dirname "$0")/../setting-up-coordination/session-init" "$@"; }
+. "$(dirname "$0")/../../lib.sh" || exit 1
+[ "${1:-}" = --config ] && { config "${2:-}"; exit; }
+if [ "${1:-}" = --open ]; then
+  case ${2:-} in view) fn=open_view ;; split) fn=open_split ;; *) echo "usage: session-status --open view|split …" >&2; exit 1 ;; esac
+  shift 2; a=(); while [ $# -gt 0 ] && [ "$1" != -- ]; do a+=("$1"); shift; done; shift
+  load_terminal; "$fn" ${a[@]+"${a[@]}"} "$@"; exit
+fi
+
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+ROOT=$(find_root); cd "$ROOT" || exit 1
+ENC=$(sed 's/[^A-Za-z0-9]/-/g' <<<"$ROOT")
+RESOLVED='Resolved (idle a week)'   # the pane's RESOLVED (hooks/register.tsx)
+NOW=$(date +%s); RESOLVE_S=$(( ${SESSION_STATUS_RESOLVE_DAYS:-7} * 86400 ))
+
+# --watch: a change must show at two polls in a row (CONFIRM_S apart) to count, so a flicker (a Bitbucket blip, a
+# state flip) wakes no one; the first poll peeks (SESSION_STATUS_PEEK: --changes keeps its state), the second commits.
+# A failed poll (Jira or Bitbucket timing out, a jq error) logs one line to stderr and is retried at the next tick
+# (SECS; CONFIRM_S while confirming a change). WATCH_TRIES (3) failures in a row end the wait with "gave up after N"
+# and the last error. stderr passes through.
+if [ "${1:-}" = --watch ]; then
+  shift; every=1800; [ "${1:-}" = --every ] && { every=${2:-}; shift; shift; }
+  case $every in ''|*[!0-9]*|0) echo "--every needs a positive number of seconds"; exit 2 ;; esac
+  confirm=${SESSION_STATUS_CONFIRM_S:-120}; [ "$confirm" -le "$every" ] || confirm=$every
+  tries=${SESSION_STATUS_WATCH_TRIES:-3}
+  case $tries in ''|*[!0-9]*|0) echo "SESSION_STATUS_WATCH_TRIES needs a positive number"; exit 2 ;; esac
+  fails=0 seen=
+  while :; do
+    if [ -n "$seen" ]; then out=$("$SELF" --changes "$@"); else out=$(SESSION_STATUS_PEEK=1 "$SELF" --changes "$@"); fi; rc=$?
+    if [ "$rc" != 0 ]; then
+      # A change waiting to be confirmed keeps the short CONFIRM_S retry, so a blip doesn't delay it by SECS.
+      fails=$((fails + 1)) wait=$every out=${out:-"(no output, exit $rc; see stderr)"}; [ -z "$seen" ] || wait=$confirm
+      [ "$fails" -lt "$tries" ] || { echo "session-status --watch: gave up after $fails failed polls in a row; last error:"; echo "$out"; exit "$rc"; }
+      echo "session-status --watch: poll failed ($fails/$tries), retrying in ${wait}s: $(paste -sd' ' - <<<"$out" | tr -s ' ' | cut -c1-200)" >&2
+      sleep "$wait"; continue
+    fi
+    fails=0
+    if [ "$out" = "no changes" ]; then seen=; sleep "$every"
+    elif [ -n "$seen" ]; then echo "$out"; exit 0
+    else seen=1; sleep "$confirm"
+    fi
+  done
+fi
+
+# --changes: print only lines that differ from the previous --changes run (for --watch). Idle/busy and
+# "closed Nh" ages are stripped first, since they change on every run, and so is a `(maybe …)` guess (not an
+# owner). One state file per arg list.
+# ponytail: a manual --changes run with the watcher's args consumes the change the watcher would report.
+if [ "${1:-}" = --changes ]; then
+  shift; last=~/.cache/session-status/$ENC${*:+-$(printf '%s' "$*" | cksum | cut -d' ' -f1)}.last; mkdir -p ~/.cache/session-status
+  # (not on notice lines: their text is the user's, and the coordinator looks it up verbatim)
+  # A `fix:` line is a pane button, not news: not compared either. Nor is "Other sessions" (states and last
+  # lines change on every run; a session that needs the user shows under Waiting on you), nor "Stale prompts"
+  # (an entry there moved from Waiting on you, whose `blocked:` line was news already).
+  # Resolved needs nothing, so its section isn't compared (kept aside in $last.resolved): an item moving there
+  # from Leftovers wakes no one, nor does it going away.
+  : > "$last.resolved"
+  new=$(SESSION_STATUS_NO_FEEDBACK=1 "$SELF" "$@" | sed -E '/^  \* /!s/" (idle|busy)/"/; /^  \* /!s/ closed [0-9]+h/ closed/; /^  \* /!s/ \(maybe [0-9a-f]+: [0-9]+ mentions\)//' |
+    awk -v r="$RESOLVED:" -v out="$last.resolved" '/^fix:/ {next} $0 == "Other sessions:" || $0 == "Stale prompts:" {drop = 1; next} drop && /^  / {next} {drop = 0} $0 == r {skip = 1; next} skip && /^  / {print > out; next} {skip = 0; print}') ||
+    { echo "$new"; exit 1; }
+  if [ -f "$last" ]; then
+    # A notice going away (read, answered) isn't news: removed notice lines don't count. Nor does a session
+    # merely starting work: a row whose only change is its session entering `working` is dropped, both
+    # halves. Nor is a working session's worktree changing its dirty/unpushed counts, nor a row flipping between
+    # working, idle and blocked (a finished worker reports by message). Entering done or closed counts, with
+    # current counts. "Waiting on you" comes and goes as sessions turn busy and idle: a plain entry appearing
+    # doesn't count, one saying what it's `blocked:` on does (a prompt, hooks/blocked.sh), and one going away
+    # counts only when its session ended (gone or done; states from the run just made, in $ENC.agents).
+    # Emptied headers and blank lines are dropped too: alone they mean no change.
+    { diff "$last" <(echo "$new") || true; } | sed -nE 's/^< /was: /p; s/^> /now: /p' |
+      grep -vE '^was:   \* ' | awk -v agents="$HOME/.cache/session-status/$ENC.agents" -v resolved="$last.resolved" '
+        BEGIN { while ((getline a < agents) > 0) { split(a, f, "\t"); live[substr(f[1], 1, 8)] = f[3] }
+                while ((getline a < resolved) > 0) res[a] }
+        function key(l) { l = substr(l, 6); sub(/sess:"[^"]*"( [a-z]+)?/, "&\001", l); sub(/" [a-z]+\001/, "\"\001", l); sub(/\001/, "", l)
+          sub(/wt dirty:[0-9?]+ unpushed:[0-9?]+/, "wt", l); return l }
+        function st(l) { return match(l, /sess:"[^"]*"( [a-z]+)?/) ? substr(l, RSTART, RLENGTH) : "" }
+        function flip(s) { return s ~ /"( (working|idle|blocked|busy|stale))?$/ }
+        { line[NR] = $0 } /^was: / { was[key($0)] = NR; wst[key($0)] = st($0) } /^was: / && (substr($0, 6) in res) { drop[NR] }
+        /^now: / && /sess:"[^"]*" working/ && (key($0) in was) { drop[NR]; drop[was[key($0)]] }
+        /^now: / && (key($0) in was) && st($0) != wst[key($0)] && flip(st($0)) && flip(wst[key($0)]) { drop[NR]; drop[was[key($0)]] }
+        /^now:   ".*" \(.*attach [0-9a-f]+\)$/ { drop[NR] }
+        /^was:   ".*" \(.*attach [0-9a-f]+\)( — blocked: .*)?$/ { match($0, /attach [0-9a-f]+\)/); id = substr($0, RSTART + 7, RLENGTH - 8)
+          if (id in live && live[id] != "done") drop[NR] }
+        END {
+          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:)?$/ || line[i] == "was: Leftovers (task finished):") drop[i]
+          for (i = 1; i <= NR; i++) if (!(i in drop)) print line[i] }' | grep . || echo "no changes"
+  else
+    echo "$new"
+  fi
+  [ -n "${SESSION_STATUS_PEEK:-}" ] || echo "$new" > "$last"; exit
+fi
+
+ADAPTER=$(adapter_path "$ROOT")   # local, else the committed one once trusted (lib.sh)
+adapter() { [ -n "$ADAPTER" ] && "$ADAPTER" "$@"; }
+[ "${1:-}" = --root ] && { echo "$ROOT"; exit; }
+[ "${1:-}" = --pending ] && { adapter pending 2>/dev/null; exit; }
+[ "${1:-}" = --urls ] && { adapter urls 2>/dev/null; exit; }
+[ "${1:-}" = --agents ] && { cat ~/.cache/session-status/"$ENC".agents 2>/dev/null; exit; }
+[ "${1:-}" = --messages-file ] && { echo ~/.cache/session-status/"$ENC".messages/notices.jsonl; exit; }
+# killtree PID: PID and everything below it (a notices source's CLI or triage two levels down), leaves first.
+killtree() { local c; for c in $(pgrep -P "$1"); do killtree "$c"; done; kill "$1" 2>/dev/null; }
+TMP=$(mktemp -d); NPID=; trap '[ -z "$NPID" ] || killtree "$NPID"; rm -rf "$TMP"' EXIT
+
+KEYRE=$(config key_pattern 2>/dev/null); [ -n "$KEYRE" ] || KEYRE=$(adapter key-pattern 2>/dev/null) || KEYRE=; [ -n "$KEYRE" ] || KEYRE='[A-Z][A-Z0-9]+-[0-9]+'
+KEYRE="($KEYRE)"
+ACT=; SEND=; COMPACT=; HANDOVER=; PEEK=; WHERE=; ALLP=; YDAY=
+case "${1:-}" in --activity) ACT=1; shift ;; --send-when-idle) SEND=1; shift ;; --compact) COMPACT=1; shift ;; --handover) HANDOVER=1; shift ;;
+  --peek) PEEK=1; shift ;; --dir|--diff) WHERE=$1; shift ;; --yesterday) YDAY=1; shift ;; esac
+[ -n "$ACT" ] && [ "${1:-}" = --all-projects ] && { ALLP=1; shift; }
+if [ -z "$ACT$SEND$COMPACT$HANDOVER$PEEK" ]; then
+  repos=$(adapter repos 2>/dev/null) ||
+    repos=$(git rev-parse --git-dir >/dev/null 2>&1 && echo . || find . -mindepth 2 -maxdepth 2 -name .git | sed 's#/\.git$##')
+  (cd "$ROOT" && while read -r r; do [ -n "$r" ] && (cd "$r" 2>/dev/null && pwd -P); done <<<"$repos") > "$TMP/repos"
+fi
+
+COORD=; [ "${1:-}" = --coordinator ] && { COORD=1; shift; }
+OWNER=; [ "${1:-}" = --owner ] && { OWNER=1; shift; }
+BY_KEY=
+[ $# -gt 0 ] && ! printf '%s\n' "$@" | grep -qvxE "$KEYRE" && BY_KEY=1
+[ -z "$OWNER" ] || [ -n "$BY_KEY" ] || { echo "usage: session-status --owner KEY [KEY…]"; exit 2; }
+TASKS=   # set when the adapter answered `tasks`
+# messages_job: the configured messages module's notices (contract: messages/msgraph.sh's header).
+messages_job() {
+  load_module messages "$MSG" messages_notices 2>/dev/null || { echo "messages: no $MSG module"; return 1; }
+  NOTICE_DIR=~/.cache/session-status/$ENC.messages NOTICE_KEYRE=$KEYRE NOTICE_ROWS=~/.cache/session-status/$ENC.rows
+  NOTICE_MINE=$NOTICE_DIR/mine; mkdir -p "$NOTICE_DIR"
+  adapter mine > "$NOTICE_MINE.new" 2>/dev/null && mv "$NOTICE_MINE.new" "$NOTICE_MINE" ||
+    grep -oE "^$KEYRE" "$NOTICE_ROWS" > "$NOTICE_MINE" 2>/dev/null
+  messages_notices
+}
+if [ -n "$COORD$OWNER$ACT$SEND$COMPACT$HANDOVER$PEEK$WHERE$YDAY" ]; then :
+else
+  # Notices run alongside everything else: the sweep only, like the other footers. Each source (the messages module,
+  # the adapter) writes $TMP/notices.SOURCE and its exit code.
+  MSG=$(config messages 2>/dev/null); NSRC=
+  [ -n "$BY_KEY" ] || { [ "$MSG" = none ] || NSRC=messages; [ -z "$ADAPTER" ] || NSRC="$NSRC adapter"; }
+  if [ -n "$NSRC" ]; then
+    { [ "$MSG" = none ] || { messages_job > "$TMP/notices.messages" 2>/dev/null; echo $? > "$TMP/notices.messages.rc"; } &
+      [ -z "$ADAPTER" ] || { adapter notices > "$TMP/notices.adapter" 2>/dev/null; echo $? > "$TMP/notices.adapter.rc"; } &
+      wait; } & NPID=$!
+  fi
+  if [ -n "$ADAPTER" ]; then
+    tasks=$(adapter tasks "$@" 2> "$TMP/tasks.err"); rc=$?
+    # Exit 2 with a quiet stderr = not answered: the no-adapter rows. Bash's own exit 2 (a syntax error) says why.
+    if [ $rc = 0 ]; then TASKS=1; cat "$TMP/tasks.err" >&2
+    elif [ $rc != 2 ] || [ -s "$TMP/tasks.err" ]; then
+      if [ -n "$tasks" ]; then echo "$tasks"
+      else echo "adapter tasks failed (exit $rc)"; tail -1 "$TMP/tasks.err" | sed 's/^/  /'; fi
+      exit 1
+    fi
+  fi
+  [ -n "$TASKS" ] || [ $# = 0 ] || [ -n "$BY_KEY" ] ||
+    { echo "Arguments other than task keys need an adapter that answers tasks ($ROOT/.claude/session-status-adapter)"; exit 1; }
+fi
+
+# Sessions of every account lib.sh's list_accounts names (features.accounts: all sharing this transcript store), one
+# per line from list_sessions (lib.sh: the fields and --all).
+CUR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}; CUR=${CUR%/}
+TRANSCRIPTS=$CUR/projects/$ENC
+# A session's transcript, wherever it ran (accounts asked above share this store), and what it's doing.
+transcript_of() { ls "$CUR"/projects/*/"$1".jsonl 2>/dev/null | head -1; }
+# Doing, since, last, ctx and window for a transcript, tab-separated, placeholders when it can't be read. The
+# window is 1M when the model id has [1m] or the context already holds more than 200k tokens, else 200k. The
+# model id is the latest in the tail (session-activity.jq), else the first in the file (named at the start).
+activity_fields() {
+  local doing since last ctx model
+  IFS=$'\037' read -r doing since last ctx model <<<"$(activity_of "$1" | tr '\t' '\037')"
+  [ -n "$model" ] || model=$(grep -o -m 1 '"modelId":"[^"]*"' "$1")
+  case $model in *'[1m]'*) win=1000000 ;; *) [ "${ctx:-0}" -gt 200000 ] && win=1000000 || win=200000 ;; esac
+  printf '%s\t%s\t%s\t%s\t%s' "$doing" "${since:-0}" "$last" "${ctx:-0}" "$win"
+}
+# Reads a tab-separated session line into the named variables, empty fields kept (IFS=tab would collapse them).
+read_row() { IFS=$'\037' read -r "$@" <<<"$(tr '\t' '\037' <<<"$row")"; }
+
+# A session by its id or a prefix of 8+ characters, in any account, retired ones too: its list_sessions line, or
+# nothing. Exit 1: a listing failed, so "nothing" isn't known.
+find_session() {
+  rm -f "$TMP/ask.failed"
+  local r; r=$(list_sessions --all | awk -F'\t' -v id="$1" 'length(id) >= 8 && index($1, id) == 1' | head -1)
+  [ ! -e "$TMP/ask.failed" ] || return 1
+  printf '%s' "$r"
+}
+# Stops a live session and waits (up to 30s) until its process is gone: a resume while it still runs starts a copy.
+stop_session() {  # PREFIX ID
+  bash -c "$1 stop ${2:0:8}" >/dev/null 2>&1 || return 1
+  local end=$(( SECONDS + 30 )) r
+  while [ "$SECONDS" -lt "$end" ]; do
+    r=$(find_session "$2") && [ -n "$r" ] && [ -z "$(cut -f9 <<<"$r")" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+# Runs `<prefix> --bg --resume ID TEXT` in DIR, and checks the session went on under its own id (a resume of a
+# running session starts a copy instead).
+resume_with() {  # PREFIX DIR ID TEXT
+  local out
+  out=$(cd "$2" 2>/dev/null || cd "$ROOT"; bash -c "$1 --bg --resume \"\$0\" \"\$1\"" "$3" "$4" 2>&1)
+  grep -q "backgrounded · ${3:0:8}" <<<"$out" && return 0
+  echo "resume of ${3:0:8} didn't keep its id: $(tail -1 <<<"$out")"; return 1
+}
+# A transcript's first prompt, skipping a compaction summary.
+first_prompt() {
+  jq -rn 'first(inputs | select(.type=="user" and (.message.content|type)=="string")
+    | .message.content | select(startswith("This session is being continued")|not)) // ""' "$1" 2>/dev/null
+}
+# The key a first prompt names: only at its start (`Work on KEY`, `Session task: KEY`, `KEY:`), not one it
+# mentions further on (history, an example key in docs work).
+first_key() {
+  grep -m 1 . <<<"$1" | grep -oE "^[[:space:]]*(([Ww]ork on|Session task:) +$KEYRE([^0-9]|$)|$KEYRE:)" | grep -oE "$KEYRE" | head -1
+}
+# The `Session task: KEY[ review]` markers of FIRST (its first prompt) and transcript FILE: in its own text and the
+# messages it received, never its tool inputs.
+marks_of() {  # FIRST FILE
+  { printf '%s\n' "$1"
+    ! grep -qE "Session task: $KEYRE" "$2" || jq -r 'if .type=="assistant" then .message.content[]? | select(.type=="text") | .text
+      elif .type=="user" and (.message.content|type)=="string" then .message.content else empty end' "$2" 2>/dev/null
+  } | grep -oE "Session task: $KEYRE( review([.,;:!)]|$))?" | sort -u
+}
+# `OLD NEW` for each `Supersedes: OLD` (or a brief's `You replace session OLD`) in the first prompt of a transcript
+# listed on stdin (any session's: a successor that later ran a status command still supersedes). A short OLD counts
+# when exactly one transcript beside it starts with it.
+SUPRE='Supersedes: [0-9a-f]{8}[0-9a-f-]*|[Yy]ou replace (session )?[0-9a-f]{8}[0-9a-f-]*'
+supersedes() {
+  tr '\n' '\0' | xargs -0 grep -lE "$SUPRE" 2>/dev/null | while read -r f; do
+    first_prompt "$f" | grep -oE "$SUPRE" | grep -oE '[0-9a-f-]+$' | while read -r o; do
+      [ "${#o}" = 36 ] || { set -- "$(dirname "$f")/$o"*.jsonl; [ $# = 1 ] && [ -e "$1" ] || continue; o=$(basename "$1" .jsonl); }
+      echo "$o $(basename "$f" .jsonl)"
+    done
+  done
+}
+
+# awk: has(s, k) is true when s names key k as a whole token (ABC-1 isn't in ABC-12).
+HAS='function has(s,k, n){n=index(s,k); return n && substr(s,n+length(k),1) !~ /[0-9]/ && (n==1 || substr(s,n-1,1) !~ /[A-Za-z0-9]/)}'
+
+# "repo <tab> worktree" for every worktree whose branch names the key (as a whole token).
+worktrees_for() {
+  while read -r r; do
+    git -C "$r" worktree list --porcelain 2>/dev/null | awk -v k="$1" -v r="$r" "$HAS"'
+      /^worktree /{p=substr($0,10)}
+      /^branch /{if (has(substr($0,8), k)) print r "\t" p}'
+  done < "$TMP/repos"
+}
+
+# --peek ID [N]: what a session said and did lately, for the pane's Peek (one parser: session-peek.jq).
+if [ -n "$PEEK" ]; then
+  want=${1:-} n=${2:-12}
+  [ "${#want}" -ge 8 ] && [[ $want =~ ^[0-9a-f-]+$ && $n =~ ^[0-9]+$ ]] || { echo "usage: session-status --peek ID [N] (ID: 8+ characters)"; exit 2; }
+  f=$(ls "$CUR"/projects/*/"$want"*.jsonl 2>/dev/null | head -1)
+  [ -n "$f" ] || { echo "no transcript for session $want"; exit 2; }
+  tail -n 2000 "$f" | jq -rRn --argjson n "$n" -f "$(dirname "$SELF")/session-peek.jq" || exit 1
+  doing=$(activity_fields "$f" | cut -f1)
+  echo; echo "_Now: ${doing:-nothing known}_"
+  exit 0
+fi
+
+# --dir / --diff KEY|ID: where a task or session works, and what it changed there.
+if [ -n "$WHERE" ]; then
+  dir=
+  [ $# -gt 0 ] || { echo "usage: session-status $WHERE KEY|ID [ID…] (the first that resolves)"; exit 2; }
+  for want in "$@"; do
+    if grep -qxE "$KEYRE" <<<"$want"; then dir=$(worktrees_for "$want" | head -1 | cut -f2)
+    elif [ "${#want}" -ge 8 ] && [[ $want =~ ^[0-9a-f-]+$ ]]; then
+      f=$(ls "$CUR"/projects/*/"$want"*.jsonl 2>/dev/null | head -1)
+      # The latest cwd it recorded follows its cd and EnterWorktree; its worktree is that folder's git top.
+      cwd=$( [ -z "$f" ] || tail -n 2000 "$f" | grep -o '"cwd":"[^"]*"' | tail -1 | cut -d'"' -f4)
+      [ ! -d "$cwd" ] || dir=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || dir=$cwd
+    fi
+    [ -z "$dir" ] || break
+  done
+  [ -n "$dir" ] || { echo "no worktree or transcript cwd for $*"; exit 2; }
+  [ "$WHERE" = --dir ] && { echo "$dir"; exit 0; }
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || { echo "$dir · not a git repository"; exit 0; }
+  mb=
+  for base in "$(git -C "$dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" origin/main origin/master '@{upstream}'; do
+    [ -z "$base" ] || mb=$(git -C "$dir" merge-base "$base" HEAD 2>/dev/null) && [ -n "$mb" ] && break
+  done
+  [ -n "$mb" ] || { base=HEAD mb=HEAD; }   # no base branch: the uncommitted changes only
+  echo "$dir · vs $base"
+  git -C "$dir" diff --stat=200 "$mb" | tail -n 61   # ponytail: 60 files + the summary; the pane shows 40
+  git -C "$dir" status --porcelain | grep '^??' | head -n 20
+  echo; git -C "$dir" diff "$mb" | head -c 200000   # the pane draws 40k of it
+  exit 0
+fi
+
+# --yesterday [DAY]: what the user worked on, for a daily standup: from the start of DAY (YYYY-MM-DD; default the
+# last weekday before today they worked, so a day off is skipped) up to now, so Monday's covers the weekend too.
+# A worked day: a prompt the user typed (origin human) in the project's transcripts, or a commit of theirs.
+# Prints `Since: DAY WEEKDAY (HOW)`, the adapter's `standup-notes` as `Note: TEXT` lines (what the summary should
+# know about the project), then per task, the one with the latest event first: `KEY<TAB>STATUS<TAB>TITLE`
+# and its events `  WEEKDAY HH:MM<TAB>TEXT`, oldest first. Generic events: the sessions that worked on it
+# (session-day.jq; a session naming no key is a task of its own, `"NAME"`; a coordinator's are left out) and
+# commits per branch. The adapter's `yesterday EPOCH KEY…` adds the tracker's and code host's (same format: rows
+# for these keys and any it finds, events `  EPOCH<TAB>TEXT`); exit 1 = failed, its message shown indented.
+if [ -n "$YDAY" ]; then
+  # The project's transcript folders and those of folders under it (worktrees, child repos).
+  # ponytail: `/` and `-` encode alike, so a sibling `ROOT-x` counts too.
+  tdirs=$( { echo "$ROOT"; adapter session-dirs 2>/dev/null | sed "s#^~#$HOME#"; } | grep . | while read -r d; do
+    e=$CUR/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$d"); ls -d "$e" "$e"-* 2>/dev/null; done | sort -u)
+  # The user's commits since an epoch, merges left out (the code host reports those): repo, time, source ref,
+  # unpushed (1: on no remote branch), subject.
+  commits() {
+    local r email
+    while read -r r; do
+      email=$(git -C "$r" config user.email) || continue
+      git -C "$r" log --branches --not --remotes --author="$email" --since=@"$1" --format=%H > "$TMP/unpushed"
+      git -C "$r" log --branches --remotes --source --no-merges --author="$email" --since=@"$1" --format=%H%x09%ct%x09%S%x09%s |
+        awk -F'\t' -v r="${r##*/}" -v up="$TMP/unpushed" 'BEGIN { while ((getline l < up) > 0) u[l] } { print r "\t" $2 "\t" $3 "\t" ($1 in u) "\t" $4 }'
+    done < "$TMP/repos"
+  }
+  day=${1:-} how=picked
+  if [ -n "$day" ]; then
+    [ "$(dayfmt "$day" %F)" = "$day" ] || { echo "usage: session-status --yesterday [YYYY-MM-DD]"; exit 2; }
+  else
+    { for d in $tdirs; do find "$d" -maxdepth 1 -name '*.jsonl' -mtime -15; done | tr '\n' '\0' |
+        xargs -0 grep -h '"kind":"human"' 2>/dev/null |
+        jq -rR 'fromjson? | select(.type == "user" and .origin.kind == "human") | .timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdate | strflocaltime("%F")'
+      commits $(( NOW - 15 * 86400 )) | cut -f2 | while read -r t; do epochfmt "$t" %F; done
+    } | sort -u > "$TMP/worked"
+    how="no worked day in 14 days" today=${SESSION_STATUS_TODAY:-$(date +%F)}   # (the self-test's Monday)
+    for i in $(seq 1 14); do
+      d=$(dayfmt "$today" %F -"$i"); [ "$(dayfmt "$d" %u)" -le 5 ] || continue
+      [ -n "$day" ] || day=$d   # the fallback: the last weekday
+      grep -qxF "$d" "$TMP/worked" && { day=$d how="last working day"; break; }
+    done
+  fi
+  from=$(epoch "$day")
+  names=$(adapter status-names 2>/dev/null) || names=
+  for d in $tdirs; do find "$d" -maxdepth 1 -name '*.jsonl' -newermt "$day 00:00:00"; done | while read -r f; do
+    jq -rRn --argjson from "$from" --arg keyre "$KEYRE" --arg status "session-status${names:+|$names}" \
+      -f "$(dirname "$SELF")/session-day.jq" "$f" 2>/dev/null | sed "s/^/$(basename "$f" .jsonl)	/"
+  done > "$TMP/yd.sessions"
+  # Records: KEY, epoch, text. A session counts for its first prompt's key and its markers' (a review: reviewed);
+  # a coordinator (it ran a status watcher) only for its first prompt's key, if any: its markers are its workers'.
+  # ponytail: the markers are the whole transcript's, so a long-lived session's day shows under its earlier keys too.
+  tr '\t' '\037' < "$TMP/yd.sessions" | while IFS=$'\037' read -r id name fk marks coord a b last; do
+    [ "$coord" = 1 ] && { [ -n "$fk" ] || continue; marks=; }
+    keys=$( { [ -z "$fk" ] || echo "$fk"; tr ',' '\n' <<<"$marks" | grep .; } | awk '!s[$0]++')
+    # No key: a task of its own, unless it wrote nothing (a probe, a session killed at once).
+    [ -n "$keys" ] || [ -z "$last" ] || keys="\"${name:-${id:0:8}}\""
+    [ "$(epochfmt "$a" '%F')" = "$(epochfmt "$b" '%F')" ] && span="$(epochfmt "$a" '%H:%M')–$(epochfmt "$b" '%H:%M')" ||
+      span="$(epochfmt "$a" '%a %H:%M')–$(epochfmt "$b" '%a %H:%M')"
+    while read -r k; do
+      [ -n "$k" ] || continue
+      case $k in *' review') printf '%s\t%s\treviewed in session "%s" (%s)%s\n' "${k% review}" "$b" "${name:-${id:0:8}}" "$span" "${last:+: $last}" ;;
+        *) printf '%s\t%s\tsession "%s" (%s)%s\n' "$k" "$b" "${name:-${id:0:8}}" "$span" "${last:+: $last}" ;; esac
+    done <<<"$keys"
+  done > "$TMP/yd.events"
+  # Commits per task and branch: the key in the subject, else in the branch.
+  commits "$from" | awk -F'\t' -v kre="$KEYRE" '{
+      ref = $3; sub(/^refs\/(heads|remotes\/[^\/]+)\//, "", ref)
+      k = match($5, kre) ? substr($5, RSTART, RLENGTH) : match(ref, kre) ? substr(ref, RSTART, RLENGTH) : "\"" $1 " " ref "\""
+      g = k "\t" ref " in " $1; n[g]++; up[g] += $4; if ($2 >= t[g]) { t[g] = $2; s[g] = $5 } }
+    END { for (g in n) { split(g, x, "\t"); subj = s[g]; sub("^" x[1] "[: ]*", "", subj)
+      printf "%s\t%s\t%d commit%s %s %s%s — last: %s\n", x[1], t[g], n[g], (n[g] == 1 ? "" : "s"),
+        (up[g] == n[g] ? "on" : "pushed to"), x[2], (up[g] && up[g] < n[g] ? " (" up[g] " not pushed)" : up[g] ? " (not pushed)" : ""), subj } }' >> "$TMP/yd.events"
+  # The adapter's rows and events, for the keys found here and its own.
+  adapter yesterday "$from" $(cut -f1 "$TMP/yd.events" | grep -xE "$KEYRE" | sort -u) > "$TMP/yd.adapter" 2>/dev/null; arc=$?
+  [ "$arc" = 0 ] || [ "$arc" = 1 ] || : > "$TMP/yd.adapter"
+  if [ "$arc" = 1 ]; then sed 's/^/  /' "$TMP/yd.adapter" > "$TMP/yd.failed"; : > "$TMP/yd.adapter"; fi
+  awk -F'\t' '/^[^ \t]/ { k = $1; print > "/dev/stderr"; next } k != "" && /^  [0-9]+\t/ { sub(/^  /, ""); print k "\t" $0 }' \
+    "$TMP/yd.adapter" 2> "$TMP/yd.heads" >> "$TMP/yd.events"
+  echo "Since: $day $(dayfmt "$day" %a) ($how)"
+  # The project's notes for the standup summary (adapter `standup-notes`, optional): `Note: TEXT` lines.
+  notes=$(adapter standup-notes 2>/dev/null) && grep '[^[:space:]]' <<<"$notes" | sed 's/^/Note: /'
+  [ ! -s "$TMP/yd.failed" ] || { echo "Tracker lookup failed:"; cat "$TMP/yd.failed"; }
+  sort -u "$TMP/yd.events" | while IFS=$'\t' read -r k t x; do printf '%s\t%s\t%s\t%s\n' "$k" "$t" "$(epochfmt "$t" '%a %H:%M')" "$x"; done > "$TMP/yd.timed"
+  # Each task's latest event orders the tasks; rows: latest, key, 0 for its head line or the event's time, line.
+  awk -F'\t' 'NR == FNR { if ($2 > mx[$1]) mx[$1] = $2; next } FILENAME ~ /heads$/ { st[$1] = $2; ti[$1] = $3; next }
+    { if (!($1 in done)) { done[$1]; print mx[$1] "\t" $1 "\t0\t" $1 "\t" st[$1] "\t" ti[$1] }
+      print mx[$1] "\t" $1 "\t" $2 "\t  " $3 "\t" $4 }' "$TMP/yd.timed" "$TMP/yd.heads" "$TMP/yd.timed" |
+    sort -t$'\t' -k1,1rn -k2,2 -k3,3n | cut -f4-
+  exit 0
+fi
+
+# --compact ID: makes an idle background session run /compact. A running session can't take a command from
+# outside, so it is stopped (its conversation is kept) and resumed under the same id with /compact as its prompt.
+# Only when it's idle: never mid-turn (busy) or while it waits on a prompt (waiting), whose pending call a stop
+# would drop. A retired one is just resumed.
+if [ -n "$COMPACT" ]; then
+  row=$(find_session "${1:-}") || { echo "couldn't list the sessions; try again"; exit 1; }
+  [ -n "$row" ] || { echo "no session ${1:-} in any account"; exit 2; }
+  read_row id name st pre started cwd kind status pid
+  # One --compact per session, whoever runs it: a second would find it stopped and resume it beside the first,
+  # starting a copy. ponytail: a lock left by a killed run expires after 10 minutes.
+  lock=~/.cache/session-status/compact-$id; mkdir -p ~/.cache/session-status
+  [ -z "$(find "$lock" -maxdepth 0 -mmin +10 2>/dev/null)" ] || rmdir "$lock" 2>/dev/null
+  mkdir "$lock" 2>/dev/null || { echo "\"$name\" is already being compacted"; exit 3; }
+  trap 'rmdir "$lock" 2>/dev/null; rm -rf "$TMP"' EXIT
+  [ "$kind" = background ] || { echo "\"$name\" is interactive: run /compact in its terminal"; exit 3; }
+  if [ -n "$pid" ]; then
+    [ "$status" = idle ] || { echo "\"$name\" is ${status:-$st}, not idle: not compacting"; exit 3; }
+    stop_session "$pre" "$id" || { echo "couldn't stop \"$name\""; exit 1; }
+  fi
+  resume_with "$pre" "$cwd" "$id" /compact || exit 1
+  echo "\"$name\" (${id:0:8}) is compacting: ${pid:+stopped while idle, }resumed with /compact"
+  exit 0
+fi
+
+# --send-when-idle ID TEXT: waits until the session isn't busy, then delivers TEXT the way that can't fork it:
+#  - live in this account: prints `send: …` and exits 0; the caller sends TEXT with SendMessage (a script can't);
+#  - live in another account (SendMessage doesn't reach it): idle, stopped and resumed with TEXT; waiting on a
+#    prompt, it says so and exits 3, since a stop would drop that prompt;
+#  - retired (listed, no process): woken by resuming it with TEXT under its own id;
+#  - not listed in any account: resumed with TEXT, only from this project's transcripts and an unambiguous id.
+#    "Another account" needs features.accounts; off, a second account sharing the transcripts refuses this resume
+#    (exit 2): the session may be live there, and a resume would start a copy.
+# A resume of a session holding over SESSION_STATUS_MAX_RESUME (200000) tokens of context is refused (exit 4): a small
+# follow-up would re-read all of it; start a fresh session with the task's replies file as its brief instead.
+# Checks every 30s, for at most SESSION_STATUS_WAIT_S (86400); a failed listing is retried, never read as "not
+# listed". Exit 2: still busy then, or no such session.
+if [ -n "$SEND" ]; then
+  too_big() {  # TRANSCRIPT NAME ID
+    local c max=${SESSION_STATUS_MAX_RESUME:-200000}
+    c=$(activity_fields "$1" | cut -f4); [ "${c:-0}" -gt "$max" ] || return 1
+    echo "\"$2\" (${3:0:8}) holds $c tokens of context, over $max: not resumed for a follow-up. Hand its task to a fresh session: bash $(printf %q "$SELF") --handover $3 -- '<what next>'"
+  }
+  want=${1:-}; text=${2:-}
+  [ "${#want}" -ge 8 ] && [ -n "$text" ] || { echo "usage: session-status --send-when-idle ID TEXT (ID: 8+ characters)"; exit 2; }
+  deadline=$(( SECONDS + ${SESSION_STATUS_WAIT_S:-86400} ))
+  while :; do
+    if row=$(find_session "$want"); then
+      [ -n "$row" ] || break
+      read_row id name st pre started cwd kind status pid
+      if [ -z "$pid" ]; then
+        f=$(transcript_of "$id"); [ -z "$f" ] || ! too_big "$f" "$name" "$id" || exit 4
+        resume_with "$pre" "$cwd" "$id" "$text" || exit 1
+        echo "woke \"$name\" (${id:0:8}, $st) with the text"; exit 0
+      fi
+      [ "$status" = busy ] || { [ -z "$status" ] && [ "$st" = working ]; } || break
+    fi
+    [ "$SECONDS" -lt "$deadline" ] || { echo "\"${name:-$want}\" is still busy (or unlisted); nothing sent"; exit 2; }
+    sleep "${SESSION_STATUS_POLL_S:-30}"
+  done
+  if [ -z "$row" ]; then
+    # ponytail: only this project's transcripts; one elsewhere is resumed from its own project.
+    set -- "$TRANSCRIPTS/$want"*.jsonl
+    n=0; [ -e "$1" ] && n=$#
+    [ "$n" = 1 ] || { echo "no session $want: not listed in any account, and $n transcripts here match"; exit 2; }
+    [ "$(config features.accounts 2>/dev/null)" = true ] || [ "$( . "$LIB_DIR/features/accounts.sh" && list_accounts | grep -c .)" -lt 2 ] ||
+      { echo "no session $want in this account, and another account shares these transcripts: it may run there. Turn features.accounts on (session-status --init --check), or resume it yourself once the user confirms it isn't running"; exit 2; }
+    sid=$(basename "$1" .jsonl)
+    ! too_big "$1" "$sid" "$sid" || exit 4
+    resume_with claude "$ROOT" "$sid" "$text" || exit 1
+    echo "resumed ${sid:0:8} with the text (not listed in any account)"; exit 0
+  fi
+  if [ "$pre" = claude ]; then
+    echo "send: SendMessage to \"$name\" now ($status, live in this account); the text is yours to send"; exit 0
+  fi
+  [ "$status" = idle ] && [ "$kind" = background ] || {
+    echo "\"$name\" is $status in another account (SendMessage can't reach it): ask the user to answer it: $pre attach ${id:0:8}"; exit 3; }
+  f=$(transcript_of "$id"); [ -z "$f" ] || ! too_big "$f" "$name" "$id" || exit 4
+  stop_session "$pre" "$id" || { echo "couldn't stop \"$name\""; exit 1; }
+  resume_with "$pre" "$cwd" "$id" "$text" || exit 1
+  echo "delivered to \"$name\" (${id:0:8}, another account): stopped while idle, resumed with the text"; exit 0
+fi
+
+# --handover ID [--] 'WHAT NEXT': a task session too big to resume (--send-when-idle's exit 4) hands its task to a
+# fresh one. ID's task key is the one its own first prompt or `Session task:` markers name (exactly one; a reviewer
+# has none), its state is in the replies folder (the project CLAUDE.md's "Replies folder … `PATH`") as KEY.md.
+# Refused while it is mid-turn or waits on a prompt (a stop would drop that turn), with no KEY.md, or when it is
+# superseded already (a retry would start a second successor). Then: stopped (checked), and `claude --bg -n NAME`
+# in the project root, same account (plus --permission-mode default where that account defaults to plan), with a
+# brief naming KEY.md, WHAT NEXT and a `Supersedes: ID` line (the owner mapping reads it). NAME: the old name if
+# it starts with KEY (any case), else KEY-<old name>; the old one is stopped, so the names don't clash live.
+if [ -n "$HANDOVER" ]; then
+  want=${1:-}; [ $# -gt 0 ] && shift; [ "${1:-}" = -- ] && shift; next=${1:-}
+  [ "${#want}" -ge 8 ] && [ -n "$next" ] || { echo "usage: session-status --handover ID [--] 'WHAT NEXT' (ID: 8+ characters)"; exit 2; }
+  row=$(find_session "$want") || { echo "couldn't list the sessions; try again"; exit 1; }
+  [ -n "$row" ] || { echo "no session $want in any account"; exit 2; }
+  read_row id name st pre started cwd kind status pid
+  f=$(transcript_of "$id"); [ -n "$f" ] || { echo "no transcript for \"$name\" (${id:0:8}): not handed over"; exit 2; }
+  first=$(first_prompt "$f"); marks=$(marks_of "$first" "$f")
+  ! grep -qE ' review([.,;:!)]|$)' <<<"$marks" || { echo "\"$name\" (${id:0:8}) is a review session: not handed over"; exit 2; }
+  keys=$( { first_key "$first"; grep -oE "$KEYRE" <<<"$marks"; } | sort -u)
+  [ -n "$keys" ] || { echo "\"$name\" (${id:0:8}) names no task key (first prompt or Session task: marker): not handed over"; exit 2; }
+  [ "$(grep -c . <<<"$keys")" = 1 ] || { echo "\"$name\" (${id:0:8}) names several task keys ($(paste -sd' ' - <<<"$keys")): hand over by hand"; exit 2; }
+  key=$keys
+  succ=$(ls "$(dirname "$f")"/*.jsonl 2>/dev/null | supersedes | awk -v id="$id" '$1 == id {print substr($2, 1, 8)}' | tail -1)
+  [ -z "$succ" ] || { echo "\"$name\" (${id:0:8}) is superseded by $succ already: not handed over again"; exit 2; }
+  if [ -n "$pid" ]; then
+    { [ "$status" = busy ] || { [ -z "$status" ] && [ "$st" = working ]; }; } && { echo "\"$name\" is mid-turn: not handed over; try when its turn ends"; exit 3; }
+    [ "$status" = waiting ] && { echo "\"$name\" is waiting on a prompt: not handed over; answer it first ($pre attach ${id:0:8})"; exit 3; }
+    [ "$kind" = background ] || { echo "\"$name\" is interactive: close it in its terminal, then hand over"; exit 3; }
+  fi
+  rdir=$(sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1); rdir=${rdir%/}
+  [ -n "$rdir" ] || { echo "$ROOT/CLAUDE.md names no replies folder: nothing to hand over from"; exit 2; }
+  case $rdir in /*) rfile=$rdir/$key.md ;; *) rfile=$ROOT/$rdir/$key.md ;; esac
+  [ -f "$rfile" ] || { echo "no $rdir/$key.md: ask \"$name\" for a status report first, or write one"; exit 2; }
+  if [ -n "$pid" ]; then stop_session "$pre" "$id" || { echo "couldn't stop \"$name\" (${id:0:8}): nothing started"; exit 1; }; fi
+  case $(tr '[:lower:]' '[:upper:]' <<<"$name") in
+    "$key"|"$key"[!0-9]*) new=$name ;;
+    *) slug=$(tr '[:upper:]' '[:lower:]' <<<"$name" | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//'); new=$key${slug:+-$slug} ;;
+  esac
+  case $pre in claude) cfg=$CUR ;; 'env -u CLAUDE_CONFIG_DIR claude') cfg=$HOME/.claude ;; *) cfg=${pre#CLAUDE_CONFIG_DIR=}; cfg=${cfg% claude}; cfg=${cfg/#\~/$HOME} ;; esac
+  pm=; [ "$(jq -r '.permissions.defaultMode // empty' "$cfg/settings.json" 2>/dev/null)" != plan ] || pm=' --permission-mode default'
+  text="Work on $key: continue from $rdir/$key.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole)."
+  out=$(bash -c "$pre --bg$pm -n \"\$0\" \"\$1\"" "$new" "$text" 2>&1)
+  nid=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1); nid=${nid##* }
+  [ -n "$nid" ] || { echo "stopped \"$name\" (${id:0:8}), but the new session didn't start: $(tail -1 <<<"$out")"; exit 1; }
+  echo "handed $key over: \"$name\" (${id:0:8}) ${pid:+stopped, }superseded by \"$new\" ($nid)"
+  exit 0
+fi
+
+dirs=$( { echo "$ROOT"; adapter session-dirs 2>/dev/null | sed "s#^~#$HOME#"; } | grep .)
+[ -z "$ALLP" ] || dirs=/
+list_sessions | DIRS=$dirs awk -F'\t' 'BEGIN { n = split(ENVIRON["DIRS"], D, "\n") } { for (i = 1; i <= n; i++) if (index($6, D[i]) == 1) { print; next } }' > "$TMP/agents.all"
+# A session-dir session never owns a task: rows, owners and leftovers read only the root's sessions.
+awk -F'\t' -v r="$ROOT" 'index($6, r) == 1' "$TMP/agents.all" > "$TMP/agents"
+
+if [ -n "$ACT" ]; then
+  tr '\t' '\037' < "$TMP/agents.all" | while IFS=$'\037' read -r id name st pre _ cwd kind status _; do
+    f=$(transcript_of "$id"); [ -n "$f" ] || continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$st" "$(mtime "$f")" "$(activity_fields "$f")" "$status" "$kind" "$cwd" "$pre"
+  done
+  exit 0
+fi
+
+# Owning session per key (transcripts from the last 30 days):
+#  1. exact: the key a session's first prompt starts with (first_key), else a "Session task: KEY" line in its own
+#     text or a message it received (not a tool input: a brief it sends names another session's task). A first
+#     prompt beats a marker however recent the marker (a misrouted session writing one can't take the task);
+#     among equals the newest session wins. "Session task: KEY review" makes it KEY's reviewer ($TMP/reviews),
+#     never an owner.
+#  2. no owner: `sess:— (maybe ID: N mentions)`, the worker mentioning KEY most in its own text and the prompts it
+#     received (not tool output: a listing or grep hit isn't work), >= 10 times. A guess, never an owner. Reviewers
+#     and a session whose first prompt names another key are skipped. ponytail: breaks if two share a key evenly.
+# Coordinators (they ran the status command with --changes, --watch or --owner, or opened the pane) mention every
+# key: never owners. A worker running it for its own task, or only reading the docs, stays a worker.
+find "$TRANSCRIPTS" -maxdepth 1 -name '*.jsonl' -mtime -30 2>/dev/null > "$TMP/files"
+names=$(adapter status-names 2>/dev/null) || names=
+PAT="\"command\":\"[^\"]*(session-status${names:+|$names})"
+tr '\n' '\0' < "$TMP/files" | xargs -0 grep -l -E "$PAT +--(changes|watch|owner)|\"name\":\"mcp__session-orchestration__open_pane\"" > "$TMP/watchers"
+grep -vxF -f "$TMP/watchers" "$TMP/files" > "$TMP/workers"
+
+# Coordinators: live sessions of this account in $TMP/watchers (workers run the status command for their own task
+# too, so plain runs don't count here). Newest transcript first. Other accounts are left out: SendMessage doesn't
+# reach them.
+if [ -n "$COORD" ]; then
+  { IFS=$'\n' read -d '' -ra w < "$TMP/watchers"; [ ${#w[@]} = 0 ] || mtime_named "${w[@]}"; } | sort -rn | sed -E 's#.*/##; s#\.jsonl$##' |
+    while read -r id; do
+      [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] ||
+        awk -F'\t' -v id="$id" '$1==id && $4=="claude" {print $2}' "$TMP/agents"
+    done
+  exit 0
+fi
+
+# ponytail: a continued session's first prompt is the compaction summary, so it relies on the marker.
+: > "$TMP/firstkey"; : > "$TMP/reviews"; : > "$TMP/reviewers"
+while read -r f; do
+  id=$(basename "$f" .jsonl)
+  first=$(first_prompt "$f")
+  fk=$(first_key "$first")
+  [ -z "$fk" ] || echo "$id $fk" >> "$TMP/firstkey"
+  marks=$(marks_of "$first" "$f")
+  rev=$(grep -E ' review[.,;:!)]?$' <<<"$marks" | grep -oE "$KEYRE")
+  if [ -n "$rev" ]; then
+    for k in $rev; do echo "$k $id" >> "$TMP/reviews"; done; echo "$id" >> "$TMP/reviewers"; continue
+  fi
+  { [ -z "$fk" ] || echo "$fk"; grep -oE "$KEYRE" <<<"$marks"; } | sort -u | while read -r k; do
+    echo "$k $([ "$k" = "$fk" ] && echo 1 || echo 0) $(mtime "$f") $id"; done
+done < "$TMP/workers" > "$TMP/owners.all"   # key, first prompt (1) or marker (0), transcript time, id
+# A superseded session never owns: not even when resumed later (its transcript newest).
+supersedes < "$TMP/files" > "$TMP/superseded"; cut -d' ' -f1 "$TMP/superseded" > "$TMP/superseded.ids"
+sort -k1,1 -k2,2rn -k3,3rn -o "$TMP/owners.all" "$TMP/owners.all"
+awk -v ssf="$TMP/superseded.ids" 'BEGIN { while ((getline l < ssf) > 0) s[l] } !($4 in s) && !o[$1]++ {print $1, $4}' "$TMP/owners.all" > "$TMP/owners.exact"
+
+# Mentions in each worker's own text and received prompts: lines naming a key, tool results left out before
+# parsing (the bulk of a transcript), as `ID<TAB>JSON` for one jq.
+tr '\n' '\0' < "$TMP/workers" | xargs -0 grep -HE "$KEYRE" | grep -vF '"type":"tool_result"' |
+  awk '{ i = index($0, ".jsonl:"); id = substr($0, 1, i - 1); sub(/.*\//, "", id); print id "\t" substr($0, i + 7) }' |
+  jq -rR --arg kre "$KEYRE" '(index("\t")) as $i | .[:$i] as $id | .[$i + 1:] | fromjson? |
+    (if .type == "assistant" then .message.content[]? | select(.type == "text") | .text
+     elif .type == "user" and (.message.content | type) == "string" then .message.content else empty end)
+    | match($kre; "g").string | "\(.) \($id)"' 2>/dev/null | sort | uniq -c |
+  awk -v fkf="$TMP/firstkey" -v rvf="$TMP/reviewers" -v ssf="$TMP/superseded.ids" 'BEGIN { while ((getline l < fkf) > 0) { split(l, x, " "); fk[x[1]] = x[2] }
+    while ((getline l < rvf) > 0) rv[l]; while ((getline l < ssf) > 0) rv[l] } !($3 in rv) && (!($3 in fk) || fk[$3] == $2) {print $2, $1, $3}' |
+  sort -k1,1 -k2,2rn > "$TMP/guess.all"   # key, mentions, id
+awk '!s[$1]++ && $2 >= 10 {print $1, $3, $2}' "$TMP/guess.all" > "$TMP/owners.guess"   # key, id, mentions
+
+# What a session waits on, from hooks/blocked.sh: while its status is `waiting` (every prompt and question writes
+# a new record), or, with no status, while its transcript is no newer than the record (answering writes it; -nt
+# counts whole seconds here, so the same second still shows).
+blocked_of() {  # ID STATUS
+  local b=~/.cache/session-status/blocked/$1.json f
+  [ -f "$b" ] && [ "$2" != idle ] && [ "$2" != busy ] || return 0
+  [ "$2" = waiting ] || { f=$(transcript_of "$1"); [ -z "$f" ] || [ ! "$f" -nt "$b" ] || return 0; }
+  jq -r 'if .tool then "blocked: \(.tool) `\(.input // "" | .[:80])`" else "blocked: \(.message // .type)" end' "$b" 2>/dev/null
+}
+# The task only waits on a reviewer: an open PR with no-human-approval, nothing to fix (the pane's In review).
+review_only() {  # EXTRA WT
+  case " $1 " in *" no-human-approval "*) ;; *) return 1 ;; esac
+  # A human approval on any of its PRs (+NAME) makes it the user's merge call.
+  case " $1 $2" in *CONFLICT*|*CI-FAILED*|*↩*|*" !"*|*",!"*|*" +"*|*",+"*|*unpushed:[1-9]*) return 1 ;; esac
+}
+fmt_age() { if [ "$1" -lt 3600 ]; then echo "$(( $1 / 60 ))m"; elif [ "$1" -lt 86400 ]; then echo "$(( $1 / 3600 ))h"; else echo "$(( $1 / 86400 ))d"; fi; }
+# Its last turn (what it wrote since the last prompt or message, and its SendMessage summaries) asks the user: a
+# `! command` line for them to run, or, outside code (fenced blocks, `spans`), a question or words like "your
+# call", "blocked on", "decision for you".
+# ponytail: a word list; "not blocked on" still reads as an ask, an offer with no question mark doesn't.
+asks_user() {  # TRANSCRIPT
+  local t
+  t=$(tail -n 400 "$1" | jq -rRn '[inputs | fromjson? | select(type == "object" and .isSidechain != true)]
+    | (map(.type == "user" and ((.message.content | type) == "string" or any(.message.content[]?; .type? == "text"))) | indices(true) | last) as $i
+    | .[($i // -1) + 1:][] | select(.type == "assistant") | .message.content[]?
+    | if .type == "text" then .text elif .type == "tool_use" and .name == "SendMessage" then .input.summary // "" else empty end' 2>/dev/null)
+  grep -qE '^[[:space:]]*! [a-z~./]' <<<"$t" && return
+  awk '/^[[:space:]]*```/ { f = !f; next } !f' <<<"$t" | sed 's/`[^`]*`//g' > "$TMP/asks"
+  grep -qiE '\?([[:space:]*)]|$)|(^|[^a-z])(blocked (on|by|until)|blocked:|(is|am|still|stays) blocked|(you|to) decide|decision for you|on you|your (call|go-ahead|go|approval|decision|answer|input|ok)|waiting (on|for) (you|your))([^a-z]|$)' "$TMP/asks"
+}
+# Its work landed: the folder it started in is a clean worktree whose branch (not the default one) is merged into
+# origin's default, with a commit made after the session started (a fresh branch hasn't landed anything).
+landed() {  # CWD STARTED
+  local top br base
+  top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) && br=$(git -C "$top" symbolic-ref --short -q HEAD) &&
+    base=$(git -C "$top" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null) || return 1
+  [ "$br" != "${base#origin/}" ] && [ -z "$(git -C "$top" status --porcelain 2>/dev/null)" ] &&
+    git -C "$top" merge-base --is-ancestor HEAD "$base" 2>/dev/null && [ "$(git -C "$top" log -1 --format=%ct)" -ge "${2:-0}" ]
+}
+# Whether a blocked session (Claude Code's state once a turn ends, and on a prompt) waits on the user; first match:
+#   on BLOCKED     an open prompt (blocked_of) newer than SESSION_STATUS_STALE_HOURS (6)
+#   stale BLOCKED  an older one, unanswered: an abandoned probe or a forgotten ask; listed apart, stop or answer it
+#   out busy       mid-turn (a session limit leaves it so)
+#   out superseded a newer session took its task over
+#   out review     a reviewer at rest: its report is delivered (comments to post wait in the review inbox)
+#   out landed     its worktree's work landed (landed)
+#   on             its last turn asks the user (asks_user)
+#   out idle       a finished turn that asks nothing
+# Cached per run. Rules from the 2026-10-21 backtest.
+STALE_S=$(( ${SESSION_STATUS_STALE_HOURS:-6} * 3600 ))
+verdict() {  # ID
+  local c=$TMP/verdict.$1 st started cwd status b t f
+  [ -f "$c" ] || {
+    IFS=$'\037' read -r st started cwd status < <(awk -F'\t' -v id="$1" '$1==id {print $3 "\037" $5 "\037" $6 "\037" $8}' "$TMP/agents.all")
+    b=$(blocked_of "$1" "$status"); f=$(transcript_of "$1")
+    if [ -n "$b" ]; then
+      t=$(jq -r '.time // empty' ~/.cache/session-status/blocked/"$1".json 2>/dev/null)
+      [ -n "$t" ] || t=$(mtime ~/.cache/session-status/blocked/"$1".json)
+      if [ "$t" -ge $((NOW - STALE_S)) ]; then printf 'on\t%s' "$b"; else printf 'stale\t%s · unanswered %s' "$b" "$(fmt_age $((NOW - t)))"; fi
+    elif [ "$status" = waiting ]; then printf 'on\t'   # a prompt hooks/blocked.sh didn't record
+    elif [ "$status" = busy ]; then printf 'out\tbusy'
+    elif grep -qxF "$1" "$TMP/superseded.ids"; then printf 'out\tsuperseded'
+    elif grep -qxF "$1" "$TMP/reviewers"; then printf 'out\treview'
+    elif [ -n "$cwd" ] && landed "$cwd" "$started"; then printf 'out\tlanded'
+    elif [ -n "$f" ] && asks_user "$f"; then printf 'on\t'
+    else printf 'out\tidle'
+    fi
+  } > "$c"
+  cat "$c"
+}
+session_for() {  # KEY [EXTRA WT]
+  local id name st status maybe
+  id=$(awk -v k="$1" '$1==k {print $2}' "$TMP/owners.exact")
+  if [ -z "$id" ]; then
+    maybe=$(awk -v k="$1" '$1==k {print " (maybe " substr($2, 1, 8) ": " $3 " mentions)"}' "$TMP/owners.guess")
+    echo "sess:—$maybe"; return
+  fi
+  echo "$id" >> "$TMP/shown_ids"   # for Other sessions
+  IFS=$'\037' read -r name st status < <(awk -F'\t' -v id="$id" '$1==id {print $2 "\037" $3 "\037" $8}' "$TMP/agents")
+  if [ -n "$st" ]; then
+    # A worker at rest (Claude Code says blocked once its turn ends) whose task only waits on a reviewer waits on
+    # no one here (the user, 2026-10-21): idle, and not under Waiting on you. On a prompt or question it still is.
+    # Every row it owns must agree before Waiting on you leaves it out.
+    # Otherwise verdict decides; a row with a conflict or a human approval (+NAME) keeps it on you unless it is
+    # stale or busy.
+    if [ "$st" = blocked ]; then
+      if [ "$status" != waiting ] && review_only "${2:-}" "${3:-}" && [ -z "$(blocked_of "$id" "$status")" ]; then
+        echo "$id" >> "$TMP/in_review.ids"; st=idle
+      else
+        case $(verdict "$id") in
+          on*) echo "$id" >> "$TMP/on_you.ids" ;; stale*) st=stale ;; *busy) st=busy ;;
+          *) case " ${2:-}" in *CONFLICT*|*" +"*|*",+"*) echo "$id" >> "$TMP/on_you.ids" ;; *) st=idle ;; esac ;;
+        esac
+      fi
+    fi
+    echo "sess:\"$name\" $st"; return
+  fi
+  age=$(( ( $(date +%s) - $(mtime "$TRANSCRIPTS/$id.jsonl") ) / 3600 ))
+  echo "sess:${id:0:8} closed ${age}h"
+}
+
+# --owner KEY…: the row's session column, then each candidate, the owner first: id, the rule that names it, its
+# state, its first prompt's first line and its markers.
+if [ -n "$OWNER" ]; then
+  for k in "$@"; do
+    echo "$k: $(session_for "$k")"
+    # A superseded one last: the owner (owners.exact's pick) prints first.
+    { awk -v k="$k" -v ssf="$TMP/superseded.ids" 'BEGIN { while ((getline l < ssf) > 0) s[l] }
+        $1==k {print ($4 in s), $4, ($2 ? "first-prompt" : "marker")}' "$TMP/owners.all" | sort -s -k1,1n | cut -d' ' -f2-
+      awk -v k="$k" '$1==k {print $2, "review"}' "$TMP/reviews"
+      awk -v k="$k" '$1==k && n++ < 3 {print $3, "maybe:" $2 "-mentions"}' "$TMP/guess.all"
+    } | awk '!s[$1]++' | while read -r id rule; do
+      f=$TRANSCRIPTS/$id.jsonl first=$(first_prompt "$TRANSCRIPTS/$id.jsonl")
+      ! grep -qxF "$id" "$TMP/superseded.ids" || rule="$rule,superseded"
+      st=$(awk -F'\t' -v id="$id" '$1==id {print "\"" $2 "\" " $3}' "$TMP/agents.all")
+      [ -n "$st" ] || st="closed $(( (NOW - $(mtime "$f")) / 3600 ))h"
+      marks=$(marks_of "$first" "$f" | sed 's/^Session task: //' | paste -sd, -)
+      first=$(grep -m 1 . <<<"$first" | cut -c1-120)
+      printf '  %s %s · %s · first: %s · marks: %s\n' "${id:0:8}" "$rule" "$st" "${first:-—}" "${marks:-—}"
+    done
+  done
+  exit 0
+fi
+
+# Local worktree for the key: dirty file count and unpushed commits.
+local_for() {
+  local wt dirty ahead
+  wt=$(worktrees_for "$1" | head -1 | cut -f2)
+  [ -n "$wt" ] || { echo "no-wt"; return; }
+  dirty=$(git -C "$wt" status --porcelain | wc -l | tr -d ' ')
+  ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null || echo "?")
+  echo "wt dirty:$dirty unpushed:$ahead"
+}
+
+# Keys running sessions and worktrees point at: their names, the exact owners of running sessions, branches.
+pointed_keys() {
+  awk -F'\t' '{print $2}' "$TMP/agents" | grep -oE "$KEYRE"
+  awk 'NR==FNR {live[$1]; next} ($2 in live) {print $1}' <(cut -f1 "$TMP/agents") "$TMP/owners.exact"
+  while read -r r; do git -C "$r" worktree list --porcelain | awk '/^branch /' | grep -oE "$KEYRE"; done < "$TMP/repos"
+}
+
+if [ -n "$TASKS" ]; then
+  printf '%s\n' "$tasks" | grep . | grep -v '^fix:' > "$TMP/tasks"
+elif [ -n "$BY_KEY" ]; then
+  printf '%s\t-\t\t\n' "$@" > "$TMP/tasks"
+else
+  pointed_keys | sort -u > "$TMP/pointed"
+  # An adapter that didn't answer the sweep may still describe these keys: finished ones (`done`) are left out
+  # for Leftovers, the rest looked up (`tasks KEY…`); not answered or failed, they're bare rows.
+  if [ -n "$ADAPTER" ] && [ -s "$TMP/pointed" ]; then
+    adapter done $(cat "$TMP/pointed") 2>/dev/null | cut -f1 | grep . > "$TMP/pointed.done"
+    grep -vxF -f "$TMP/pointed.done" "$TMP/pointed" > "$TMP/pointed.open"
+    mv "$TMP/pointed.open" "$TMP/pointed"
+  fi
+  if [ -n "$ADAPTER" ] && [ -s "$TMP/pointed" ] && looked=$(adapter tasks $(cat "$TMP/pointed") 2>/dev/null); then
+    printf '%s\n' "$looked" | grep . | grep -v '^fix:' > "$TMP/tasks"
+  else sed 's/$/	-		/' "$TMP/pointed" > "$TMP/tasks"; fi
+fi
+keys=$(cut -f1 "$TMP/tasks")
+
+# \037 instead of tab: read drops empty tab-separated fields.
+tr '\t' '\037' < "$TMP/tasks" | while IFS=$'\037' read -r k st title extra; do
+  wt=$(local_for "$k")
+  line=$(printf '%-9s %-14s %s%s | %s' "$k" "$st" "$extra" "$wt" "$(session_for "$k" "$extra" "$wt")")
+  echo "$line${title:+ | $title}"
+done | tee "$TMP/rows"
+# The full sweep's rows, for the next sweep's messages module (it runs alongside this one, so it reads the last).
+[ $# != 0 ] || { mkdir -p ~/.cache/session-status && cp "$TMP/rows" ~/.cache/session-status/$ENC.rows.tmp &&
+  mv ~/.cache/session-status/$ENC.rows.tmp ~/.cache/session-status/$ENC.rows; }
+printf '%s\n' "${tasks:-}" "${looked:-}" | grep '^fix:' | awk '!seen[$0]++'
+
+# A key lookup answers about those tasks only: the footer surveys every session, so it's the sweep's job.
+[ -n "$BY_KEY" ] && exit 0
+
+mkdir -p ~/.cache/session-status && cp "$TMP/agents.all" ~/.cache/session-status/$ENC.agents.tmp &&
+  mv ~/.cache/session-status/$ENC.agents.tmp ~/.cache/session-status/$ENC.agents   # for --changes
+touch "$TMP/in_review.ids" "$TMP/on_you.ids" "$TMP/stale" "$TMP/listed.ids"
+blocked=$(tr '\t' '\037' < "$TMP/agents.all" | while IFS=$'\037' read -r id name st pre _ _ _ status _; do
+  [ "$st" = blocked ] || continue
+  v=$(verdict "$id")
+  if grep -qxF "$id" "$TMP/on_you.ids"; then case $v in (on*) ;; (*) v="on	" ;; esac   # a row keeps it on you
+  elif grep -qxF "$id" "$TMP/in_review.ids"; then continue   # its rows show it idle, in review
+  fi
+  # Not on you (idle, busy, superseded, a delivered review, landed): Other sessions or its row lists it.
+  b=${v#*	}; case $v in
+    (on*) printf '  "%s" (%s attach %s)%s\n' "$name" "$pre" "${id:0:8}" "${b:+ — $b}" ;;
+    (stale*) printf '  "%s" (%s attach %s) — %s; stop: %s stop %s\n' "$name" "$pre" "${id:0:8}" "$b" "$pre" "${id:0:8}" >> "$TMP/stale" ;;
+    (*) continue ;;
+  esac
+  echo "$id" >> "$TMP/listed.ids"
+done)
+[ -z "$blocked" ] || printf '\nWaiting on you:\n%s\n' "$blocked"
+# A prompt unanswered for STALE_S: answer it (attach) or stop the session. Not counted as on you.
+[ ! -s "$TMP/stale" ] || { printf '\nStale prompts:\n'; cat "$TMP/stale"; }
+
+# Leftovers: running sessions and worktrees whose task is finished. Candidates are the pointed-at keys that
+# aren't rows; one adapter call checks them all.
+pointed_keys | sort -u | grep -vxF -f <(printf '%s\n' $keys) > "$TMP/cand" || true
+for k in $keys; do awk -v k="$k" '$1==k {print $2}' "$TMP/owners.exact" "$TMP/owners.guess"; done | sort -u > "$TMP/busy_ids"
+if [ -s "$TMP/cand" ] && [ -n "$ADAPTER" ]; then
+  adapter done $(cat "$TMP/cand") > "$TMP/done" 2>/dev/null || : > "$TMP/done"
+  while IFS=$'\t' read -r k st; do
+    kl="$k${st:+ $st}"
+    ids=$( { awk -F'\t' -v k="$k" "$HAS"'has($2,k) {print $1}' "$TMP/agents"
+             awk -v k="$k" '$1==k {print $2}' "$TMP/owners.exact" | grep -xF -f <(cut -f1 "$TMP/agents"); } | sort -u)
+    for id in $ids; do
+      grep -qxF "$id" "$TMP/busy_ids" && continue   # also owns a task that's still open
+      grep -qxF "$id" "$TMP/superseded.ids" && continue   # Other sessions says it's superseded
+      t=$(mtime "$TRANSCRIPTS/$id.jsonl" 2>/dev/null) || t=$NOW   # transcript elsewhere: not known idle
+      # Only an idle or done session: a blocked one still waits on someone, however old.
+      awk -F'\t' -v id="$id" -v kl="$kl" -v old=$((t < NOW - RESOLVE_S)) \
+        '$1==id {printf "%s\t  %s — session \"%s\": %s stop %s\n", old && $3 ~ /^(idle|done)$/, kl, $2, $4, substr(id,1,8)}' "$TMP/agents"
+    done
+    worktrees_for "$k" | while IFS=$'\t' read -r r wt; do
+      base=$(git -C "$r" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/HEAD)
+      dirty=$(git -C "$wt" status --porcelain | wc -l | tr -d ' ')
+      unmerged=$(git -C "$wt" rev-list --count "$base..HEAD" 2>/dev/null)   # unknown base: "check before removing"
+      br=$(git -C "$wt" rev-parse --abbrev-ref HEAD)
+      local_only=$(git -C "$wt" rev-list --count "origin/$br..HEAD" 2>/dev/null || echo "$unmerged")
+      rel=${wt#"$r"/} repo=${r#"$ROOT"/}; [ "$r" = "$ROOT" ] && repo=.
+      # Idle: its last commit and the folder itself (a file added or removed) both older than RESOLVE_S.
+      t=$(git -C "$wt" log -1 --format=%ct 2>/dev/null) || t=$NOW; m=$(mtime "$wt"); [ "$m" -gt "$t" ] && t=$m
+      old=$((t < NOW - RESOLVE_S))
+      if [ "$dirty" != 0 ]; then
+        printf '0\t  %s\n' "$kl — worktree $rel has $dirty uncommitted file(s) — check before removing"
+      elif [ "$unmerged" = 0 ]; then
+        printf '%s\t  %s\n' "$old" "$kl — worktree clean+merged: git -C $repo worktree remove $rel && git -C $repo branch -d $br"
+      elif [ "$local_only" = 0 ]; then
+        printf '%s\t  %s\n' "$old" "$kl — worktree clean, $unmerged unmerged commit(s) all on origin/$br: git -C $repo worktree remove $rel && git -C $repo branch -D $br"
+      else
+        printf '0\t  %s\n' "$kl — worktree $rel has $local_only commit(s) not pushed anywhere — check before removing"
+      fi
+    done
+  done < "$TMP/done" > "$TMP/leftovers"
+  # Resolved: a leftover idle RESOLVE_S (a week) that loses nothing when removed; it needs nothing, so it
+  # leaves Leftovers. One that could lose work (uncommitted, unpushed) stays a leftover however old.
+  awk -F'\t' '$1 == 0 {print $2}' "$TMP/leftovers" > "$TMP/left"; awk -F'\t' '$1 == 1 {print $2}' "$TMP/leftovers" > "$TMP/resolved"
+  [ -s "$TMP/left" ] && printf '\nLeftovers (task finished):\n' && cat "$TMP/left"
+  [ -s "$TMP/resolved" ] && printf '\n%s:\n' "$RESOLVED" && cat "$TMP/resolved"
+fi
+
+# Other sessions (see the header). Leftovers' sessions are listed there already. A worker that ran the status
+# command for its own task isn't a coordinator here: only a coordinator ($TMP/watchers) is.
+OTHER_S=$(( ${SESSION_STATUS_OTHER_HOURS:-3} * 3600 )); touch "$TMP/shown_ids" "$TMP/leftovers"
+while IFS=$'\037' read -r id name st pre started _ _ status _; do
+  grep -qxF "$id" "$TMP/listed.ids" || [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] || grep -qxF "$id" "$TMP/shown_ids" || grep -q "/$id\.jsonl$" "$TMP/watchers" ||
+    grep -q "stop ${id:0:8}$" "$TMP/leftovers" && continue
+  # Blocked but not on you (verdict): at rest, or busy past a session limit.
+  [ "$st" != blocked ] || { [ "$status" = busy ] && st=busy || st=idle; }
+  f=$(transcript_of "$id"); w=$NOW; [ -z "$f" ] || w=$(mtime "$f")
+  case $st in
+    working|busy) age=$(( NOW - ${started:-0} )); [ "${started:-0}" -gt 0 ] || age=$(( NOW - w )) ;;
+    # A live superseded one stays listed however long it idles: it is never a leftover, and its Stop is here.
+    *) age=$(( NOW - w )); [ "$age" -lt "$OTHER_S" ] || grep -qxF "$id" "$TMP/superseded.ids" || continue ;;
+  esac
+  rev=$(awk -v id="$id" '$2==id {print $1; exit}' "$TMP/reviews")
+  sup=$(awk -v id="$id" '$1==id {print substr($2, 1, 8)}' "$TMP/superseded" | tail -1)
+  last=; [ -z "$f" ] || last=$(last_text "$f")
+  printf '  "%s" %s %s%s%s%s (%s attach %s)\n' "$name" "$st" "$(fmt_age "$age")" "${rev:+ · reviews $rev}" "${sup:+ · superseded by $sup}" "${last:+ — $last}" "$pre" "${id:0:8}"
+done < <(tr '\t' '\037' < "$TMP/agents.all") > "$TMP/other"
+[ -s "$TMP/other" ] && printf '\nOther sessions:\n' && cat "$TMP/other"
+
+if [ -n "$NPID" ]; then
+  end=$((SECONDS + 60)); while kill -0 "$NPID" 2>/dev/null && [ "$SECONDS" -lt "$end" ]; do sleep 1; done
+  # A failure keeps the source's last good notices, so a blip doesn't drop them and re-add them (two wakes).
+  mkdir -p ~/.cache/session-status
+  for src in $NSRC; do
+    rc=$(cat "$TMP/notices.$src.rc" 2>/dev/null) || { rc=1; echo "notices timed out after 60s" > "$TMP/notices.$src"; }
+    good=~/.cache/session-status/$ENC.notices; [ "$src" = adapter ] || good=$good.$src
+    case $rc in
+      0) cp "$TMP/notices.$src" "$good" ;;
+      1) { cat "$good" 2>/dev/null; sed 's/^/(failed) /' "$TMP/notices.$src" | head -1; } > "$TMP/shown"; mv "$TMP/shown" "$TMP/notices.$src" ;;
+      *) : > "$TMP/notices.$src" ;;
+    esac
+    cat "$TMP/notices.$src"
+  done > "$TMP/notices"
+  [ -s "$TMP/notices" ] && printf '\nNotices:\n' && sed 's/^/  * /' "$TMP/notices"
+fi
+
+# Plugin feedback (feedback.md), once a day, on a coordinator's full sweep only ($TMP/watchers, no keys): a terminal, a
+# task session, the R&D run or a one-ticket lookup would use it up unread, and so would the --changes child and the
+# pane (SESSION_STATUS_NO_FEEDBACK).
+[ -n "${SESSION_STATUS_NO_FEEDBACK:-}" ] || [ $# != 0 ] || ! grep -q "/${CLAUDE_CODE_SESSION_ID:-none}\.jsonl$" "$TMP/watchers" || { fb=$("$(dirname "$SELF")/feedback" footer 2>/dev/null) && [ -n "$fb" ] && printf '\n%s\n' "$fb"; }
+
+exit 0   # the footer tests above return 1 when there is nothing to print

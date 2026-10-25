@@ -1,0 +1,16 @@
+#!/bin/bash
+# Weekly R&D run launcher for cron or launchd: starts a background session in a project root that follows the
+# rnd skill (SKILL.md beside this file, plus the project's .claude/rnd-brief.md). Edit those, not the schedule line.
+# usage: rnd-weekly PROJECT_ROOT [--dry-run]     log: $RND_LOG (default ~/Library/Logs/rnd-weekly.log)
+set -euo pipefail
+export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+root=${1:?usage: rnd-weekly PROJECT_ROOT [--dry-run]}
+LOG=${RND_LOG:-$HOME/Library/Logs/rnd-weekly.log}
+mkdir -p "$(dirname "$LOG")"
+cd "$root" 2>/dev/null || { echo "$(date '+%F %T') no project root $root" >> "$LOG"; exit 1; }
+cmd=(claude --bg -n "rnd-weekly-$(date +%F)" "Session task: weekly R&D run. Use the session-orchestration:rnd skill and follow it.")
+if [ "${2:-}" = "--dry-run" ]; then
+  printf '%q ' "${cmd[@]}"; echo; command -v claude; exit 0
+fi
+echo "$(date '+%F %T') start in $root" >> "$LOG"
+"${cmd[@]}" >> "$LOG" 2>&1

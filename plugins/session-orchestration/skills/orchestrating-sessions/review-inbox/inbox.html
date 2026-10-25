@@ -1,0 +1,234 @@
+<title>Review Inbox</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one column of PR groups, each a stack of finding cards; a sticky bar carries the send-to-Claude count. */
+:root {
+  --bg: #f5f6f4; --surface: #ffffff; --fg: #1d2420; --muted: #5d6862; --line: #d9ddd9;
+  --accent: #2f6b4f; --accent-fg: #ffffff;
+  --block: #b3261e; --should: #a35f00; --nit: #5d6862; --ok: #2f6b4f; --no: #7a5a5a; --note: #3b5ba5;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141816; --surface: #1c211e; --fg: #e3e8e4; --muted: #9aa59f; --line: #2e3531;
+  --accent: #6fbf95; --accent-fg: #0f1411;
+  --block: #f08a80; --should: #e0a54a; --nit: #9aa59f; --ok: #6fbf95; --no: #c49a9a; --note: #8fa8e6; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #141816; --surface: #1c211e; --fg: #e3e8e4; --muted: #9aa59f; --line: #2e3531;
+  --accent: #6fbf95; --accent-fg: #0f1411;
+  --block: #f08a80; --should: #e0a54a; --nit: #9aa59f; --ok: #6fbf95; --no: #c49a9a; --note: #8fa8e6; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans); }
+main { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 16px 96px; display: grid; gap: 20px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
+h1 { font-size: 22px; font-weight: 600; margin: 0; text-wrap: balance; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs button { font: 500 13px var(--sans); border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+  padding: 4px 10px; border-radius: 999px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.tabs button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.empty { color: var(--muted); border: 1px dashed var(--line); padding: 20px; border-radius: 8px; }
+section.pr { display: grid; gap: 10px; }
+.pr h2 { font-size: 15px; font-weight: 600; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.pr h2 a { color: var(--fg); }
+.pr h2 .meta { font: 400 13px var(--mono); color: var(--muted); }
+article { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 8px; min-width: 0; }
+.top { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.sev { font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; }
+.sev.blocking { color: var(--block); } .sev.should { color: var(--should); } .sev.nit { color: var(--nit); }
+.loc { font: 13px var(--mono); color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+.state { margin-left: auto; font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; }
+.state.approved, .state.posted { color: var(--ok); } .state.rejected { color: var(--no); } .state.noted { color: var(--note); } .state.pending { color: var(--muted); }
+.why { color: var(--muted); font-size: 14px; margin: 0; white-space: pre-wrap; }
+.answer { color: var(--note); }
+label { font: 600 11px var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+textarea, input[type=text] { width: 100%; box-sizing: border-box; font: 14px/1.45 var(--mono); color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+textarea { min-height: 6em; resize: vertical; }
+textarea:disabled, input:disabled { opacity: .8; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.actions button, .bar button { font: 500 14px var(--sans); padding: 6px 14px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+.actions button.primary, .bar button { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.actions button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, textarea:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.who { font-size: 13px; color: var(--muted); }
+.err { color: var(--block); font-size: 13px; }
+.bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: var(--surface); border-top: 1px solid var(--line); display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; }
+.bar span { font-size: 14px; color: var(--muted); }
+</style>
+
+<main>
+  <header>
+    <h1>Review Inbox</h1>
+    <div class="tabs" role="group" aria-label="Show">
+      <button type="button" data-tab="pending" aria-pressed="true">Pending</button>
+      <button type="button" data-tab="decided" aria-pressed="false">Decided</button>
+      <button type="button" data-tab="all" aria-pressed="false">All</button>
+    </div>
+  </header>
+  <div id="list"><p class="empty">Loading findings…</p></div>
+</main>
+<div class="bar" id="bar" hidden><span id="barText"></span><button type="button" id="send">Tell Claude</button></div>
+
+<script>
+// Row schema and the decision hash are documented in review-inbox.md next to this file. The hash
+// below must match verify-row.sh: sha256 of JSON.stringify([docId, ...HASH_FIELDS]).
+const HASH_FIELDS = ['project', 'repo', 'pr', 'file', 'line', 'lineType', 'fileType', 'status', 'final', 'note', 'decidedBy', 'decidedAt', 'deciderIsOwner'];
+async function decisionHash(id, r) {
+  const s = JSON.stringify([id, ...HASH_FIELDS.map(k => r[k] ?? null)]);
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+let db = null, user = null, comments = null, rows = [], tab = 'pending', names = {}, readOnly = false;
+const drafts = {};  // unsaved text per row id, kept across re-renders
+const $ = s => document.querySelector(s);
+const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids.filter(k => k != null)); return e; };
+const state = r => r.commentId ? 'posted' : (r.status ?? 'pending');
+const when = iso => { try { return new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); } catch { return iso; } };
+
+try { const t = localStorage.getItem('tab'); if (t) tab = t; } catch {}
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  tab = b.dataset.tab; try { localStorage.setItem('tab', tab); } catch {}
+  render();
+});
+
+function visible(r) {
+  const s = state(r);
+  return tab === 'all' || (tab === 'pending' ? s === 'pending' : s !== 'pending');
+}
+
+// A snapshot while the viewer types in a card waits until they leave the field: re-rendering would drop focus.
+let renderLater = false;
+const typing = () => document.activeElement?.matches?.('#list textarea, #list input');
+document.addEventListener('focusout', () => setTimeout(() => { if (renderLater && !typing()) { renderLater = false; render(); } }, 250));
+function render() {
+  if (typing()) { renderLater = true; return; }
+  document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tab === tab)));
+  const list = $('#list');
+  const shown = rows.filter(visible);
+  if (!db) { list.replaceChildren(el('p', { className: 'empty', textContent: 'Sign in to claude.ai to see the findings.' })); return; }
+  if (!shown.length) {
+    list.replaceChildren(el('p', { className: 'empty', textContent: tab === 'pending'
+      ? 'Nothing waiting. A PR review session adds its proposed comments here, one card per finding.'
+      : 'No findings here yet.' }));
+    renderBar(); return;
+  }
+  const groups = new Map();
+  for (const r of shown) {
+    const k = `${r.project}/${r.repo}#${r.pr}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  }
+  list.replaceChildren(...[...groups.values()].map(g => {
+    const h = g[0];
+    const title = h.prUrl ? el('a', { href: h.prUrl, target: '_blank', rel: 'noopener', textContent: `${h.repo} #${h.pr}` }) : `${h.repo} #${h.pr}`;
+    return el('section', { className: 'pr' },
+      el('h2', {}, title, el('span', { className: 'meta', textContent: [h.ticket, h.prTitle].filter(Boolean).join(' · ') })),
+      ...g.sort((a, b) => (a.n ?? 0) - (b.n ?? 0)).map(card));
+  }));
+  renderBar();
+}
+
+function card(r) {
+  const s = state(r), decided = s !== 'pending';
+  const loc = r.file ? `${r.file}${r.line ? ':' + r.line : ''}` : 'general comment';
+  const final = el('textarea', { id: `final-${r.id}`, value: drafts[r.id]?.final ?? r.final ?? r.draft ?? '', disabled: decided || readOnly });
+  const note = el('input', { type: 'text', id: `note-${r.id}`, value: drafts[r.id]?.note ?? r.note ?? '', disabled: decided || readOnly,
+    placeholder: 'A question or an instruction for a new session' });
+  const err = el('p', { className: 'err', hidden: true });
+  const keep = () => { drafts[r.id] = { final: final.value, note: note.value }; };
+  final.oninput = note.oninput = () => { keep(); sync(); };
+  const approve = el('button', { type: 'button', className: 'primary', textContent: 'Approve' });
+  const reject = el('button', { type: 'button', textContent: 'Reject' });
+  const sendNote = el('button', { type: 'button', textContent: 'Send note' });
+  const sync = () => {
+    const hasNote = note.value.trim() !== '';
+    approve.disabled = hasNote || final.value.trim() === '';
+    approve.title = hasNote ? 'Clear the note to approve' : '';
+    sendNote.disabled = !hasNote;
+  };
+  sync();
+  const act = async (status, btns) => {
+    btns.forEach(b => b.disabled = true); err.hidden = true;
+    try { await decide(r, status, final.value, note.value.trim()); delete drafts[r.id]; }
+    catch (e) { err.textContent = `Not saved: ${e?.message ?? e}. Try again.`; err.hidden = false; btns.forEach(b => b.disabled = false); sync(); }
+  };
+  approve.onclick = () => act('approved', [approve, reject, sendNote]);
+  reject.onclick = () => act('rejected', [approve, reject, sendNote]);
+  sendNote.onclick = () => act('noted', [approve, reject, sendNote]);
+  const undo = el('button', { type: 'button', textContent: 'Undo' });
+  undo.onclick = async () => {
+    undo.disabled = true;
+    try { await db.doc(`findings/${r.id}`).update({ status: 'pending', decidedBy: null, decidedAt: null, deciderIsOwner: null, decisionHash: null, sentAt: null }); }
+    catch (e) { err.textContent = `Not saved: ${e?.message ?? e}`; err.hidden = false; undo.disabled = false; }
+  };
+  const by = r.decidedBy ? `${names[r.decidedBy] || 'Someone'}, ${when(r.decidedAt)}` : '';
+  return el('article', {},
+    el('div', { className: 'top' },
+      el('span', { className: `sev ${r.severity ?? 'nit'}`, textContent: r.severity ?? 'nit' }),
+      el('span', { className: 'loc', textContent: loc }),
+      el('span', { className: `state ${s}`, textContent: s })),
+    r.why ? el('p', { className: 'why', textContent: r.why }) : null,
+    r.answer ? el('p', { className: 'why answer', textContent: `Your note: ${r.answeredNote ?? ''}\nAnswer: ${r.answer}` }) : null,
+    el('label', { htmlFor: final.id, textContent: decided ? 'Text' : 'Comment to post' }), final,
+    (!decided || r.note) ? el('label', { htmlFor: note.id, textContent: 'Note' }) : null,
+    (!decided || r.note) ? note : null,
+    decided
+      ? el('div', { className: 'actions' },
+          el('span', { className: 'who', textContent: s === 'posted' ? `Posted as comment ${r.commentId}. Decided by ${by}` : `Decided by ${by}` }),
+          s === 'posted' || readOnly ? null : undo)
+      : (readOnly ? null : el('div', { className: 'actions' }, approve, reject, sendNote)),
+    err);
+}
+
+async function decide(r, status, final, note) {
+  const fields = { status, final, note, decidedBy: await user.id(), decidedAt: new Date().toISOString(), deciderIsOwner: await user.isOwner() };
+  fields.decisionHash = await decisionHash(r.id, { ...r, ...fields });
+  await db.doc(`findings/${r.id}`).update(fields);
+}
+
+// Tell Claude: one comment, sent to the Claude sessions watching this page, naming the decisions not yet sent.
+// The coordinator wakes on it and reads the rows; the comment itself is only a signal.
+let sendState = 'off';
+function unsent() { return rows.filter(r => ['approved', 'rejected', 'noted'].includes(r.status) && !r.commentId && !r.sentAt && r.decidedAt); }
+function renderBar() {
+  const u = unsent();
+  $('#bar').hidden = !(comments && sendState === 'available' && u.length);
+  $('#barText').textContent = `${u.length} decision${u.length === 1 ? '' : 's'} not sent to Claude`;
+}
+$('#send').onclick = async () => {
+  const u = unsent(); if (!u.length) return;
+  const btn = $('#send'); btn.disabled = true;
+  const counts = {};
+  for (const r of u) { const k = `${r.repo} #${r.pr}`; counts[k] = counts[k] ?? {}; counts[k][r.status] = (counts[k][r.status] ?? 0) + 1; }
+  const text = 'Review inbox: new decisions. ' + Object.entries(counts)
+    .map(([k, c]) => `${k}: ${Object.entries(c).map(([s, n]) => `${n} ${s}`).join(', ')}`).join('; ')
+    + '. Rows to act on: approved without commentId, and noted. Per review-inbox.md.';
+  try { await comments.sendToClaude({ anchor: await comments.anchorFor($('h1')), text }); }
+  catch (e) { $('#barText').textContent = `Not sent: ${e?.message ?? e}`; btn.disabled = false; return; }
+  // Sent: marking the rows is bookkeeping for the bar, so a failed mark doesn't undo or repeat the send.
+  const at = new Date().toISOString();
+  await Promise.allSettled(u.map(r => db.doc(`findings/${r.id}`).update({ sentAt: at })));
+  btn.disabled = false; renderBar();
+};
+
+(async () => {
+  db = await claude.use('db');
+  user = await claude.use('user');
+  if (!db || !user) { render(); return; }
+  readOnly = (await user.can('data.write')) === false;
+  db.collection('findings').onSnapshot(async snap => {
+    rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const ids = [...new Set(rows.map(r => r.decidedBy).filter(Boolean))];
+    if (ids.length) { const ps = await user.profiles(ids); for (const id of ids) names[id] = ps[id]?.name || ''; }
+    render();
+  }, e => { $('#list').replaceChildren(el('p', { className: 'err', textContent: `The inbox stopped updating (${e.code}). Reload the page.` })); });
+  comments = await claude.use('comments');
+  if (comments) {
+    try { sendState = await comments.canSendToClaude(); } catch { sendState = 'off'; }
+    renderBar();
+    setInterval(async () => { try { sendState = await comments.canSendToClaude(); } catch {} renderBar(); }, 60000);
+  }
+})();
+</script>

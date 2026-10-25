@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Plugin feedback: cases where the plugin itself misbehaved or lacks a rule, kept per person (every project's in one
+# list) until someone sends them upstream. Never sends anything itself: feedback.md says how a case is applied.
+#
+# Cases: ${XDG_STATE_HOME:-~/.local/state}/session-orchestration/feedback/<category>/YYYY-MM-DD-<slug>.md, category
+# bugfixes | features | refactorings. Each is defer-task's format plus where, found while, plugin, evidence, seen and
+# status lines (feedback.md shows one).
+#
+# Usage: feedback add CATEGORY TITLE --where PATH[:LINE] --found 'ROLE; STEP' --evidence TEXT [--suggested TEXT] [--new]
+#                       writes a case and prints its path. Open cases with the same file in `where` or two title
+#                       words in common are printed instead (exit 3): add a date to one with `feedback seen FILE`,
+#                       or rerun with --new.
+#        feedback seen FILE      today's date added to its `seen:` line (a duplicate counts there, not as a new file)
+#        feedback list [--all]   open cases (--all: every case): times seen, status, path, title (tabs), most seen first
+#        feedback count          `N open (M seen ≥2×)`, nothing when none are open
+#        feedback footer         count, at most once a day (the status sweep's footer)
+#        feedback scrub FILE…    lines that could name the person or their projects (FILE:LINE: why: text); exit 1
+#                                on any hit. The deny list covers every project root your sessions ran in
+#        feedback mark FILE sent URL | dropped
+#        feedback mode           how cases are applied here: pr | fork-pr | issue | local (config feedback.mode, else
+#                                pr with feedback.repo_dir set, else fork-pr when gh is signed in, else issue)
+#        feedback repo           the plugin's GitHub repo (owner/name), from plugin.json's repository
+#        feedback label          the label an `issue`-mode case is filed with
+set -uo pipefail
+. "$(dirname "$0")/../../lib.sh" || exit 1
+DIR=${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/feedback
+PLUGIN_JSON=$LIB_DIR/.claude-plugin/plugin.json
+TODAY=$(date +%F)
+LABEL=todo
+
+die() { echo "$*" >&2; exit 2; }
+field() { sed -n "s/^- $1: //p" "$2" | head -1; }
+title_of() { sed -n '1s/^# //p' "$1"; }
+cases() { find "$DIR" -mindepth 2 -maxdepth 2 -name '*.md' 2>/dev/null | sort; }
+open_cases() { cases | while read -r f; do [ "$(field status "$f")" = open ] && echo "$f"; done; }
+seen_n() { field seen "$1" | tr ',' '\n' | grep -c .; }
+# Title words for the dedup: 4+ letters, without the ones nearly every case has (the plugin's own names).
+words() { tr 'A-Z' 'a-z' <<<"$1" | tr -cs 'a-z0-9' '\n' | awk 'length >= 4' |
+  grep -vxE 'session|sessions|status|plugin|when|with|that|this|from|does|into|than|them|they|have|after' | sort -u; }
+repo() { jq -r '.repository // empty | if type == "object" then .url else . end' "$PLUGIN_JSON" 2>/dev/null |
+  sed -E 's#^(git\+)?https?://github\.com/##; s#\.git$##; s#/$##' | grep -E '^[^/ ]+/[^/ ]+$'; }
+
+case ${1:-} in
+add)
+  cat=${2:-} title=${3:-}; shift 3 2>/dev/null || die "usage: feedback add CATEGORY TITLE --where … --found … --evidence …"
+  case $cat in bugfixes|features|refactorings) ;; *) die "category: bugfixes | features | refactorings" ;; esac
+  where= found= evidence= suggested= new=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --where) where=${2:-} ;; --found) found=${2:-} ;; --evidence) evidence=${2:-} ;; --suggested) suggested=${2:-} ;;
+      --new) new=1; shift; continue ;; *) die "unknown argument: $1" ;;
+    esac
+    [ $# -ge 2 ] || die "$1 needs a value"; shift 2
+  done
+  [ -n "$title" ] && [ -n "$where" ] && [ -n "$found" ] && [ -n "$evidence" ] || die "title, --where, --found and --evidence are required"
+  [ "$(printf '%s\n' "$title" "$where" "$found" "$suggested" | wc -l | tr -d ' ')" = 4 ] || die "title, --where, --found and --suggested are one line each"
+  [[ $where == /* || $where == '~'* ]] && die "--where is a path in the plugin (skills/…/session-status:206), never a project's"
+  [ "$(grep -c . <<<"$evidence")" -le 3 ] || die "--evidence: at most 3 lines"
+  if [ -z "$new" ]; then
+    file=${where%%:*} tw=$(words "$title")
+    sim=$(open_cases | while read -r f; do
+      wf=$(field where "$f")
+      common=$(comm -12 <(words "$(title_of "$f")") <(echo "$tw") | grep -c .)
+      # The same place, the same file and a word in common, or two words in common.
+      { [ "$wf" = "$where" ] || { [ "${wf%%:*}" = "$file" ] && [ "$common" -ge 1 ]; } || [ "$common" -ge 2 ]; } && printf '  %s — %s\n' "$f" "$(title_of "$f")"
+    done)
+    [ -z "$sim" ] || { printf 'similar open cases:\n%s\nthe same case: feedback seen FILE; a new one: rerun with --new\n' "$sim"; exit 3; }
+  fi
+  slug=$(tr 'A-Z' 'a-z' <<<"$title" | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-50 | sed 's/-$//')
+  slug=${slug:-case}   # a title with no ASCII letters or digits
+  f=$DIR/$cat/$TODAY-$slug.md; n=2
+  while [ -e "$f" ]; do f=$DIR/$cat/$TODAY-$slug-$n.md; n=$((n + 1)); done
+  mkdir -p "$DIR/$cat"
+  find_root >> "$DIR/.roots"   # scrub's deny list covers it even once its sessions are gone
+  { echo "# $title"
+    echo "- where: $where"
+    echo "- found while: $found"
+    echo "- plugin: $(jq -r .version "$PLUGIN_JSON")"
+    echo "- evidence: $(head -1 <<<"$evidence")"; tail -n +2 <<<"$evidence" | sed 's/^/  /'
+    [ -z "$suggested" ] || echo "suggested: $suggested"
+    echo "- seen: $TODAY"
+    echo "- status: open"
+  } > "$f"
+  echo "$f" ;;
+seen)
+  f=${2:-}; [ -f "$f" ] || die "usage: feedback seen FILE"
+  field seen "$f" | tr -d ' ' | tr ',' '\n' | grep -qxF "$TODAY" && exit 0
+  sed -i.bak -E "s/^(- seen: .*)$/\1, $TODAY/" "$f" && rm -f "$f.bak" ;;
+list)
+  if [ "${2:-}" = --all ]; then cases; else open_cases; fi | while read -r f; do
+    printf '%s\t%s\t%s\t%s\n' "$(seen_n "$f")" "$(field status "$f" | cut -d' ' -f1)" "$f" "$(title_of "$f")"
+  done | sort -t$'\t' -k1,1nr ;;
+count)
+  n=0 m=0
+  while read -r f; do [ -n "$f" ] || continue; n=$((n + 1)); [ "$(seen_n "$f")" -lt 2 ] || m=$((m + 1)); done <<<"$(open_cases)"
+  [ "$n" = 0 ] || echo "$n open ($m seen ≥2×)" ;;
+footer)
+  stamp=$DIR/.footer-shown
+  [ "$(cat "$stamp" 2>/dev/null)" = "$TODAY" ] && exit 0
+  c=$("$0" count); [ -n "$c" ] || exit 0
+  echo "$TODAY" > "$stamp"
+  echo "plugin feedback: $c — apply? (feedback.md)" ;;
+mark)
+  f=${2:-}; [ -f "$f" ] || die "usage: feedback mark FILE sent URL | dropped"
+  case ${3:-} in sent) [ -n "${4:-}" ] || die "sent needs the URL"; s="sent $4" ;; dropped) s=dropped ;; *) die "sent URL | dropped" ;; esac
+  # awk, not sed: a URL's # or & would be sed syntax.
+  S="- status: $s" awk '/^- status: / && !d { print ENVIRON["S"]; d = 1; next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;
+mode)
+  m=$(config feedback.mode 2>/dev/null)
+  if [ -n "$m" ] && [ "$m" != auto ]; then echo "$m"
+  elif [ -n "$(config feedback.repo_dir 2>/dev/null)" ]; then echo pr
+  elif gh auth status >/dev/null 2>&1 && gh repo view "$(repo)" >/dev/null 2>&1; then echo fork-pr
+  else echo issue; fi ;;
+repo) repo || { echo "plugin.json names no GitHub repository" >&2; exit 1; } ;;
+label) echo "$LABEL" ;;
+scrub)
+  shift; [ $# -gt 0 ] || die "usage: feedback scrub FILE…"
+  # The deny list, from this machine: literal strings (whole words, any case) and patterns.
+  lit=$(mktemp) keys=$(mktemp) v=$(mktemp); trap 'rm -f "$lit" "$keys" "$v"' EXIT
+  # Cases come from every project, so every project root a case was added in or this person's sessions ran in adds to it.
+  roots=$({ pwd -P; cat "$DIR/.roots" 2>/dev/null; list_sessions --all 2>/dev/null | cut -f6; } | sort -u | while read -r d; do
+    [ -d "$d" ] && (cd "$d" && find_root); done | sort -u)
+  echo '[A-Z][A-Z0-9]+-[0-9]+' > "$keys"   # session-status's default task key
+  { echo "$HOME"; id -un; git config user.email; git config user.name
+    while read -r d; do
+      [ -n "$d" ] || continue; echo "$d"; basename "$d"
+      # Their remotes' owner and repo names, and each one's key pattern and the hosts its adapter talks to.
+      git -C "$d" remote get-url origin 2>/dev/null | sed -E 's#\.git$##; s#.*[:/]([^/:]+)/([^/]+)$#\1\n\2#'
+      (cd "$d" && config key_pattern 2>/dev/null) >> "$keys"
+      a=$(adapter_path "$d") || continue
+      (cd "$d" && "$a" key-pattern 2>/dev/null) >> "$keys"   # the adapter contract: cwd = its project root
+      grep -oE 'https?://[A-Za-z0-9.-]+' "$a" | sed 's#.*://##'
+      # Strings in its person and repo config (chat ids, names, domains), skipping the enum values.
+      (cd "$d" && coord_json) | jq -r 'paths(strings) as $p | select(($p[-1] | tostring) | test("^(tracker|host|terminal|messages|rule|mode)$") | not)
+        | getpath($p)' 2>/dev/null
+    done <<<"$roots"
+  } | grep -E '^.{3,}$' | grep -vxiE 'session-orchestration|claude-plugins|github\.com|none|true|false|main|master|src|repo' | sort -u > "$lit"
+  # Login and each part of the name, however short: "Pat saw it" names the person too.
+  { id -un; git config user.name | tr -s ' ' '\n'; } | grep . >> "$lit"
+  k=$(grep -E . "$keys" | sort -u); printf '%s\n' "$k" > "$keys"   # no empty line: it would match every line
+  r=$(repo) && repo_url=https://github.com/$r || repo_url="no repository"
+  bad=0 q=\'
+  for f in "$@"; do
+    [ -f "$f" ] || { echo "$f: not a file"; bad=1; continue; }
+    # The checks read the case with the plugin's own names replaced by `plugin` (its repo URL, name, script and state
+    # paths), line for line, so naming the plugin is never a hit.
+    while IFS= read -r l || [ -n "$l" ]; do
+      for s in "$repo_url" '~/.cache/session-status' '~/.local/state/session-orchestration' '~/.config/session-orchestration' \
+          session-orchestration session-status; do l=${l//"$s"/plugin}; done
+      printf '%s\n' "$l"
+    done < "$f" > "$v"
+    { [ ! -s "$lit" ] || grep -niwF -f "$lit" -- "$v" | sed 's/:/\tnames a local name\t/'
+      grep -nE -f "$keys" -- "$v" | sed 's/:/\ta task key\t/'
+      grep -nE "(^|[[:space:](\`\"$q=])(/|~/)[A-Za-z0-9._-]+/[A-Za-z0-9._-]+" "$v" | sed 's/:/\tan absolute path\t/'
+      grep -nE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$v" | sed 's/:/\tan email address\t/'
+      grep -noE "https?://[^[:space:])>\`\"$q]+" "$v" | cut -d: -f1 | sed 's/$/\ta URL other than the plugin'\''s/'
+      grep -nE '[0-9a-fA-F]{16,}' "$v" | sed 's/:/\ta long hex string\t/'
+      grep -noE '[A-Za-z0-9+/=_-]{24,}' "$v" | grep -E '^[0-9]+:.*[A-Z]' | grep -E '^[0-9]+:.*[a-z]' | grep -E '^[0-9]+:.*[0-9]' | cut -d: -f1 | sed 's/$/\ta token-like string/'
+      # Every line of a fenced block must be the plugin's own code.
+      awk '/^```/ { in_ = !in_; next } in_ && NF { print NR "\t" $0 }' "$f" |
+        while IFS=$'\t' read -r n code; do
+          code=$(sed -E 's/^[[:space:]]+|[[:space:]]+$//g' <<<"$code")
+          grep -rqF -- "$code" "$LIB_DIR" || printf '%s\tcode not from the plugin\n' "$n"
+        done
+    } | sort -t$'\t' -k1,1n -u | while IFS=$'\t' read -r n why _; do
+      printf '%s:%s: %s: %s\n' "$f" "$n" "$why" "$(sed -n "${n}p" "$f")"
+    done | grep . && bad=1
+  done
+  exit "$bad" ;;
+*) sed -n '/^# Usage:/,/^set /p' "$0" | sed '$d; s/^# \{0,1\}//' >&2; exit 2 ;;
+esac

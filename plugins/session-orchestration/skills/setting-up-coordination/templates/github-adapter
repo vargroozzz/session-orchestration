@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# session-status adapter for {{name}} (interface: session-orchestration status-reference.md). Written by
+# `session-status --init` for a GitHub repo; edit freely. Unanswered calls exit 2 and session-status uses its defaults.
+# session-status finds the task keys (session names, first prompts, worktree branches), asks `done` which are
+# finished (a merged PR, none open: they show under Leftovers) and looks the rest up with `tasks KEY…`, which adds
+# each key's PR words from GitHub. A PR belongs to the key in its branch name. The PR lists (open, then merged: two
+# gh queries) are cached for a minute; when gh fails, it isn't retried for a minute and the last good lists are used,
+# marked `(PRs as of HH:MM)`. `mine` lists the tasks you own (shared mode: a coordinator forwards notices only for
+# these): your open PRs' keys, and #N of the open issues assigned to you or, unassigned, closed by one of your PRs.
+set -uo pipefail
+repo='{{repo_slug}}'
+key_re='{{key_re}}'
+cache=$HOME/.cache/session-status/$(tr '/:' '--' <<<"$repo").gh.json
+
+prs() {
+  local out stamp= open merged tmp
+  mkdir -p "${cache%/*}"
+  if [ -n "$(find "$cache" -mmin -1 2>/dev/null)" ]; then out=$(cat "$cache")
+  elif [ -z "$(find "$cache.err" -size +0 -mmin -1 2>/dev/null)" ] &&
+      open=$(gh pr list -R "$repo" --state open --limit 200 \
+        --json number,headRefName,title,state,reviews,mergeable,statusCheckRollup 2>"$cache.err") &&
+      # ponytail: the last 100 merged PRs; a key merged before them reads as not started. Query by branch if that bites.
+      merged=$(gh pr list -R "$repo" --state merged --limit 100 --json number,headRefName,title,state 2>>"$cache.err"); then
+    out=$(jq -sc 'add' <<<"$open$merged")
+    tmp=$(mktemp "$cache.XXXXXX") && printf '%s' "$out" > "$tmp" && mv "$tmp" "$cache"
+  elif [ -s "$cache" ]; then out=$(cat "$cache") stamp="(PRs as of $(date -r "$cache" +%H:%M))"
+  else out='[]' stamp="(PRs unavailable: $(tail -1 "$cache.err" 2>/dev/null | tr -s ' \t' ' ' | cut -c1-80))"; fi
+  jq -c --arg re "$key_re" --arg stamp "$stamp" \
+    '{stamp: $stamp, prs: [.[] | . + {key: ((.headRefName | match($re).string) // null)} | select(.key)]}' <<<"$out"
+}
+
+# One row per key: STATUS (In review / Done / -), the first PR's title, and the pane's words for each PR.
+rows() {
+  jq -r --arg name "${repo##*/}" --argjson keys "$(printf '%s\n' "$@" | jq -R . | jq -sc .)" '
+    def words: "\($name)#\(.number) \(.state)" + (if .state != "OPEN" then "" else
+      # each reviewer'\''s latest approve or request-changes; bots (login ending [bot]) do not count
+      ([.reviews // [] | map(select(.author.login | test("\\[bot\\]$") | not)) | group_by(.author.login)[]
+        | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")) | last
+        | select(.) | (if .state == "APPROVED" then "+" else "!" end) + .author.login]) as $r
+      | ($r | map(" " + .) | join(""))
+      + (if any($r[]; startswith("+")) then "" else " no-human-approval" end)
+      + (if .mergeable == "CONFLICTING" then " CONFLICT" else "" end)
+      + (if any(.statusCheckRollup[]?; (.conclusion // .state) as $c
+          | ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"] | index($c)) then " CI-FAILED" else "" end)
+      end);
+    .stamp as $stamp | .prs as $prs | $keys[] as $k
+    | [$prs[] | select(.key == $k)] as $mine
+    | (if any($mine[]; .state == "OPEN") then "In review" elif $mine != [] then "Done" else "-" end) as $st
+    | ([$mine[] | words] + (if $stamp != "" then [$stamp] else [] end) | join(" ")) as $w
+    | [$k, $st, ($mine[0].title // ""), (if $w == "" then "" else $w + " | " end)] | @tsv'
+}
+
+case ${1:-} in
+  tasks)
+    shift
+    [ $# -gt 0 ] || exit 2   # the sweep: session-status finds the keys and looks them up
+    p=$(prs) || exit 1
+    rows "$@" <<<"$p" ;;
+  done)
+    shift
+    prs | jq -r --argjson keys "$(printf '%s\n' "$@" | jq -R . | jq -sc .)" '.prs as $prs | $keys[] as $k
+      | [$prs[] | select(.key == $k)] as $m
+      | select(any($m[]; .state == "MERGED") and (any($m[]; .state == "OPEN") | not))
+      | "\($k)\tmerged #\([$m[] | select(.state == "MERGED")][0].number)"' ;;
+  mine)
+    # ponytail: uncached, three gh calls; cache it like prs() if notices call it often.
+    p=$(gh pr list -R "$repo" --state open --author @me --limit 200 --json headRefName,body) || exit 1
+    a=$(gh issue list -R "$repo" --state open --assignee @me --limit 1000 --json number) || exit 1
+    u=$(gh issue list -R "$repo" --state open --search no:assignee --limit 1000 --json number) || exit 1
+    jq -rn --arg re "$key_re" --argjson p "$p" --argjson a "$a" --argjson u "$u" '
+      [$p[] | .body // "" | scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):? #([0-9]+)") | .[0] | tonumber] as $linked
+      | ($p[] | .headRefName | match($re).string),
+        ($a[] | "#\(.number)"),
+        ($u[] | .number as $n | select($linked | index($n)) | "#\($n)")' | sort -u ;;
+{{?key_re_flag}}  key-pattern) echo "$key_re" ;;
+{{?urls}}  urls) printf '%s\n' {{urls}} ;;
+  pending) cat '{{orch}}/pending.md' ;;
+  *) exit 2 ;;
+esac
