@@ -99,18 +99,21 @@ A call it doesn't answer exits non-zero and the default applies (`tasks`: exit 2
 
 ## Words the pane reads in EXTRA
 
-Whitespace-separated; anything else shows only in a task's details.
+Words and phrases set off by spaces; anything else shows only in a task's details.
 
 | Word | Means | In the pane |
 |------|-------|-------------|
 | `REPO#ID OPEN` / `REPO#ID MERGED` | A PR and its state | OPEN: In review, or Landing once approved. MERGED with no open PR and the task not in a test/done status: Needs action |
-| `+NAME` | NAME approved the PR | Landing (when nothing needs fixing and no `no-human-approval`) |
-| `!NAME` | NAME asked for changes | Needs action, **Address comments** (its PR review comments) |
+| `+NAME` or `approved by NAME` | NAME approved the PR | Landing (when nothing needs fixing and no `no-human-approval`) |
+| `!NAME` or `changes requested by NAME` | NAME asked for changes | Needs action, **Address comments** (its PR review comments) |
 | `no-human-approval` | Open, waiting for a reviewer | In review |
 | `CONFLICT` | Merge conflict | Needs action, **Resolve conflicts** |
 | `CI-FAILED` | The PR's latest build failed | Needs action, **Fix CI** |
 | `↩MM-DD NAME→STATUS` | The tracker sent the task back | Needs action (Ask the session why) |
 | `(PRs as of HH:MM)` | The PR words are from that time (a lookup failed) | Shown as stale |
+
+The phrases `approved by NAME` and `changes requested by NAME` read without a legend and take any GitHub login
+(from the release after plain review words); `+NAME` and `!NAME` need a letter first, so `+1` is no reviewer.
 
 ## Without an adapter, and task ownership
 

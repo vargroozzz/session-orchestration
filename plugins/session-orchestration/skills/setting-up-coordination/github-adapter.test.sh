@@ -47,10 +47,10 @@ run() { (cd "$tmp/p" && HOME=$tmp PATH=$tmp/bin:$PATH "$tmp/adapter" "$@"); }
 cache=$tmp/.cache/session-status/acme-app.gh.json
 
 want=$(printf '%s\t%s\t%s\t%s\n' \
-  DEMO-1 'In review' One 'app#1 OPEN +alice | ' \
+  DEMO-1 'In review' One 'app#1 OPEN approved by alice | ' \
   DEMO-2 'In review' Two 'app#2 OPEN no-human-approval CONFLICT | ' \
-  DEMO-3 'In review' Three 'app#3 OPEN +bob CI-FAILED | ' \
-  DEMO-4 'In review' Four 'app#4 OPEN !bob no-human-approval | ' \
+  DEMO-3 'In review' Three 'app#3 OPEN approved by bob CI-FAILED | ' \
+  DEMO-4 'In review' Four 'app#4 OPEN changes requested by bob no-human-approval | ' \
   DEMO-5 Done Five 'app#5 MERGED | ' \
   DEMO-6 - '' '')
 diff <(run tasks DEMO-1 DEMO-2 DEMO-3 DEMO-4 DEMO-5 DEMO-6) <(echo "$want") || { echo "tasks differ"; exit 1; }

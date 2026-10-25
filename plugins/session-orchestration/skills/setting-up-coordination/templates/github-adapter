@@ -36,9 +36,9 @@ rows() {
       # each reviewer'\''s latest approve or request-changes; bots (login ending [bot]) do not count
       ([.reviews // [] | map(select(.author.login | test("\\[bot\\]$") | not)) | group_by(.author.login)[]
         | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")) | last
-        | select(.) | (if .state == "APPROVED" then "+" else "!" end) + .author.login]) as $r
+        | select(.) | (if .state == "APPROVED" then "approved by " else "changes requested by " end) + .author.login]) as $r
       | ($r | map(" " + .) | join(""))
-      + (if any($r[]; startswith("+")) then "" else " no-human-approval" end)
+      + (if any($r[]; startswith("approved by ")) then "" else " no-human-approval" end)
       + (if .mergeable == "CONFLICTING" then " CONFLICT" else "" end)
       + (if any(.statusCheckRollup[]?; (.conclusion // .state) as $c
           | ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"] | index($c)) then " CI-FAILED" else "" end)

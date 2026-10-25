@@ -205,21 +205,22 @@ export type Fact = { text: string; chip: string; color: Color; chipSaysIt?: true
 export const prsOf = (t: Task) =>
   [...t.extra.matchAll(/(?:^|\s)([\w.-]+)#(\d+) (OPEN|MERGED)\b/g)].map(([, repo = '', id = '', state = '']) => ({ repo, id, state }))
 // Reads the EXTRA words the adapter contract defines (session-status header: PR states, CONFLICT, CI-FAILED,
-// +/! reviewers, no-human-approval, ↩ sent back, "PRs as of").
+// +/! reviewers or "approved by" / "changes requested by", no-human-approval, ↩ sent back, "PRs as of").
+// The +/! forms need a letter first (so +1 is no reviewer); the phrases take any GitHub login (8bob).
 export function facts(t: Task): [Fact, ...Fact[]] {
   const x = t.extra
   const out: Fact[] = []
-  const names = (re: RegExp) => [...x.matchAll(re)].map(m => m[1]).join(', ')
+  const names = (re: RegExp) => [...x.matchAll(re)].map(m => m[1] ?? m[2]).join(', ')
   if (t.sess.state === 'blocked') out.push({ text: 'session blocked on you', chip: 'needs you', color: 'warning', chipSaysIt: true, act: true, onYou: true })
   if (/(?<![\w-])conflicts?(?![\w-])/i.test(x)) out.push({ text: 'merge conflict', chip: '✗ conflict', color: 'error', chipSaysIt: true, act: true, fix: 'conflict' })
   if (/(?<![\w-])CI-FAILED(?![\w-])/.test(x)) out.push({ text: 'CI failed', chip: '✗ ci failed', color: 'error', chipSaysIt: true, act: true, fix: 'ci' })
-  const asked = names(/(?:^|[\s,])!([A-Za-z][\w.-]*)/g)
+  const asked = names(/(?:^|[\s,])!([A-Za-z][\w.-]*)|\bchanges requested by ([A-Za-z0-9][\w.-]*)/g)
   if (asked) out.push({ text: `changes asked by ${asked}`, chip: 'changes', color: 'error', act: true, fix: 'comments' })
   const back = /↩\S+ (\S+)→/.exec(x)
   if (back) out.push({ text: `sent back by ${back[1]}`, chip: 'sent back', color: 'warning', act: true })
   if (isRunning(t.sess.state)) out.push({ text: 'session working', chip: 'running', color: 'suggestion', chipSaysIt: true })
   if (/\bno-human-approval\b/.test(x)) out.push({ text: 'needs human review', chip: 'in review', color: 'ide', chipSaysIt: true })
-  const approved = names(/(?:^|[\s,])\+([A-Za-z][\w.-]*)/g)
+  const approved = names(/(?:^|[\s,])\+([A-Za-z][\w.-]*)|\bapproved by ([A-Za-z0-9][\w.-]*)/g)
   if (approved) out.push({ text: `approved by ${approved}`, chip: 'approved', color: 'success' })
   const prs = prsOf(t).map(p => p.state)
   if (prs.length > 0 && !prs.includes('OPEN') && !/test|done|closed|resolved/i.test(t.status)) {

@@ -282,6 +282,8 @@ test('facts read the adapter\'s words', async () => {
     facts({ key: 'A-1', status, extra, wt, sess: { name: '', state: 'none', maybe: '' }, title: '' }).map(f => f.text)
   expect(t('app#1 OPEN !Bob,+ann.smith')).toEqual(['changes asked by Bob', 'approved by ann.smith'])
   expect(t('app#1 OPEN +1 no-conflict conflicting')).toEqual(['']) // no reviewer named 1, no conflict
+  expect(t('app#12 OPEN · changes requested by 8bob · approved by ann · mergeable'))
+    .toEqual(['changes asked by 8bob', 'approved by ann'])
   expect(t('app#1 OPEN CONFLICT')).toEqual(['merge conflict'])
   expect(t('app#1 MERGED | ↩09-14 Nikolay→CR, since: #1 merged, 0 comment(s) → RfT if deployed |'))
     .toEqual(['sent back by Nikolay', 'not yet Ready for Test'])
@@ -379,6 +381,8 @@ test('/coordinator opens the pane (at any width: the person asked); /coordinator
 test('tasks group as Projects\' Overview does: needs action, in review, working, landing, idle', () => {
   const g = (extra: string, state = 'none') => groupOf({ key: 'A-1', status: 'Code Review', extra, wt: '', sess: { name: 's', state, maybe: '' }, title: '' })
   expect(g('app#1 OPEN +Ann')).toBe('Landing')
+  expect(g('app#12 OPEN · changes requested by 8bob · mergeable')).toBe('Needs action')
+  expect(g('app#12 OPEN · approved by 8bob · mergeable')).toBe('Landing')
   expect(g('app#1 OPEN +ci-bot no-human-approval')).toBe('In review') // a review still due
   expect(g('app#1 OPEN +Ann CONFLICT')).toBe('Needs action') // approved, but something to fix first
   expect(g('app#1 OPEN no-human-approval')).toBe('In review')

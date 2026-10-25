@@ -120,7 +120,10 @@ row() { echo "$1" > "$tmp/extra"; out=$(run); }
 row 'r#1 OPEN no-human-approval'; grep -q 'no-human-approval  wt dirty:1 unpushed:? | sess:"fix it" idle$' <<<"$out" && ! grep -q 'Waiting on you' <<<"$out" &&
   row 'r#1 OPEN +Ann' && grep -q 'sess:"fix it" blocked$' <<<"$out" && grep -q '^  "fix it" (claude attach' <<<"$out" &&
   row 'r#1 OPEN no-human-approval CONFLICT' && grep -q 'sess:"fix it" blocked$' <<<"$out" &&
-  row 'r#1 OPEN no-human-approval  s#2 OPEN +Ann' && grep -q 'sess:"fix it" blocked$' <<<"$out" || { echo "review-only failed: $out"; exit 1; }
+  row 'r#1 OPEN no-human-approval  s#2 OPEN +Ann' && grep -q 'sess:"fix it" blocked$' <<<"$out" &&
+  row 'r#1 OPEN no-human-approval  s#2 OPEN approved by 8bob' && grep -q 'sess:"fix it" blocked$' <<<"$out" &&
+  row 'r#1 OPEN no-human-approval  s#2 OPEN changes requested by 8bob' && grep -q 'sess:"fix it" blocked$' <<<"$out" ||
+  { echo "review-only failed: $out"; exit 1; }
 # Status idle (its turn ended) is in review too; status waiting (a prompt or question) is still on you.
 cp "$tmp/bin/claude" "$tmp/claude.keep"
 for s in idle waiting; do
