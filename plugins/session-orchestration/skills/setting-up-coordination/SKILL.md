@@ -76,7 +76,9 @@ below reads the project's:
 - `.claude/coordination/coordination.json`, the repo's: `tracker`, `host`, `key_pattern`, `features.review_inbox`;
 - `.claude/coordination.local.json`, the person's: `approvals.delegate`, `terminal`, `messages` and its module's block
   (e.g. `msgraph`), `features.accounts`, `trusted`, `team`, `feedback` (ignored in the repo file: a committed file never
-  delegates or trusts for anyone, and the terminal, messages, accounts and feedback are the person's own).
+  delegates or trusts for anyone, and the terminal, messages, accounts and feedback are the person's own);
+- below both, `${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json`, the person's for every project:
+  any key, meant for the person-wide ones (`feedback`). Setup doesn't write it.
 
 Both are excluded from git, the repo file until shared mode commits it. `session-status --config KEY` prints a key's value in effect.
 

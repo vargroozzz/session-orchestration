@@ -39,18 +39,23 @@ tracked() {
 # person_file: the person's coordination.local.json, unless it's committed.
 person_file() { local f; f=$(coord_file coordination.local.json) && ! tracked "$f" && echo "$f"; }
 
-# Both files merged; {} when there are none. A file that isn't a JSON object is skipped with a warning. The person
+# The files merged; {} when there are none. A file that isn't a JSON object is skipped with a warning. The person
 # keys are dropped from the repo file: a committed file never delegates for anyone, nor picks your terminal.
+user_config() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/session-orchestration/config.json"; }
+
 coord_json() {
-  local f out='{}' j s m p drop
+  local f out='{}' j s m p d drop
   # The block of the person's messages module too (e.g. .slack): its settings can name a command to run.
   p=$(person_file) && m=$(jq -r '.messages // empty | strings' "$p" 2>/dev/null)
   drop="del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback$( [[ ${m:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$m\"]")) | if .features | type == \"object\" then del(.features.accounts) else . end"
   s=$(shared_dir 2>/dev/null) && s=$s/coordination.json
-  for f in "$s" "${p:-}"; do
-    [ -n "$f" ] && [ -f "$f" ] || { drop=.; continue; }
-    j=$(jq -ce "if type == \"object\" then $drop else error end" "$f" 2>/dev/null) || { echo "warning: $f is not a JSON object: ignored" >&2; drop=.; continue; }
-    out=$(jq -cn --argjson a "$out" --argjson b "$j" '$a * $b'); drop=.
+  # Lowest first: the person's file for every project (person-wide keys such as feedback.*), the repo file, the
+  # project's person file.
+  for f in "$(user_config)" "$s" "${p:-}"; do
+    [ "$f" = "$s" ] && d=$drop || d=.
+    [ -n "$f" ] && [ -f "$f" ] || continue
+    j=$(jq -ce "if type == \"object\" then $d else error end" "$f" 2>/dev/null) || { echo "warning: $f is not a JSON object: ignored" >&2; continue; }
+    out=$(jq -cn --argjson a "$out" --argjson b "$j" '$a * $b')
   done
   echo "$out"
 }

@@ -63,6 +63,13 @@ echo "{\"feedback\": {\"repo_dir\": \"$T/plugin-clone\"}}" > .claude/coordinatio
 [ "$("$FB" mode)" = pr ] || fail "mode with repo_dir: $("$FB" mode)"
 echo '{"feedback": {"mode": "local", "repo_dir": "~/nowhere"}}' > .claude/coordination.local.json
 [ "$("$FB" mode)" = local ] || fail "mode from config: $("$FB" mode)"
+# The person-wide file counts in every project; the project's person file outranks it.
+mkdir -p "$HOME/.config/session-orchestration"
+echo "{\"feedback\": {\"mode\": \"issue\", \"repo_dir\": \"$T/plugin-clone\"}}" > "$HOME/.config/session-orchestration/config.json"
+[ "$("$FB" mode)" = local ] || fail "project file under the person-wide one: $("$FB" mode)"
+echo '{}' > .claude/coordination.local.json
+[ "$("$FB" mode)" = issue ] || fail "mode from the person-wide file: $("$FB" mode)"
+rm "$HOME/.config/session-orchestration/config.json"
 [[ $("$FB" repo) =~ ^[^/]+/[^/]+$ ]] || fail "repo: $("$FB" repo)"
 [ "$("$FB" label)" = todo ] || fail "label: $("$FB" label)"
 

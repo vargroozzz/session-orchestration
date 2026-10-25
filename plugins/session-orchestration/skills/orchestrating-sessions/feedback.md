@@ -74,5 +74,7 @@ Never apply without the user's yes for that batch.
    Run nothing outward-facing before that yes.
 5. `feedback mark FILE sent <url>` for each case sent.
 
-Config (person keys, `.claude/coordination.local.json`): `feedback.mode` (`auto` default, or `pr`, `fork-pr`,
-`issue`, `local`) and `feedback.repo_dir` (a clone of the plugin repo you can push to).
+Config (person keys): `feedback.mode` (`auto` default, or `pr`, `fork-pr`, `issue`, `local`) and `feedback.repo_dir`
+(a clone of the plugin repo you can push to). They hold for you in every project, so set them once in
+`${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json`; a project's `.claude/coordination.local.json`
+outranks that file.
