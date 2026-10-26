@@ -220,8 +220,10 @@ usage() {
 
 # coord_re [NAMES]: an ERE matching a coordinator's transcript line: a run of session-status (or NAMES, the adapter's
 # status-names alternation) with --changes, --watch or --owner, or an open_pane tool use. A plain run (a worker
-# checking its own task) doesn't match. session-status and hooks/context-watch.sh both read it.
-coord_re() { echo "\"command\":\"[^\"]*(session-status${1:+|$1}) +--(changes|watch|owner)|\"(tool_)?name\":\"mcp__session-orchestration__open_pane\""; }
+# checking its own task) doesn't match, nor a command that only mentions it (`grep 'session-status --watch' f`): it
+# must be a command word, at the start or after ;, &, |, ( or a newline, with optional VAR=value prefixes, `bash `
+# and a path. session-status and hooks/context-watch.sh both read it.
+coord_re() { echo "\"command\":\"([^\"]*([;&|(]|\\\\n))? *([A-Za-z_][A-Za-z0-9_]*=[^\" ]* +)*(bash +)?([^\" ;&|]*/)?(session-status${1:+|$1}) +--(changes|watch|owner)|\"(tool_)?name\":\"mcp__session-orchestration__open_pane\""; }
 
 # key_re [ADAPTER]: the task-key ERE, in parentheses: config key_pattern, else ADAPTER's key-pattern, else the default.
 key_re() {

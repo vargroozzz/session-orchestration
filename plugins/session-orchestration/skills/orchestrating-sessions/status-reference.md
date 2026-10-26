@@ -131,6 +131,10 @@ watcher or opened the pane), `Session task: KEY review` a review (no messages), 
   per session. A compaction or resume clears the soft and hard stamps, and a resume the cached thresholds too.
 - **Skipped**: a session with no `Session task:` line that isn't a coordinator, a subagent's calls, and a kind with its
   `handoff.at.<kind>` at 0. Thresholds are cached per session at its first firing, so a config change reaches the next one.
+- **Edge cases**: a bare `KEY:` start is a task only in a coordinated project (an adapter or `key_pattern`); a window too
+  small for `handoff.stop_room` hands off at 60% of what's left before compaction (window − 33000) and stops at 80%
+  (the window line says so), and a window of 0 is
+  unknown (config's thresholds); a keyless session that writes `Session task: KEY` becomes that task at its `name_session` call.
 
 ## The adapter
 

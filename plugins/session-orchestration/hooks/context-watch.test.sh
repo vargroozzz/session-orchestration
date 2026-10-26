@@ -120,6 +120,42 @@ echo '{"autoCompactWindow": 180000}' > "$t/proj/.claude/settings.local.json"
 expect pw "$chunk" 126000 'window is 180000 from project; expected 220000'
 rm "$t/proj/.claude/settings.local.json"
 
+# coord_re: the status command as a command word (at the start, or after ; && || |, with bash and a path), not a mention.
+cre=$(cd "$t/proj" && . "$here/../lib.sh" && coord_re)
+m() { [[ "\"command\":\"$1\"" =~ $cre ]]; }
+! m "grep 'session-status --watch' x" && m 'bash /p/session-status --watch' && m 'cd x && session-status --changes' &&
+  m 'a || /p/session-status --owner PROJ-1' && ! m 'session-status PROJ-1' && m 'X=10 session-status --watch' &&
+  m 'cd /p\nsession-status --changes' && m 'out=$(session-status --changes)' && ! m "echo 'x session-status --watch'" &&
+  [[ '"name":"mcp__session-orchestration__open_pane"' =~ $cre ]] || fail coord_re
+# A bare `KEY:` start is a task only in a coordinated project (an adapter, or key_pattern).
+expect bare 'PROJ-1: fix it' 126000 ''
+mkdir -p "$t/proj2/.claude"; printf '#!/bin/sh\nexit 0\n' > "$t/proj2/.claude/session-status-adapter"
+chmod +x "$t/proj2/.claude/session-status-adapter"
+EXTRA="{\"cwd\": \"$t/proj2\"}" expect bare2 'PROJ-1: fix it' 126000 'handoff ready: PROJ-1"'
+# `Session task: KEY.` drops the period.
+fire dot $'Session task: PROJ-123.\nFix it.' 1000 >/dev/null; read -r _ k _ < "$t/cache/session-status/handoff-dot.kind"
+[ "$k" = PROJ-123 ] || fail "key kept its period: $k"
+# A window too small for the stop room: 60% and 80% of it; a window of 0 is unknown: config's at and hard.
+CLAUDE_CODE_AUTO_COMPACT_WINDOW=40000 expect w40 "$task" 4500 'at 4K: hand off.*too small for handoff.stop_room'
+CLAUDE_CODE_AUTO_COMPACT_WINDOW=40000 expect w40 "$task" 5700 'Stop now'
+CLAUDE_CODE_AUTO_COMPACT_WINDOW=0 expect w0 "$task" 121000 'at 121K: hand off'
+# No prompt in a transcript past 50 lines: cached keyless after one call.
+for i in $(seq 60); do echo '{"type":"user","isMeta":true,"message":{"content":"x"}}'; done > "$t/meta.jsonl"
+jq -nc --arg f "$t/meta.jsonl" --arg c "$t/proj" '{session_id: "meta", transcript_path: $f, hook_event_name: "PostToolUse", cwd: $c}' |
+  bash "$here/context-watch.sh"; [ -f "$t/cache/session-status/handoff-meta.kind" ] || fail 'meta-only transcript not cached'
+# A prompt past line 50 is still found once.
+{ cat "$t/meta.jsonl"; jq -nc --arg p "$chunk" '{type: "user", message: {role: "user", content: $p}}'; } > "$t/meta2.jsonl"
+jq -nc --arg f "$t/meta2.jsonl" --arg c "$t/proj" '{session_id: "meta2", transcript_path: $f, hook_event_name: "PostToolUse", cwd: $c}' |
+  bash "$here/context-watch.sh"; grep -q '^chunk PROJ-123 2 ' "$t/cache/session-status/handoff-meta2.kind" || fail 'prompt past line 50 missed'
+# A keyless session that writes `Session task: KEY`: still keyless until it calls name_session, then that task.
+late='{"type":"assistant","message":{"content":[{"type":"text","text":"Session task: PROJ-9\nOn it."}]}}'
+expect late 'Fix the bug.' 126000 ''
+LINE=$late expect late 'Fix the bug.' 126000 ''
+# A tool input that mentions it (a brief written for another session) doesn't count.
+LINE='{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cat <<EOF\nSession task: PROJ-8\nEOF"}}]}}' \
+  EXTRA='{"tool_name": "mcp__session-orchestration__name_session"}' expect late2 'Fix the bug.' 126000 ''
+LINE=$late EXTRA='{"tool_name": "mcp__session-orchestration__name_session"}' expect late 'Fix the bug.' 126000 'handoff ready: PROJ-9"'
+
 # Config: defaults, a bad value, and a repo file can't set the person keys.
 rm "$XDG_CONFIG_HOME/session-orchestration/config.json"
 cd "$t/proj"; . "$here/../lib.sh"
