@@ -148,10 +148,19 @@ fi
 # and est, with this session's act_K from `rnd.py chunks 7 --session` (summed over the sessions its Supersedes: chain
 # reaches; left out if rnd fails), go to lib.sh usage as a
 # chunk line; it prints the line or why nothing was logged.
+# bg_cmd PREFIX: `PREFIX --bg`, plus ` --permission-mode default` when that account's settings default to plan mode
+# (--handover and --plan --next start sessions with it).
+bg_cmd() {
+  local cfg
+  case $1 in claude) cfg=${CLAUDE_CONFIG_DIR:-$HOME/.claude} ;; 'env -u CLAUDE_CONFIG_DIR claude') cfg=$HOME/.claude ;; *) cfg=${1#CLAUDE_CONFIG_DIR=}; cfg=${cfg% claude}; cfg=${cfg/#\~/$HOME} ;; esac
+  printf '%s --bg' "$1"; [ "$(jq -r '.permissions.defaultMode // empty' "${cfg%/}/settings.json" 2>/dev/null)" != plan ] || printf ' --permission-mode default'
+}
 if [ "${1:-}" = --plan ]; then
   models=; for k in design build mechanical review release scan; do models+="$k=$(config "plan.models.$k") "; done
+  read -r PLAN_W PLAN_WFROM < <(compact_window "$(find_root)")
   shift; PLAN_MAXP=$(config plan.max_parallel) PLAN_AT=$(config handoff.at.chunk) PLAN_MODELS=$models PLAN_LIB=$(dirname "$0")/../../lib.sh PLAN_ON=$(config plan.enabled) \
-    PLAN_TELEMETRY=$(config telemetry) PLAN_LOG=$(usage_log) exec python3 -I - "$@" <<'PY'
+    PLAN_TELEMETRY=$(config telemetry) PLAN_LOG=$(usage_log) PLAN_W=$PLAN_W PLAN_WFROM=$PLAN_WFROM PLAN_WANT=$(config compact.window) \
+    PLAN_BG=$(bg_cmd claude) exec python3 -I - "$@" <<'PY'
 import os, re, shlex, subprocess, sys
 die = lambda msg: sys.exit(print(msg, file=sys.stderr) or 2)
 usage = "usage: session-status --plan FILE [--check | --next | --brief N | --done N]"
@@ -176,18 +185,20 @@ rows, bad = [], []
 for ln in lines[i:]:
     if not ln.startswith("|"): break
     c = [x.strip().replace("\\|", "|") for x in re.split(r"(?<!\\)\|", ln.strip())[1:-1]]
+    if not any(c): continue   # a lone `|` or empty cells
     if c[:1] == ["#"] or c and c[0] and set(c[0]) <= set("-: "): continue   # the header and the --- line
     (rows if len(c) == 8 else bad).append(c)
 if not rows: die(f"no plan table in {path}")
 R, dup = {}, []
+nil = lambda s: s.lower() in ("", "-", "–", "—", "none")   # a Deps or Touches cell that names nothing
 for n, title, kind, deps, touch, est, model, done in rows:
     ds = []
     if n in R: dup.append(n)
-    for p in ([] if deps in ("", "-", "–") else re.split(r"\s*,\s*", deps)):
+    for p in ([] if nil(deps) else re.split(r"\s*,\s*", deps)):
         m = re.fullmatch(r"c?(\d+)\s*[–-]\s*c?(\d+)", p)   # a range, 1–4
         p = p.removeprefix("c")
         ds += [str(x) for x in range(int(m[1]), int(m[2]) + 1)] if m else [p]
-    ts = [] if touch[:1] in ("", "-", "–") else re.findall(r"`([^`]+)`", touch) or re.split(r"\s*,\s*", touch)
+    ts = [] if nil(touch) or touch[:1] in "-–—" else re.findall(r"`([^`]+)`", touch) or re.split(r"\s*,\s*", touch)
     m = re.fullmatch(r"(\d+)\s*[Kk]", est)
     R[n] = dict(title=title, kind=kind, deps=ds, touch=ts, est=int(m[1]) * 1000 if m else None, raw_est=est, model=model, done=done)
 state = {}
@@ -222,7 +233,9 @@ def overlap(x, y):
     return x == y or x.startswith(y.rstrip("/") + "/") or y.startswith(x.rstrip("/") + "/")
 
 if mode == "--check":
-    out, seen = [f"row {c[0]}: {len(c)} cells, not 8" for c in bad] + [f"c{n}: two rows" for n in dup], set()
+    if os.environ["PLAN_W"] != os.environ["PLAN_WANT"]:   # info, not a problem (stderr: stdout is one line per problem)
+        print(f"window {os.environ['PLAN_W']} from {os.environ['PLAN_WFROM']}; expected {os.environ['PLAN_WANT']}", file=sys.stderr)
+    out, seen =[f"row {c[0]}: {len(c)} cells, not 8" for c in bad] + [f"c{n}: two rows" for n in dup], set()
     for n, r in R.items():
         out += [f"c{n}: unknown dep {x}" for x in r["deps"] if x not in R]
         if r["kind"] not in KINDS: out.append(f"c{n}: unknown kind {r['kind'] or '(none)'}")
@@ -287,16 +300,18 @@ if mode == "--next" and os.environ["PLAN_ON"] == "false":
 elif mode == "--next":
     cand = []
     for n in R:   # runnable, in row order, skipping one whose touches overlap a chunk already picked
-        if not isdone(n) and wave[n] and all(isdone(x) for x in R[n]["deps"]) and len(cand) < MAXP and \
+        if not isdone(n) and wave[n] and all(isdone(x) for x in R[n]["deps"]) and \
            not any(overlap(s, t) for c in cand for s in R[c]["touch"] for t in R[n]["touch"]): cand.append(n)
     tops = [{t.split("/")[0] if "/" in t else "." for t in R[n]["touch"]} for n in cand]
-    if any(tops[i] & tops[j] for i in range(len(tops)) for j in range(i)): cand = cand[:2]   # 2+ in one top-level directory
+    if any(tops[i] & tops[j] for i in range(min(len(tops), MAXP)) for j in range(i)):   # 2+ in one top-level directory: cap at 2,
+        cand = cand[:1] + ([n for n, t in zip(cand[1:], tops[1:]) if not t & tops[0]] or cand[1:2])[:1]   # preferring a disjoint one
+    cand = cand[:MAXP]
     for n in cand:
         r = R[n]; me = KINDS.get(r["kind"], "opus/medium") if r["model"] == "default" else r["model"]
         if not okme(me): print(f"c{n}: model/effort {me} not allowed (--check): not started"); continue
         m, _, e = me.partition("/")
         prompt = f"Session task: {key}\nChunk: {key}/{n}\nRead {d}/{key}-c{n}.md and do it."
-        print(f"claude --bg --model {shlex.quote(m)} --effort {shlex.quote(e)} -n {shlex.quote(f'{key}-c{n}')} {shlex.quote(prompt)}")
+        print(f"{os.environ['PLAN_BG']} --model {shlex.quote(m)} --effort {shlex.quote(e)} -n {shlex.quote(f'{key}-c{n}')} {shlex.quote(prompt)}")
 else:
     for n, r in R.items():
         st = state.get(n) or ("ready" if wave[n] and all(isdone(x) for x in r["deps"]) else "waiting" if wave[n] else "blocked")
@@ -818,16 +833,14 @@ if [ -n "$HANDOVER" ]; then
     *) slug=$(tr '[:upper:]' '[:lower:]' <<<"$base" | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//'); new=$key${slug:+-$slug} ;;
   esac
   [ -z "$n" ] || new=$key-c$n
-  case $pre in claude) cfg=$CUR ;; 'env -u CLAUDE_CONFIG_DIR claude') cfg=$HOME/.claude ;; *) cfg=${pre#CLAUDE_CONFIG_DIR=}; cfg=${cfg% claude}; cfg=${cfg/#\~/$HOME} ;; esac
-  pm=; [ "$(jq -r '.permissions.defaultMode // empty' "$cfg/settings.json" 2>/dev/null)" != plan ] || pm=' --permission-mode default'
-  pm+=${model:+ --model $model}${effort:+ --effort $effort}
+  pm=${model:+ --model $model}${effort:+ --effort $effort}
   if [ -n "$n" ]; then
     text=$(printf 'Session task: %s\nChunk: %s/%s\nSupersedes: %s\nContinue from the last "## c%s: handoff" in %s/%s-build.md, then follow %s/%s-c%s.md.\n%s' \
       "$key" "$key" "$n" "$id" "$n" "$rd" "$key" "$rd" "$key" "$n" "$next")
   else
     text="Work on $key: continue from $rdir/$key.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole)."
   fi
-  out=$(bash -c "$pre --bg$pm -n \"\$0\" \"\$1\"" "$new" "$text" 2>&1)
+  out=$(bash -c "$(bg_cmd "$pre")$pm -n \"\$0\" \"\$1\"" "$new" "$text" 2>&1)
   nid=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1); nid=${nid##* }
   [ -n "$nid" ] || { echo "${pid:+stopped \"$name\" (${id:0:8}), but }the new session didn't start: $(tail -1 <<<"$out")"; exit 1; }
   [ -z "$self" ] || { echo "handed over; rename yourself (call name_session with \"$(prev_name "$name")\"), then end your turn now (\"$new\" ($nid) supersedes this session)"; exit 0; }

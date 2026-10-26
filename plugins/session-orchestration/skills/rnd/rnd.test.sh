@@ -170,6 +170,9 @@ out=$(XDG_STATE_HOME=$tmp/state rnd usage)
 grep -qx $'press\tattach\t1\t2026-09-01\t' <<<"$out" && grep -qx $'press\tcompact\t0\t2026-09-01\tunused' <<<"$out" \
   && grep -q $'^press\tcopy-command\t0\t'"$(date -u +%F)"$'\t$' <<<"$out" && grep -q $'^flag\t--peek\t.*[0-9-]\t$' <<<"$out" \
   && [ "$(wc -l < "$st/usage.jsonl" | tr -d ' ')" = 1 ] && [ -e "$st/inventory/$(date -u +%F).json" ] || fail "usage" "$out"
+# every config() key line, not only the tracker one
+grep -q $'^config\ttracker\t' <<<"$out" && grep -q $'^config\tplan.max_parallel\t' <<<"$out" && grep -q $'^config\thandoff.at.chunk\t' <<<"$out" ||
+  fail "usage: config keys" "$(grep '^config' <<<"$out")"
 
 # chunks and trial: chunk PROJ-1/1 in two sessions, the first compacted before it handed off (growth 20K, then 10K
 # after the compaction; the jump across it doesn't count, nor its summary as a step-in), with a /plug:code-review run

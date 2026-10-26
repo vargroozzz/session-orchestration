@@ -823,4 +823,28 @@ n0=$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")
   usage PROJ-9 chunk opus medium 60; usage build chunk /home/u medium 60' "$here/../../lib.sh")
 [ "$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")" = "$n0" ] || { echo "usage took a malformed chunk line"; tail -2 "$tmp/state/session-orchestration/usage.jsonl"; exit 1; }
 rm "$tmp/.config/session-orchestration/config.json"
+# Plan cells: a lone `|` row is skipped; Deps `—`/`none`/`None` and Touches `—` name nothing. --check: a window other
+# than compact.window is one info line on stderr, exit 0. --next: of four ready rows, three under hooks/, the cap keeps
+# c1 and skills/'s c4, past max_parallel 3; an account defaulting to plan gets --permission-mode default before --model.
+cat > "$pd/PROJ-9.md" <<'EOF'
+## Plan
+
+| # | Chunk | Kind | Deps | Touches | Est | Model/effort | Done when |
+|---|---|---|---|---|---|---|---|
+| 1 | a | build | — | `hooks/a.sh` | 9K | default | x |
+|
+| 2 | b | build | none | `hooks/b.sh` | 9K | default | x |
+| 3 | c | build | None | `hooks/c.sh` | 9K | default | x |
+| 4 | d | build | — | `skills/d.sh` | 9K | default | x |
+| 5 | e | build | 1 | — | 9K | default | x |
+EOF
+out=$(CLAUDE_CODE_AUTO_COMPACT_WINDOW= run --plan "$pd/PROJ-9.md" --check 2>&1) && [ -z "$out" ] || { echo "--plan --check, clean plan: $out"; exit 1; }
+out=$(CLAUDE_CODE_AUTO_COMPACT_WINDOW=180000 run --plan "$pd/PROJ-9.md" --check 2>&1) &&
+  [ "$out" = 'window 180000 from env; expected 220000' ] || { echo "--plan --check, window: $out"; exit 1; }
+echo '{"permissions":{"defaultMode":"plan"}}' > "$tmp/cfg/settings.json"
+out=$(run --plan "$pd/PROJ-9.md" --next | grep '^claude' | sed "s/ 'Session.*//")
+[ "$out" = 'claude --bg --permission-mode default --model opus --effort medium -n PROJ-9-c1
+claude --bg --permission-mode default --model opus --effort medium -n PROJ-9-c4' ] || { echo "--plan --next, cap and plan mode: $out"; exit 1; }
+echo '{}' > "$tmp/cfg/settings.json"
+run --plan "$pd/PROJ-9.md" --next | grep -q '^claude --bg --model opus --effort medium -n PROJ-9-c1 ' || { echo "--plan --next, plain account"; exit 1; }
 echo ok

@@ -88,13 +88,14 @@ paths or globs; Est like `60K`, the growth in context the chunk is expected to a
   cells, a duplicate `#`, an unknown dep, an unknown kind, an empty done-when, a model/effort that isn't a model and one of
   `low medium high xhigh max` (no `fable` anywhere: `config` and `--handover` use the same rule), an est
   that isn't like `60K`, an est over `handoff.at.chunk` minus 60K (the room a chunk starts with), a dependency cycle, and
-  two chunks that may run at once (neither depends on the other, directly or not) whose touches overlap.
+  two chunks that may run at once (neither depends on the other, directly or not) whose touches overlap. A context window
+  other than `compact.window` adds one info line on stderr, `window W from SOURCE; expected X`, and alone doesn't fail.
 - **`--next`**: the waves, then a `claude --bg` line per runnable chunk (deps done, own state not done), up to
-  `plan.max_parallel` (default 3). It takes 2 at most when chunks share a top-level directory in their touches, a bare
+  `plan.max_parallel` (default 3). It takes 2 at most when chunks share a top-level directory in their touches (the first, then the first in other directories, looking past `plan.max_parallel`), a bare
   file name counting as the directory `.`; it skips a chunk whose touches overlap one already picked. A chunk that was
   started but whose `## cN: done` hasn't landed is listed again: the coordinator knows what it launched from the session
   name (`-n KEY-cN`). It doesn't check that the briefs exist, and it skips a row whose model/effort `--check` reports.
-  With `plan.enabled: false` it prints `plan.enabled is false: run tasks without a plan` and no `claude --bg` line.
+  With `plan.enabled: false` it prints `plan.enabled is false: run tasks without a plan` and no `claude --bg` line. An account whose settings default to plan mode gets `--permission-mode default`, as `--handover`.
 - **`--brief N`**: a skeleton for row N's brief (title, kind, model, est, deps, wave, touches, done-when) to finish by hand.
 - **`--done N`**: run by chunk N once it landed. With `telemetry: local` it appends a `chunk` line to the usage log
   (`{"k":"chunk","what":KIND,"model":…,"effort":…,"est":K,"act":K}`; act is the growth of this session and

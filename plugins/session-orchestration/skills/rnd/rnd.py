@@ -840,8 +840,8 @@ def inventory():
     ss = open(f"{PLUGIN}/skills/orchestrating-sessions/session-status", errors="replace").read()
     inv |= {("flag", fl) for fl in re.findall(r"^#\s+session-status (--[a-z-]+)", ss, re.M)}
     lib = open(f"{PLUGIN}/lib.sh", errors="replace").read()
-    keys = re.search(r"^\s+(tracker\|host\|[a-z_.|]+)\) ;;", lib, re.M)
-    inv |= {("config", k) for k in (keys.group(1).split("|") if keys else [])}
+    cfg = lib.partition("\nconfig() {")[2].partition("\n  esac")[0]   # config()'s first case: its key lines
+    inv |= {("config", k) for ks in re.findall(r"^\s+([a-z_.|]+)\) ;;", cfg, re.M) for k in ks.split("|")}
     return inv
 
 
