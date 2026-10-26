@@ -81,6 +81,11 @@ below reads the project's:
   any key but `team` (the project's file only), meant for the person-wide ones (`feedback`, `telemetry`). Setup
   doesn't write it.
 
+`handoff.*` and `compact.window` are person-only too: dropped from the repo file, and setup writes none of them.
+Set `autoCompactWindow` in Claude Code settings to `compact.window` (220000). An env
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` (a background daemon's included) overrides it, and the context-watch hook's
+mismatch line says so.
+
 Both are excluded from git, the repo file until shared mode commits it. `session-status --config KEY` prints a key's value in effect.
 
 | Key | Values | Default |
@@ -96,6 +101,13 @@ Both are excluded from git, the repo file until shared mode commits it. `session
 | `feedback.mode` | `auto` \| `pr` \| `fork-pr` \| `issue` \| `local`: how plugin feedback cases are sent (`../orchestrating-sessions/feedback.md`) | `auto`: `pr` with `feedback.repo_dir` set, else `fork-pr` when `gh` is signed in, else `issue`; setup doesn't write it |
 | `feedback.repo_dir` | a clone of the plugin repo you can push to (`~` expanded) | unset; setup doesn't write it |
 | `telemetry` | `local` \| `off`: with `local`, each pane press appends a fixed name to `${XDG_STATE_HOME:-~/.local/state}/session-orchestration/usage.jsonl`, read only by `rnd.py usage`; nothing leaves the machine | `off`; setup doesn't write it (set it in the person-wide file to measure your own use) |
+| `plan.enabled` | `true` \| `false`: `session-status --plan` splits a design into chunks | `true`; setup doesn't write it |
+| `plan.max_parallel` | integer ≥ 1: chunks `session-status --plan` lets run at once | `3`; setup doesn't write it |
+| `plan.models.<kind>` | `model/effort` (never `fable`), per kind `design` \| `build` \| `mechanical` \| `review` \| `release` \| `scan`: what `session-status --plan` starts a chunk of that kind on | `design` `opus/xhigh`, `build` `opus/medium`, `mechanical` `sonnet/medium`, `review` `opus/xhigh`, `release` `sonnet/medium`, `scan` `haiku/low`; setup doesn't write them |
+| `handoff.at.<chunk\|task\|coordinator>` | integer tokens of context, `0` = off: the context-watch hook's soft line for that kind of session, where it asks for a handoff | `chunk` 125000, `task` 120000, `coordinator` 145000; person-only |
+| `handoff.hard_after` | integer tokens: the hook's hard line, this far past the soft line | `25000`; person-only |
+| `handoff.stop_room` | integer tokens: room the hook keeps under the compaction ceiling (the hard line never passes it) | `15000`; person-only |
+| `compact.window` | integer tokens: the auto-compact window the hook expects | `220000`; person-only |
 
 A value outside its set falls back to the default, with one warning line. A GitLab remote gives `host=none` and a
 Linear tracker `tracker=none`, each with a warning or a note in the proposal: neither is supported yet.

@@ -32,6 +32,9 @@ schedules it.
 - `rnd.py`, next to this file: `python3 -I rnd.py` prints its usage. It reads every account's
   transcripts (`$CLAUDE_CONFIG_DIR`, `~/.claude`, `~/.claude-*`; a `projects/` tree shared by symlink
   is read once) and all projects. `--until <UTC time>` reruns an old window.
+- Two commands read the planner's work: `chunks [days] [--session PREFIX]` gives one row per chunk (growth,
+  peak, cost, compactions, handoff before or after one) and a per-kind `ratio` line; `trial [days=28]` gives the
+  planner arm against the off arm.
 - Replies folder: the one the project's `CLAUDE.md` names (the orchestrating-sessions skill's "folder
   for this"). None named: stop and say so. Below, `<R>` is that folder.
 - Reports: `<R>/rnd-run-<N>.md` and `.html`. Data: `<R>/rnd/run-<N>/*.tsv`, a fresh folder per run.
@@ -80,6 +83,11 @@ schedules it.
    - Feature use: `usage 30 > usage.tsv`. Each `unused` row (0 uses in 30 days, there all window) is a
      candidate to drop or merge: at most one proposal listing them, never a removal on the run's own say. Pane
      buttons show `-` without `telemetry: local` (setting-up-coordination, Config): say so, and judge them not at all.
+     The same log holds `chunk` lines (`session-status --plan … --done N` writes one per landed chunk, under
+     `telemetry: local`).
+   - Planner sizing, when the usage log has chunk lines: `chunks 7 > chunks.tsv`. Report the `ratio` per kind
+     (median act/est), and propose a new size multiplier for a kind whose median strays past 1.0 ± 0.3. Add
+     `trial > trial.tsv`: it prints the arms, and the run compares them week over week against last run's.
 4. Run the project brief's own checks. If the project memory index has a graduation rule and the
    brief has no graduation check of its own, read every topic file, apply the rule to each entry, and
    list the ones to graduate (entry, target doc and section, why) and to drop, as one proposal outside
