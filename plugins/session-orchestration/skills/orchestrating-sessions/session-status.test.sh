@@ -702,4 +702,52 @@ rc=0; init "$p/sub1" --write --trust=session-status-adapter@0000 >/dev/null || r
 [ "$rc" = 3 ] && [ ! -e "$p/sub1/.claude" ] &&
   init "$p/sub2" --write --own tracker=github >/dev/null && [ "$(cat "$p/.claude/coordination/coordination.json" 2>/dev/null)" = "$before" ] &&
   [ "$(jq -r .tracker "$p/sub2/.claude/coordination/coordination.json")" = github ] || { echo "init (s6) under a parent: $(ls -a "$p/sub1" "$p/sub2/.claude")"; exit 1; }
+
+# --plan: three waves, an overlap and an oversize est in wave 1, a self-cycle with an unknown dep, unknown kind and
+# no done-when or effort in c6. c1 and c4 are done (c2's handoff isn't), so c2, c3 and c5 can run: c3 overlaps c2, so c2 and c5.
+pd=$(mkdir -p "$tmp/plan" && cd "$tmp/plan" && pwd -P); plan=$pd/PROJ-123.md
+cat > "$plan" <<'EOF'
+# PROJ-123
+
+## Plan
+
+| # | Chunk | Kind | Deps | Touches | Est | Model/effort | Done when |
+|---|---|---|---|---|---|---|---|
+| 1 | parser | build | – | `src/a.sh` | 30K | opus/medium | suite green |
+| 2 | docs | mechanical | – | `docs/*.md` | 20K | default | scrub ok |
+| 3 | guide | scan | – | `docs/guide.md` | 70K | haiku/low | listed |
+| 4 | hook | build | 1 | `lib/x.sh` | 40K | opus/medium | test green |
+| 5 | review | review | c4 | `tests/`, `lib/` | 40K | opus/xhigh | findings file |
+| 6 | loop | planning | 6, 9 | `notes/` | 10K | opus |  |
+EOF
+printf '## c1: done\nok\n## c2: handoff\nwip\n## c4: done\n' > "$pd/PROJ-123-build.md"
+rc=0; out=$(run --plan "$plan" --check) || rc=$?
+[ $rc = 1 ] && diff <(echo "$out") - <<'EOF' || { echo "--plan --check (rc $rc)"; exit 1; }
+c3: est 70K over the 65K budget
+c6: unknown dep 9
+c6: unknown kind planning
+c6: no done-when
+c6: model/effort opus is not like opus/medium
+cycle: c6 → c6
+c2 and c3 both touch docs/*.md ~ docs/guide.md
+EOF
+diff <(run --plan "$plan" --next) - <<EOF || { echo "--plan --next"; exit 1; }
+waves: {1,2,3} → {4} → {5}
+claude --bg --model sonnet --effort medium -n PROJ-123-c2 'Session task: PROJ-123
+Chunk: PROJ-123/2
+Read $pd/PROJ-123-c2.md and do it.'
+claude --bg --model opus --effort xhigh -n PROJ-123-c5 'Session task: PROJ-123
+Chunk: PROJ-123/5
+Read $pd/PROJ-123-c5.md and do it.'
+EOF
+diff <(run --plan "$plan" | sed -n '5,7p') - <<'EOF' || { echo "--plan rows"; exit 1; }
+c4   done     build      hook
+c5   ready    review     review
+c6   blocked  planning   loop
+EOF
+out=$(run --plan "$plan" --brief 2)
+grep -qxF 'Kind: mechanical · Model: sonnet/medium · Est: 20K growth · Deps: none · Wave 1' <<<"$out" &&
+  grep -qxF "**First:** read \`$pd/PROJ-123-chunk-rules.md\` (paths, setup, interface, landing). N = 2." <<<"$out" &&
+  grep -qxF '**Touches:** `docs/*.md`.' <<<"$out" && grep -qxF '**Done when:** scrub ok' <<<"$out" &&
+  [ "$(run --plan "$plan" --brief 9 2>&1)" = "no row 9 in $plan" ] || { echo "--plan --brief: $out"; exit 1; }
 echo ok
