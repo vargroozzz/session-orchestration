@@ -16,17 +16,19 @@
 - [Messaging](#messaging)
 - [Card actions](#card-actions)
 - [Starting and resuming](#starting-and-resuming)
+- [Running a plan](#running-a-plan)
 - [Propose first, or start at once](#propose-first-or-start-at-once)
 - [Watching over time](#watching-over-time)
 - [Rules](#rules)
 
 ## Start
 
-Every coordinator session, before anything else; the user shouldn't have to ask. The file names come from the
+Every coordinator session, before anything else; the user shouldn't have to ask. A coordinator's first prompt starts
+with `Act as a coordinator`; the context-watch hook also recognises a session that opened the pane or ran a status watcher. The file names come from the
 project's `CLAUDE.md` section (the "Replies folder", "Project memory" and handoff-file lines).
 
 1. Call `open_pane` (The coordinator pane); if it says the folder isn't set up, do Bootstrap (below) first. Check
-   the compact window (Your own context).
+   the window line, if the hook sends one (Your own context).
 2. Read these in **one parallel batch of Read calls**, each file whole: this file, the project's coordinator doc
    if its `CLAUDE.md` names one, the memory index and its coordinator topic file, the handoff file and
    `<replies>/coordinator-handover.md`. Don't `cat` them together: the Bash tool truncates long output, and one
@@ -164,15 +166,10 @@ is the user's button, like an action. After a Run you get a prompt with the outc
 
 Every wake (a user message, a loop tick, an idle notice) re-sends your whole context, so its size
 multiplies the cost of each one. A coordinator needs little memory: the state lives in the status
-command, the tracker and the project's handoff files. So run with a small auto-compact window:
-
-```
-CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 claude --resume <your sessionId>
-```
-
-At the start of a coordinator session, run `echo $CLAUDE_CODE_AUTO_COMPACT_WINDOW`. If it's unset
-or above 200000, give the user that command with your `sessionId` filled in, then carry on. Don't
-put it in `settings.json`: that caps every session, workers included.
+command, the tracker and the project's handoff files. So it runs with a small auto-compact window, set in
+settings (`autoCompactWindow`, matching `compact.window`; [Context watch](status-reference.md#context-watch)). The
+context-watch hook asks you for a handoff at `handoff.at.coordinator`; its window-mismatch line says when the
+session's window isn't the configured one.
 
 **Handing over** (a restart, a new coordinator): a one-off note for the next coordinator, separate
 from the handoff file below, in `<replies>/coordinator-handover.md` (overwrite it). It carries state that's in no file: live
@@ -414,6 +411,23 @@ A background session can't answer its own permission prompts or approve its own 
 \`…\``), so you can name the exact action to the user, or stop it and resume it with a note that
 avoids it. If a task will need the user's approval, say so up front. Auto-mode denials go to
 `~/.cache/session-status/denied.jsonl` (time, session, tool, input, reason) for later review.
+
+## Running a plan
+
+A multi-step task becomes chunks run by separate sessions, so none outgrows its context. Flags and the plan table:
+[status-reference.md](status-reference.md#plans-and-chunks).
+
+1. **Split.** One chunk per step with a done-when, an est and a clean stop point (everything committed, nothing running).
+   The est is growth in context, kept within `handoff.at.chunk` − ~60K; a chunk with more than 3 separate pieces is split.
+2. **Write the plan** as a table under `## Plan` in `<replies>/PROJ-123.md`, and run `session-status --plan FILE --check`.
+   Write one brief per chunk, `<replies>/PROJ-123-cN.md`, from `--plan FILE --brief N`, plus a shared
+   `PROJ-123-chunk-rules.md` (paths, setup, interface, checks, landing by fast-forward). Keep plans in the replies folder.
+3. **Start** what `--plan FILE --next` prints. It stops at `plan.max_parallel` (2 when chunks share a top-level
+   directory) and re-lists a chunk you started until its `## cN: done` lands: don't start it twice (`-n PROJ-123-cN`).
+4. **Models** by kind, from `plan.models` (`default` in the table); never `fable`.
+5. **A `handoff ready: PROJ-123 cN` message**: `session-status --handover <id> --model M --effort E -- '<next step>'`. A
+   chunk that has `## cN: done` gets no resume.
+6. **Recalibrate** with `rnd.py chunks` (its ratio line, act against est) and size the next ests by it.
 
 ## Propose first, or start at once
 

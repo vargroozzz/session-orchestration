@@ -23,6 +23,7 @@ the message asks:
 | asks for status | The status report below |
 | gives you a task | Now, only for a task sent to you while running (not your first prompt: a `claude --bg` launch is its own ack): one line, `<TASK> accepted` (or why not). Later: **one** status report, when it's done or blocked. Nothing in between. |
 | asks a specific question | The answer, at most 5 lines |
+| is `handoff ready: KEY cN` from a chunk | The coordinator's: [Running a plan](coordinator.md#running-a-plan) |
 
 Between accepting a task and reporting on it, keep working. Don't end a turn by announcing the
 next step, offering to continue, or listing decisions that don't block the rest. End the turn when:
@@ -117,6 +118,16 @@ one of: `coding`, `PR #N open`, `in review`, `ready to merge`, `merged, deployin
   `<KEY>-review-<short-desc>`), so `claude agents` and the coordinator pane list it by ticket. The
   rename lands when the turn ends. Once per task; the coordinator and subagents never call it. Tool
   missing (plugin older than 0.29.0): call `reload_plugins`, then load it next turn.
+
+## Chunk sessions
+
+A `Chunk: KEY/N` line in your first prompt marks you as one chunk of a plan ([flags and hook](status-reference.md#plans-and-chunks)):
+- Stay within your brief's est and touches.
+- A clean stop point: everything committed, no background task, no question waiting.
+- At the context-watch hook's soft line, reach the stop point, append `## cN: handoff` to `KEY-build.md` in the replies
+  folder, message the coordinator `handoff ready: KEY cN`, and end the turn. With no coordinator
+  (`session-status --coordinator` prints nothing), finish with `session-status --handover --self -- '<next step>'`.
+- After landing, append `## cN: done` and run `session-status --plan FILE --done N`.
 
 ## Handing the user a command
 

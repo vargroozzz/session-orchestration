@@ -8,6 +8,7 @@ rules a coordinator acts on every day are in [coordinator.md](coordinator.md).
 
 - [Footers in detail](#footers-in-detail)
 - [Commands in detail](#commands-in-detail)
+- [Context watch](#context-watch)
 - [The adapter](#the-adapter)
 - [Words the pane reads in EXTRA](#words-the-pane-reads-in-extra)
 - [Without an adapter, and task ownership](#without-an-adapter-and-task-ownership)
@@ -62,7 +63,8 @@ doesn't wake on it) or the pane's runs, which set `SESSION_STATUS_NO_FEEDBACK=1`
 |---------|-------|
 | `session-status --changes [args]` | Only lines changed since the last `--changes` run, or `no changes`; idle/busy and ages ignored, and so is a session only entering `working`, flipping between working, idle and blocked, or its worktree's dirty/unpushed counts changing while it works (entering done or closed counts, with the current counts). A plain "Waiting on you" entry appearing doesn't count, nor does one going away while its session lives on; one whose session ended does, and so does one saying what it's `blocked:` on. Emptied section headers aren't printed. State is kept per arg list: while a watcher runs, a manual run with its args consumes its change |
 | `session-status --watch [--every SECS] [args]` | Blocks until a change shows at two polls in a row (120s apart, `SESSION_STATUS_CONFIRM_S`), prints it and exits. Checks every SECS (default 1800). A failed poll (Jira/Bitbucket timeout, a jq error) logs one line to stderr and is retried at the next check (120s while a change is being confirmed); 3 in a row (`SESSION_STATUS_WATCH_TRIES`) end it with "gave up after 3 failed polls in a row" and the last error |
-| `session-status --handover ID [--] 'WHAT NEXT'` | Hands a task over from a session too big to resume (`--send-when-idle`'s exit 4 prints this command). ID's task key: the one its first prompt or own `Session task:` markers name (exactly one). Refuses (exit 3) while it is mid-turn, waiting on a prompt, or interactive and live; (exit 2) when the replies folder (the project `CLAUDE.md`'s "Replies folder … \`PATH\`" line) has no `KEY.md`. Then stops it (waits up to 30s for its process to end), and runs `claude --bg -n NAME 'Work on KEY: continue from <replies>/KEY.md. WHAT NEXT. Supersedes: ID (transcript PATH; read only the parts you need, never whole).'` from the project root under the same command prefix. NAME is the old name if it starts with KEY, else `KEY-<old name, slugged>`. Prints `handed KEY over: … superseded by "NAME" (NEWID)` |
+| `session-status --handover ID\|--self [--model M] [--effort E] [--] 'WHAT NEXT'` | Hands a task or chunk over from a session too big to resume (`--send-when-idle`'s exit 4 prints this command). ID's task key: the one its first prompt or own `Session task:` markers name (exactly one). Refuses (exit 3) while it is mid-turn, waiting on a prompt, or interactive and live; (exit 2) when the replies folder (the project `CLAUDE.md`'s "Replies folder … \`PATH\`" line) has no `KEY.md`. Then stops it (waits up to 30s for its process to end), and runs `claude --bg -n NAME 'Work on KEY: continue from <replies>/KEY.md. WHAT NEXT. Supersedes: ID (transcript PATH; read only the parts you need, never whole).'` from the project root under the same command prefix. NAME is the old name if it starts with KEY, else `KEY-<old name, slugged>`. Prints `handed KEY over: … superseded by "NAME" (NEWID)`. `--model M` and `--effort E` go onto the `claude --bg` line (never `fable`; none: the daemon's defaults). **A chunk session** (a `Chunk: KEY/N` line in its first prompt) needs no `KEY.md`: its successor, named `KEY-cN`, gets a four-line prompt that continues from `## cN: handoff` in `KEY-build.md` and follows the brief `KEY-cN.md`, both in the replies folder. It is refused (exit 2) when `KEY-build.md` has no such section. **`--self`** (the caller's own id): a session hands itself over as its last step, when no coordinator runs (one would start the successor). It isn't stopped or refused as busy; it prints `handed over; end your turn now (…)`. Refused (exit 3) when `--coordinator` names one, and for a review session |
+| `session-status --plan FILE [--check \| --next \| --brief N \| --done N]` | A design's plan table (see [Plans and chunks](#plans-and-chunks) below) |
 | `session-status --init [--check \| --write [--delegate] [--own] [KEY=VALUE…]]` | Sets the cwd up for coordination (skill `setting-up-coordination`); its `session-init` holds the details. `--check`: one line, exit 0 configured (plus the `active:` line and any config warnings) (its own adapter here and a "Replies folder" line in `CLAUDE.md`/`CLAUDE.local.md`), 1 unconfigured or partial, 3 covered by a parent's adapter. No flag: the numbered proposal. `--write`: the missing files from `templates/` and the config, never over an existing one, excluded through `.git/info/exclude`. One GitHub repo with `gh` gets `templates/github-adapter` (PR words from two `gh pr list` queries, open and merged, cached for a minute; `done`, `urls`; self-test `github-adapter.test.sh`), anything else the minimal adapter. No tracker or model call |
 | `session-status --pending` | The adapter's `pending` text, nothing else. The coordinator pane shows it |
 | `session-status --root` | The project root (where the adapter and `.claude/coordinator-actions.json` are). The pane's project actions run there |
@@ -71,6 +73,57 @@ doesn't wake on it) or the pane's runs, which set `SESSION_STATUS_NO_FEEDBACK=1`
 | `session-status --peek ID [N]` | A session's last N (default 12) main-thread entries as markdown, without attaching: the prompts it got, its own text (each cut to 600 characters), its tool calls as `→ Tool: what` lines, then `_Now: …_` (what `--activity` says it does). `session-peek.jq`. The pane's **Peek** |
 | `session-status --yesterday [DAY]` | What was worked on from the start of DAY (YYYY-MM-DD; default the last working day: the latest weekday before today with a prompt of the user's in a project transcript or a commit of theirs, within 14 days) up to now, so Monday's covers Friday and the weekend. `Since: DAY WEEKDAY (HOW)`, the adapter's `standup-notes` as `Note: TEXT` lines, then per task `KEY<TAB>STATUS<TAB>TITLE` and its events `  WEEKDAY HH:MM<TAB>TEXT` oldest first, the task with the latest event first. Events: each session active in the window (`session "NAME" (from–to): its last text line`, keyed by its first prompt's key and its `Session task:` markers; a keyless session shows as `"NAME"`; the coordinator is left out), the user's own commits per branch (pushed or not), and the adapter's `yesterday` rows. `session-day.jq`. The pane's **Yesterday** tab |
 | `session-status --dir KEY\|ID…` / `--diff KEY\|ID…` | Where a task or session works: a KEY's worktree, else an ID's latest transcript cwd (it follows `cd` and EnterWorktree) as its git top; the first argument that resolves. `--diff` prints `DIR · vs BASE`, `git diff --stat` against the merge-base with the first of `origin/HEAD`, `origin/main`, `origin/master`, `@{upstream}` (none: the uncommitted changes against HEAD), the untracked `?? FILE`s, a blank line, then the patch (cut at 200k; the pane draws 40k). A session that works in a worktree by absolute path (`git -C`) without `cd` resolves to its start folder: pass its task key. The pane's **Diff** |
+
+### Plans and chunks
+
+`--plan FILE` reads the first Markdown table under a heading matching `^## (Build )?[Pp]lan` (the table must sit in that
+heading's own section). Columns, in order: `# | Chunk | Kind | Deps | Touches | Est | Model/effort | Done when`.
+`#` is a number, a letter allowed (`3b`); Deps is `–` or a comma list (`1, 2` or `c1`); Touches a comma list of backticked
+paths or globs; Est like `60K`, the growth in context the chunk is expected to add; Model/effort like `opus/medium`, or
+`default` for `plan.models.<kind>`. Kind is `design`, `build`, `mechanical`, `review`, `release` or `scan`.
+
+- **Alone**: the waves (a chunk's wave is 1 + the latest wave of its deps) and each chunk's state.
+- **`--check`**: one line per problem, exit 1; errors go to stderr (exit 2). It reports: a row with the wrong number of
+  cells, a duplicate `#`, an unknown dep, an unknown kind, an empty done-when, a model/effort that isn't `word/word`, an est
+  that isn't like `60K`, an est over `handoff.at.chunk` minus 60K (the room a chunk starts with), a dependency cycle, and
+  two chunks that may run at once (neither depends on the other, directly or not) whose touches overlap.
+- **`--next`**: the waves, then a `claude --bg` line per runnable chunk (deps done, own state not done), up to
+  `plan.max_parallel` (default 3). It takes 2 at most when chunks share a top-level directory in their touches, a bare
+  file name counting as the directory `.`; it skips a chunk whose touches overlap one already picked. A chunk that was
+  started but whose `## cN: done` hasn't landed is listed again: the coordinator knows what it launched from the session
+  name (`-n KEY-cN`). It doesn't check that the briefs exist.
+- **`--brief N`**: a skeleton for row N's brief (title, kind, model, est, deps, wave, touches, done-when) to finish by hand.
+- **`--done N`**: run by chunk N once it landed. With `telemetry: local` it appends a `chunk` line to the usage log
+  (`{"k":"chunk","what":KIND,"model":…,"effort":…,"est":K,"act":K}`; act is this session's growth from
+  `rnd.py chunks 2 --session`, left out when there's no session id or rnd fails); it prints the line, or why nothing was
+  logged (telemetry off, a bad est or model/effort). `rnd.py chunks` reads these lines for its ratio. A handed-over
+  chunk's act covers only the last session.
+
+State lives in `KEY-build.md` in the plan file's own folder (KEY: the plan file's name without `.md`): a chunk appends
+`## cN: done` when it lands, or `## cN: handoff` when it stops early. Nothing else marks state. `--handover` and the
+context-watch hook look for it in the replies folder, so keep plans in the replies folder.
+
+## Context watch
+
+`hooks/context-watch.sh` (PostToolUse, UserPromptSubmit, and SessionStart after a compaction or resume) asks a session
+to hand off before it compacts. A session's context is read from its transcript's tail; the thresholds come from the
+`handoff.*` and `compact.window` keys ([Config](../setting-up-coordination/SKILL.md#config)). Its kind comes from the first
+prompt: `Chunk: KEY/N` is a chunk, `Act as a coordinator` a coordinator (so is a session whose tail ran the status
+watcher or opened the pane), a `Session task:` line a task.
+
+- **Soft** (past `handoff.at.<kind>`): once, "hand off": reach your stop point, write the handoff (a chunk: `## cN: handoff`
+  appended to `KEY-build.md`; a task: `## Handoff` in its replies file), message the coordinator `handoff ready: KEY[ cN]`,
+  end the turn. A chunk or task is also told to finish with `session-status --handover --self` when `--coordinator`
+  prints nothing.
+- **Hard** (past `handoff.hard_after` further, never closer than `handoff.stop_room` to the compaction): once, "stop now",
+  from what's on disk.
+- **Window mismatch**: the thresholds assume `compact.window`. The session's actual window is `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`,
+  else `autoCompactWindow` in `settings.json`; when it differs, one line (`This session's window is W from SOURCE; expected X.`)
+  is added to the first message.
+- **After a compaction**, chunks only: "you were compacted mid-chunk": write the handoff from what's on disk and stop, once
+  per session. A compaction or resume clears the soft and hard stamps, and a resume the cached thresholds too.
+- **Skipped**: a session with no `Session task:` line that isn't a coordinator, a subagent's calls, and a kind with its
+  `handoff.at.<kind>` at 0. Thresholds are cached per session at its first firing, so a config change reaches the next one.
 
 ## The adapter
 
