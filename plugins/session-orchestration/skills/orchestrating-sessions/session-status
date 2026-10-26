@@ -403,8 +403,7 @@ adapter() { [ -n "$ADAPTER" ] && "$ADAPTER" "$@"; }
 killtree() { local c; for c in $(pgrep -P "$1"); do killtree "$c"; done; kill "$1" 2>/dev/null; }
 TMP=$(mktemp -d); NPID=; trap '[ -z "$NPID" ] || killtree "$NPID"; rm -rf "$TMP"' EXIT
 
-KEYRE=$(config key_pattern 2>/dev/null); [ -n "$KEYRE" ] || KEYRE=$(adapter key-pattern 2>/dev/null) || KEYRE=; [ -n "$KEYRE" ] || KEYRE='[A-Z][A-Z0-9]+-[0-9]+'
-KEYRE="($KEYRE)"
+KEYRE=$(key_re "$ADAPTER")
 ACT=; SEND=; COMPACT=; HANDOVER=; PEEK=; WHERE=; ALLP=; YDAY=
 case "${1:-}" in --activity) ACT=1; shift ;; --send-when-idle) SEND=1; shift ;; --compact) COMPACT=1; shift ;; --handover) HANDOVER=1; shift ;;
   --peek) PEEK=1; shift ;; --dir|--diff) WHERE=$1; shift ;; --yesterday) YDAY=1; shift ;; esac
@@ -504,11 +503,6 @@ resume_with() {  # PREFIX DIR ID TEXT
 first_prompt() {
   jq -rn 'first(inputs | select(.type=="user" and (.message.content|type)=="string")
     | .message.content | select(startswith("This session is being continued")|not)) // ""' "$1" 2>/dev/null
-}
-# The key a first prompt names: only at its start (`Work on KEY`, `Session task: KEY`, `KEY:`), not one it
-# mentions further on (history, an example key in docs work).
-first_key() {
-  grep -m 1 . <<<"$1" | grep -oE "^[[:space:]]*(([Ww]ork on|Session task:) +$KEYRE([^0-9]|$)|$KEYRE:)" | grep -oE "$KEYRE" | head -1
 }
 # The `Session task: KEY[ review]` markers of FIRST (its first prompt) and transcript FILE: in its own text and the
 # messages it received, never its tool inputs.
@@ -787,8 +781,8 @@ if [ -n "$HANDOVER" ]; then
   read_row id name st pre started cwd kind status pid
   f=$(transcript_of "$id"); [ -n "$f" ] || { echo "no transcript for \"$name\" (${id:0:8}): not handed over"; exit 2; }
   first=$(first_prompt "$f")
-  if c=$(grep -m1 -E '^Chunk: [^/]+/' <<<"$first"); then
-    c=${c#Chunk: }; key=${c%%/*}; n=${c##*/}; key=${key//[^A-Za-z0-9_.-]/}; n=${n//[^A-Za-z0-9]/}
+  if c=$(chunk_of "$first"); then
+    key=${c% *}; n=${c#* }
   else
     n=; marks=$(marks_of "$first" "$f")
     ! grep -qE ' review([.,;:!)]|$)' <<<"$marks" || { echo "\"$name\" (${id:0:8}) is a review session: not handed over"; exit 2; }

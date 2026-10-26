@@ -221,7 +221,35 @@ usage() {
 # coord_re [NAMES]: an ERE matching a coordinator's transcript line: a run of session-status (or NAMES, the adapter's
 # status-names alternation) with --changes, --watch or --owner, or an open_pane tool use. A plain run (a worker
 # checking its own task) doesn't match. session-status and hooks/context-watch.sh both read it.
-coord_re() { echo "\"command\":\"[^\"]*(session-status${1:+|$1}) +--(changes|watch|owner)|\"name\":\"mcp__session-orchestration__open_pane\""; }
+coord_re() { echo "\"command\":\"[^\"]*(session-status${1:+|$1}) +--(changes|watch|owner)|\"(tool_)?name\":\"mcp__session-orchestration__open_pane\""; }
+
+# key_re [ADAPTER]: the task-key ERE, in parentheses: config key_pattern, else ADAPTER's key-pattern, else the default.
+key_re() {
+  local r; r=$(config key_pattern 2>/dev/null)
+  [ -n "$r" ] || [ -z "${1:-}" ] || r=$("$1" key-pattern 2>/dev/null) || r=
+  echo "(${r:-[A-Z][A-Z0-9]+-[0-9]+})"
+}
+# first_key FIRST: the key a first prompt names: only at its start (`Work on KEY`, `Session task: KEY`, `KEY:`), not
+# one it mentions further on (history, an example key in docs work). Needs KEYRE (key_re).
+first_key() {
+  grep -m 1 . <<<"$1" | grep -oE "^[[:space:]]*(([Ww]ork on|Session task:) +$KEYRE([^0-9]|$)|$KEYRE:)" | grep -oE "$KEYRE" | head -1
+}
+# chunk_of FIRST: "KEY N" from a first prompt's `Chunk: KEY/N` line; fails when it has none. The hook and --handover.
+chunk_of() {
+  local c k; c=$(grep -m1 -oE '^Chunk: [^/]+/[A-Za-z0-9]+' <<<"$1") || return 1
+  c=${c#Chunk: }; k=${c%%/*}; k=${k//[^A-Za-z0-9_.-]/}; [ -n "$k" ] && echo "$k ${c#*/}"
+}
+# compact_window [DIR]: "W SOURCE", the session's autoCompactWindow, in Claude Code's order: the env variable (env),
+# DIR's (default $CLAUDE_PROJECT_DIR) .claude/settings.local.json then settings.json (project), the user's
+# settings.json (settings), else config compact.window (config).
+compact_window() {
+  local w=${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-} p=${1:-${CLAUDE_PROJECT_DIR:-}} f
+  [[ $w =~ ^[0-9]+$ ]] && { echo "$w env"; return 0; }
+  for f in ${p:+"project:$p/.claude/settings.local.json" "project:$p/.claude/settings.json"} "settings:${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"; do
+    w=$(jq -r '.autoCompactWindow // empty' "${f#*:}" 2>/dev/null); [[ $w =~ ^[0-9]+$ ]] && { echo "$w ${f%%:*}"; return 0; }
+  done
+  echo "$(config compact.window 2>/dev/null) config"
+}
 
 # find_module KIND NAME: the first KIND/NAME.sh along the lookup path; fails when there's none.
 #   1. <root>/.claude/coordination.local/KIND/NAME.sh   this person, this project (excluded from git)

@@ -2,12 +2,13 @@
 # PostToolUse (every tool), UserPromptSubmit and SessionStart (compact): asks a session to hand off before it
 # compacts. ctx = input + cache read + cache write of the last assistant line with usage in the transcript's tail
 # (its last 256K, else its last 300 lines).
-# - Kind, from the first user prompt: a `Chunk: KEY/N` line is a chunk, `Act as a coordinator` a coordinator, else
-#   a task (its `Session task: KEY` line names it; a session without one isn't coordinated: left alone). A task, or
-#   a session without the line, whose tail matches lib.sh's coord_re (session-status's coordinator test) is a
-#   coordinator from then on.
+# - Kind, from the first user prompt: a `Chunk: KEY/N` line (lib.sh chunk_of) is a chunk, `Act as a coordinator` a
+#   coordinator, `Session task: KEY review` a review (no messages), else a task (its `Session task: KEY` line names
+#   it, else a `Work on KEY` start (lib.sh first_key); a session with neither isn't coordinated: no messages). A task
+#   or review whose tail matches lib.sh's coord_re (session-status's coordinator test) is a coordinator from then on;
+#   one without messages tests this call's own stdin instead, so it never reads the transcript.
 # - Chunk and task texts end with the self-handover (session-status --handover --self) for when no coordinator runs.
-# - Window: $CLAUDE_CODE_AUTO_COMPACT_WINDOW, else autoCompactWindow in settings.json, else config compact.window.
+# - Window: lib.sh compact_window (env, the project's settings, the user's, else config compact.window).
 #   ceiling = window - 33000; hard = min(at + handoff.hard_after, ceiling - handoff.stop_room);
 #   at = min(handoff.at.KIND, hard - 10000). handoff.at.KIND = 0: off.
 # - Past at: one additionalContext (reach the stop point, write the handoff, tell the coordinator, end the turn);
@@ -33,29 +34,31 @@ fi
 
 # .kind: "KIND KEY N AT HARD NOTE"; a task's has coord_re on a second line, so no call sources lib.sh (13 ms).
 cached=1 re=
-if [ -f "$s.kind" ] && { read -r kind key n at hard note && { [ "$kind" != task ] || read -r re; }; } < "$s.kind"; then :
+if [ -f "$s.kind" ] && { read -r kind key n at hard note && case $kind in task|review) read -r re ;; esac; } < "$s.kind"; then :
 else
   first=$(head -n 50 "$tp" | jq -Rrn 'first(inputs | fromjson? | select(.type == "user" and (.isMeta | not)) | .message.content
     | if type == "string" then . else (map(select(.type == "text") | .text) | join("\n")) end | select(length > 0)) // ""')
   [ -n "$first" ] || exit 0   # no prompt yet: decide later
   key=-; n=-; cached=
-  if c=$(grep -m1 -E '^Chunk: ' <<<"$first"); then
-    kind=chunk; c=${c#Chunk: }; key=${c%%/*}; n=${c##*/}
-  elif grep -q '^Act as a coordinator' <<<"$first"; then kind=coordinator
-  else kind=task; c=$(grep -m1 -E '^Session task: ' <<<"$first") && key=${c#Session task: } && key=${key%% *}
-  fi
-  key=${key//[^A-Za-z0-9_.-]/}; n=${n//[^A-Za-z0-9]/}; key=${key:--}
   cd "${cwd:-.}" 2>/dev/null; . "$here/../lib.sh"
   # ponytail: the adapter at the session's cwd (the project root as a rule); a subfolder session misses its status-names
-  [ "$kind" != task ] || { a=$(adapter_path . 2>/dev/null) && names=$("$a" status-names 2>/dev/null); re=$(coord_re "${names:-}"); }
+  a=$(adapter_path . 2>/dev/null)
+  if c=$(chunk_of "$first"); then kind=chunk; key=${c% *}; n=${c#* }
+  elif grep -q '^Act as a coordinator' <<<"$first"; then kind=coordinator
+  elif grep -qE '^Session task: [^ ]+ review([.,;:!)]|$)' <<<"$first"; then kind=review
+  else kind=task
+    if c=$(grep -m1 -E '^Session task: ' <<<"$first"); then key=${c#Session task: }; key=${key%% *}
+    else KEYRE=$(key_re "$a"); key=$(first_key "$first")
+    fi
+  fi
+  key=${key//[^A-Za-z0-9_.-]/}; key=${key:--}
+  case $kind in task|review) [ -z "$a" ] || names=$("$a" status-names 2>/dev/null); re=$(coord_re "${names:-}") ;; esac
 fi
 thresholds() {   # at, hard and note for $kind, cached
   declare -F config >/dev/null || { cd "${cwd:-.}" 2>/dev/null; . "$here/../lib.sh"; }
   at=$(config "handoff.at.$kind" 2>/dev/null); after=$(config handoff.hard_after 2>/dev/null)
   room=$(config handoff.stop_room 2>/dev/null); expect=$(config compact.window 2>/dev/null)
-  w=${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}; from=env
-  [[ $w =~ ^[0-9]+$ ]] || { w=$(jq -r '.autoCompactWindow // empty' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null); from=settings; }
-  [[ $w =~ ^[0-9]+$ ]] || { w=$expect; from=config; }
+  read -r w from < <(compact_window "${CLAUDE_PROJECT_DIR:-$cwd}")   # project settings live at its root, not a subfolder
   hard=$(( at + after )); (( w - 33000 - room < hard )) && hard=$(( w - 33000 - room ))
   (( at > 0 && hard - 10000 < at )) && at=$(( hard - 10000 ))
   note=; [ "$w" = "$expect" ] || note="This session's window is $w from $from; expected $expect."
@@ -63,10 +66,16 @@ thresholds() {   # at, hard and note for $kind, cached
 }" > "$s.kind"
 }
 if [ -z "$cached" ]; then
-  if [ "$kind" = task ] && [ "$key" = - ]; then at=0 hard=0 note=; mkdir -p "$d" && printf 'task - - 0 0\n%s\n' "$re" > "$s.kind"
+  if [ "$kind" = review ] || { [ "$kind" = task ] && [ "$key" = - ]; }; then
+    at=0 hard=0 note=; mkdir -p "$d" && printf '%s - - 0 0\n%s\n' "$kind" "$re" > "$s.kind"
   else thresholds; fi
 fi
-(( at > 0 )) || [ "$kind" = task ] || exit 0
+# A task or review without messages (no key, a review, handoff.at.task=0) only waits to turn coordinator: its own
+# tool call (stdin, coord_re's tool_name branch) decides, without the tail, grep and jq (~39 ms on a 45 MB transcript).
+if (( at <= 0 )); then
+  case $kind in task|review) [ -n "$re" ] && [[ $input =~ $re ]] || exit 0 ;; *) exit 0 ;; esac
+  kind=coordinator key=- n= re=; rm -f "$s.soft"; thresholds; (( at > 0 )) || exit 0
+fi
 
 say() {
   [ -e "$s.noted" ] || { [ -z "$note" ] || set -- "$1 $note"; touch "$s.noted"; }
@@ -93,7 +102,7 @@ fi
 # The last 256K first: BSD tail -n 300 on a transcript of large tool results reads ~10 MB (150 ms); 256K takes 20 ms.
 # ponytail: the last 300 lines only when 256K holds no usage (a tool result bigger than that).
 # Subagent (sidechain) lines and all-zero usage (a synthetic or failed reply) don't count.
-# The same pass tests a task session's tail against coord_re (lib.sh: session-status's definition): a match makes it
+# The same pass tests a task session's tail (one with messages) against coord_re (lib.sh: session-status's definition): a match makes it
 # a coordinator from then on, `Session task:` line or not, with its own at and text. Each extra process costs ~10 ms.
 # A compact_boundary resets it: a manual /compact writes no assistant line before the next prompt, so the usage
 # before it is stale (none after it: no ctx yet).

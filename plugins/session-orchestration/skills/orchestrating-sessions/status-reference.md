@@ -112,7 +112,8 @@ context-watch hook look for it in the replies folder, so keep plans in the repli
 to hand off before it compacts. A session's context is read from its transcript's tail; the thresholds come from the
 `handoff.*` and `compact.window` keys ([Config](../setting-up-coordination/SKILL.md#config)). Its kind comes from the first
 prompt: `Chunk: KEY/N` is a chunk, `Act as a coordinator` a coordinator (so is a session whose tail ran the status
-watcher or opened the pane), a `Session task:` line a task.
+watcher or opened the pane), `Session task: KEY review` a review (no messages), a `Session task:` line or a
+`Work on KEY` start a task.
 
 - **Soft** (past `handoff.at.<kind>`): once, "hand off": reach your stop point, write the handoff (a chunk: `## cN: handoff`
   appended to `KEY-build.md`; a task: `## Handoff` in its replies file), rename itself to what `session-status --prev-name`
@@ -122,7 +123,8 @@ watcher or opened the pane), a `Session task:` line a task.
 - **Hard** (past `handoff.hard_after` further, never closer than `handoff.stop_room` to the compaction): once, "stop now",
   from what's on disk.
 - **Window mismatch**: the thresholds assume `compact.window`. The session's actual window is `$CLAUDE_CODE_AUTO_COMPACT_WINDOW`,
-  else `autoCompactWindow` in `settings.json`; when it differs, one line (`This session's window is W from SOURCE; expected X.`)
+  else `autoCompactWindow` in the project's `.claude/settings.local.json`, its `.claude/settings.json`, then the user's
+  `settings.json` (SOURCE `env`, `project`, `settings`); when it differs, one line (`This session's window is W from SOURCE; expected X.`)
   is added to the first message.
 - **After a compaction**, chunks only: "you were compacted mid-chunk": write the handoff from what's on disk and stop, once
   per session. A compaction or resume clears the soft and hard stamps, and a resume the cached thresholds too.

@@ -29,7 +29,7 @@ expect() {
   else grep -qE -- "$4" <<<"$out" || fail "$1 at $3: want /$4/, got: ${out:-nothing}"; fi
 }
 chunk=$'Session task: PROJ-123\nChunk: PROJ-123/2\nRead the brief.'
-task=$'Session task: PROJ-123 review. Review the PR.\nFix the bug.'
+task=$'Session task: PROJ-123\nFix the bug.'
 coord='Act as a coordinator for this project.'
 
 # Each kind: nothing, then the soft message, then the hard one, each once.
@@ -50,8 +50,10 @@ out=$(fire coord "$coord" 146000); grep -q 'handover file' <<<"$out" && ! grep -
 expect coord "$coord" 171000 'Stop now'
 # A coordinator by what it did (lib.sh coord_re: an open_pane tool use), without `Act as a coordinator`, with or
 # without a Session task line: the coordinator's thresholds and text. Chunk and task texts carry the self-handover.
+# Without a key, by its own tool call (stdin), not the tail.
 pane='{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__session-orchestration__open_pane","input":{}}]}}'
-LINE=$pane expect pane1 'Fix the bug.' 144000 ''
+LINE=$pane expect pane0 'Fix the bug.' 190000 ''
+EXTRA='{"tool_name": "mcp__session-orchestration__open_pane", "tool_input": {}}' expect pane1 'Fix the bug.' 144000 ''
 out=$(LINE=$pane fire pane1 'Fix the bug.' 146000); grep -q 'handover file' <<<"$out" && ! grep -q 'self' <<<"$out" || fail "open_pane session: $out"
 LINE=$pane expect pane2 "$task" 130000 ''
 out=$(fire pane3 "$task" 130000); grep -q 'handover file' <<<"$(LINE=$pane fire pane3 "$task" 146000)" || fail 'task turned coordinator'
@@ -67,8 +69,15 @@ grep -q window <<<"$(fire cw2 "$coord" 160000)" || fail 'window line on a first 
 out=$(fire cw3 "$chunk" 126000); fire cw3 "$chunk" 151000 | grep -q window && fail 'window line twice'
 unset CLAUDE_CODE_AUTO_COMPACT_WINDOW
 
-# Not coordinated (no Session task line), or a subagent's tool call: nothing.
+# Not coordinated (no Session task line), or a subagent's tool call: nothing. Keyless: the transcript isn't read again.
 expect plain 'Fix the bug.' 190000 ''
+chmod 000 "$t/plain.jsonl"
+out=$(jq -nc --arg f "$t/plain.jsonl" '{session_id: "plain", transcript_path: $f, hook_event_name: "PostToolUse", tool_name: "Bash"}' |
+  bash "$here/context-watch.sh" 2>&1); chmod 600 "$t/plain.jsonl"; [ -z "$out" ] || fail "keyless session read its transcript: $out"
+# `Work on KEY:` (coordinator.md's launch, a task successor) is a task; a review gets nothing; `Chunk: foo` isn't a chunk.
+grep -q 'handoff ready: PROJ-123"' <<<"$(fire work "Work on PROJ-123: fix the bug." 126000)" || fail 'Work on KEY: task'
+expect review 'Session task: PROJ-123 review' 160000 ''
+expect nochunk $'Chunk: foo\nRead the brief.' 160000 ''
 EXTRA='{"agent_id": "a1"}' expect sub "$task" 190000 ''
 expect sub "$task" 190000 'Stop now'
 # A compaction clears the stamps; a resume clears the thresholds too (here: a new window).
@@ -106,9 +115,16 @@ out=$(jq -nc --arg f "$t/mc.jsonl" --arg c "$t/proj" '{session_id: "mc", transcr
   bash "$here/context-watch.sh"); [ -z "$out" ] || fail "stale ctx after /compact: $out"
 expect mc "$task" 130000 'at 130K: hand off'
 
+# The project's settings come before the user's.
+echo '{"autoCompactWindow": 180000}' > "$t/proj/.claude/settings.local.json"
+expect pw "$chunk" 126000 'window is 180000 from project; expected 220000'
+rm "$t/proj/.claude/settings.local.json"
+
 # Config: defaults, a bad value, and a repo file can't set the person keys.
 rm "$XDG_CONFIG_HOME/session-orchestration/config.json"
 cd "$t/proj"; . "$here/../lib.sh"
+chunk_of 'Chunk: foo' && fail 'Chunk: foo is a chunk'
+[ "$(chunk_of $'Session task: PROJ-123\nChunk: PROJ-123/3b')" = 'PROJ-123 3b' ] || fail 'chunk_of PROJ-123/3b'
 [ "$(config handoff.at.chunk)" = 125000 ] || fail "handoff.at.chunk default"
 [ "$(config compact.window)" = 220000 ] && [ "$(config plan.models.scan)" = haiku/low ] && [ "$(config plan.max_parallel)" = 3 ] || fail defaults
 echo '{"handoff": {"at": {"chunk": 90000}}, "plan": {"max_parallel": 0, "models": {"build": "fable/high", "review": "opus/ultra", "design": "sonnet/max"}}}' > "$XDG_CONFIG_HOME/session-orchestration/config.json"
