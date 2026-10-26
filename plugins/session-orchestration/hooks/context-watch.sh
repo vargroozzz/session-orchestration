@@ -36,11 +36,10 @@ fi
 cached=1 re=
 if [ -f "$s.kind" ] && { read -r kind key n at hard note && case $kind in task|review) read -r re ;; esac; } < "$s.kind"; then :
 else
-  first=$(head -n 50 "$tp" | jq -Rrn 'first(inputs | fromjson? | select(.type == "user" and (.isMeta | not)) | .message.content
-    | if type == "string" then . else (map(select(.type == "text") | .text) | join("\n")) end | select(length > 0)) // ""')
+  cd "${cwd:-.}" 2>/dev/null; . "$here/../lib.sh"
+  first=$(first_prompt "$tp" 50)
   [ -n "$first" ] || exit 0   # no prompt yet: decide later
   key=-; n=-; cached=
-  cd "${cwd:-.}" 2>/dev/null; . "$here/../lib.sh"
   # ponytail: the adapter at the session's cwd (the project root as a rule); a subfolder session misses its status-names
   a=$(adapter_path . 2>/dev/null)
   if c=$(chunk_of "$first"); then kind=chunk; key=${c% *}; n=${c#* }
@@ -85,7 +84,7 @@ texts() {   # where the handoff goes, the -prev-K rename, whom to tell, and (chu
   printf -v ss %q "${here%/hooks}/skills/orchestrating-sessions/session-status"
   local rn=" Rename yourself: call name_session with the name \`$ss --prev-name\` prints (your successor takes your name)."
   case $kind in
-    chunk) where="\`## c$n: handoff\` appended to $key-build.md in the replies folder"
+    chunk) where="\`## c$n: handoff ${sid:0:8}\` (your session id's first 8 characters) appended to $key-build.md in the replies folder"
            tell="$rn Message the coordinator \"handoff ready: $key c$n\"." ;;
     task) where="\`## Handoff\` in your replies file"; tell="$rn Message the coordinator \"handoff ready: $key\"." ;;
     *) where="the handover file your coordinator doc names"; tell= ;;

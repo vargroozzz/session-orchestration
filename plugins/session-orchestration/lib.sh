@@ -234,6 +234,13 @@ key_re() {
 first_key() {
   grep -m 1 . <<<"$1" | grep -oE "^[[:space:]]*(([Ww]ork on|Session task:) +$KEYRE([^0-9]|$)|$KEYRE:)" | grep -oE "$KEYRE" | head -1
 }
+# first_prompt TRANSCRIPT [N]: its first prompt (within its first N lines: the hook passes 50), a string or text
+# blocks, skipping isMeta lines and a compaction summary; "" when none. The hook and session-status.
+first_prompt() {
+  { if [ -n "${2:-}" ]; then head -n "$2" "$1"; else cat "$1"; fi; } 2>/dev/null | jq -Rrn 'first(inputs | fromjson? | select(.type == "user" and (.isMeta | not)) | .message.content
+    | if type == "string" then . elif type == "array" then map(select(.type == "text") | .text) | join("\n") else "" end
+    | select(length > 0 and (startswith("This session is being continued") | not))) // ""'
+}
 # chunk_of FIRST: "KEY N" from a first prompt's `Chunk: KEY/N` line; fails when it has none. The hook and --handover.
 chunk_of() {
   local c k; c=$(grep -m1 -oE '^Chunk: [^/]+/[A-Za-z0-9]+' <<<"$1") || return 1

@@ -124,11 +124,11 @@ one of: `coding`, `PR #N open`, `in review`, `ready to merge`, `merged, deployin
 A `Chunk: KEY/N` line in your first prompt marks you as one chunk of a plan ([flags and hook](status-reference.md#plans-and-chunks)):
 - Stay within your brief's est and touches.
 - A clean stop point: everything committed, no background task, no question waiting.
-- At the context-watch hook's soft line, reach the stop point, append `## cN: handoff` to `KEY-build.md` in the replies
-  folder, rename yourself (call `name_session` with the name `session-status --prev-name` prints, `KEY-cN-prev-K`: your
+- At the context-watch hook's soft line, reach the stop point, append `## cN: handoff ID8` (ID8: the first 8 characters of
+  `$CLAUDE_CODE_SESSION_ID`, so `--handover` knows the heading is yours) to `KEY-build.md` in the replies folder, rename yourself (call `name_session` with the name `session-status --prev-name` prints, `KEY-cN-prev-K`: your
   successor takes `KEY-cN`), message the coordinator `handoff ready: KEY cN`, and end the turn. With no coordinator
   (`session-status --coordinator` prints nothing), finish with `session-status --handover --self -- '<next step>'`
-  instead: its last line names the rename.
+  instead: its last line names the rename, and with no `--model`/`--effort` it takes them from your plan row.
 - After landing, append `## cN: done` and run `session-status --plan FILE --done N`.
 
 ## Handing the user a command

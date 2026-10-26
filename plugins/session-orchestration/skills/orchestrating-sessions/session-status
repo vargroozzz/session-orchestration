@@ -127,18 +127,23 @@ set -uo pipefail
 [ "${1:-}" = --config ] && { config "${2:-}"; exit; }
 # prev_name NAME: NAME-prev-K, the name a session takes when it hands off (its successor keeps NAME). NAME loses any
 # -prev-K first; K is the lowest number no session of a listed account (lib.sh list_sessions --all: live or
-# retired) carries, so no two sessions share a name. Listing failed: K = 1.
+# retired) carries, so no two sessions share a name. Listing failed: K = 1. The caller ($CLAUDE_CODE_SESSION_ID)
+# already named NAME-prev-K keeps that name (so no other name of the caller's can be NAME-prev-K). NAME "": the
+# caller's own; fails when the caller isn't listed. One listing.
 prev_name() {
-  local b=$1 k=1 names; [[ $b =~ ^(.+)-prev-[0-9]+$ ]] && b=${BASH_REMATCH[1]}
-  names=$(list_sessions --all | cut -f2)
+  local b k=1 all me names
+  all=$(list_sessions --all)
+  me=$(awk -F'\t' -v s="${CLAUDE_CODE_SESSION_ID:-}" 's != "" && $1 == s {print $2; exit}' <<<"$all")
+  b=${1:-$me}; [ -n "$b" ] || return 1; [[ $b =~ ^(.+)-prev-[0-9]+$ ]] && b=${BASH_REMATCH[1]}
+  [[ $me == "$b-prev-"* && ${me#"$b-prev-"} =~ ^[0-9]+$ ]] && { echo "$me"; return; }
+  names=$(cut -f2 <<<"$all")
   while grep -qxF -- "$b-prev-$k" <<<"$names"; do k=$(( k + 1 )); done
   echo "$b-prev-$k"
 }
 # --prev-name [NAME]: prev_name's name for NAME, by default the caller's own (by $CLAUDE_CODE_SESSION_ID).
 if [ "${1:-}" = --prev-name ]; then
-  want=${2:-$(list_sessions --all | awk -F'\t' -v s="${CLAUDE_CODE_SESSION_ID:-}" 's != "" && $1 == s {print $2; exit}')}
-  [ -n "$want" ] || { echo "usage: session-status --prev-name [NAME] (this session isn't listed: name it)" >&2; exit 2; }
-  prev_name "$want"; exit 0
+  prev_name "${2:-}" || { echo "usage: session-status --prev-name [NAME] (this session isn't listed: name it)" >&2; exit 2; }
+  exit 0
 fi
 # --plan FILE [--check | --next | --brief N]: FILE's plan table (the first table under `## Plan` or `## Build plan`:
 # # | Chunk | Kind | Deps | Touches | Est | Model/effort | Done when), with each chunk's state from the
@@ -514,11 +519,6 @@ resume_with() {  # PREFIX DIR ID TEXT
   grep -q "backgrounded · ${3:0:8}" <<<"$out" && return 0
   echo "resume of ${3:0:8} didn't keep its id: $(tail -1 <<<"$out")"; return 1
 }
-# A transcript's first prompt, skipping a compaction summary.
-first_prompt() {
-  jq -rn 'first(inputs | select(.type=="user" and (.message.content|type)=="string")
-    | .message.content | select(startswith("This session is being continued")|not)) // ""' "$1" 2>/dev/null
-}
 # The `Session task: KEY[ review]` markers of FIRST (its first prompt) and transcript FILE: in its own text and the
 # messages it received, never its tool inputs.
 marks_of() {  # FIRST FILE
@@ -783,6 +783,7 @@ if [ -n "$HANDOVER" ]; then
   if [ "${1:-}" = --self ]; then self=1; want=${CLAUDE_CODE_SESSION_ID:-}; shift; else want=${1:-}; [ $# -gt 0 ] && shift; fi
   while [ $# -ge 2 ] && case $1 in --model) model=$2 ;; --effort) effort=$2 ;; *) false ;; esac; do shift 2; done
   [ "${1:-}" = -- ] && shift; next=${1:-}
+  [ -z "$self" ] || [ -n "$want" ] || { echo "--self: CLAUDE_CODE_SESSION_ID is unset (run it from the session handing itself over)"; exit 2; }
   [ "${#want}" -ge 8 ] && [ -n "$next" ] && [ $# = 1 ] ||
     { echo "usage: session-status --handover ID|--self [--model M] [--effort E] [--] 'WHAT NEXT' (ID: 8+ characters)"; exit 2; }
   [ -z "$model" ] || model_ok "$model" || { echo "--model $model: not a model name like opus (never fable)"; exit 2; }
@@ -819,12 +820,24 @@ if [ -n "$HANDOVER" ]; then
   [ -n "$rdir" ] || { echo "$ROOT/CLAUDE.md names no replies folder: nothing to hand over from"; exit 2; }
   case $rdir in /*) rd=$rdir ;; *) rd=$ROOT/$rdir ;; esac
   [ -n "$n" ] || [ -f "$rd/$key.md" ] || { echo "no $rdir/$key.md: ask \"$name\" for a status report first, or write one"; exit 2; }
-  if [ -n "$n" ]; then   # one heading per session of the chunk: ID and each session its Supersedes chain reaches back to
-    hops=0 cur=$id
-    while cur=$(awk -v id="$cur" '$2 == id {print $1; exit}' <<<"$pairs") && [ -n "$cur" ] && (( hops < 100 )); do hops=$(( hops + 1 )); done
-    have=$(grep -cE "^## c$n: handoff" "$rd/$key-build.md" 2>/dev/null); have=${have:-0}
-    (( have > hops )) || { if (( have )); then echo "no new \`## c$n: handoff\` in $rdir/$key-build.md: the $have there are from \"$name\"'s $hops predecessors; ask \"$name\" to write its own first"
-      else echo "no \`## c$n: handoff\` in $rdir/$key-build.md: ask \"$name\" to write it first"; fi; exit 2; }
+  if [ -n "$n" ]; then
+    b=$rd/$key-build.md own="\`## c$n: handoff ${id:0:8}\`"
+    ! grep -qE "^## c$n: done" "$b" 2>/dev/null || { echo "c$n is done (## c$n: done in $rdir/$key-build.md): nothing to hand over"; exit 2; }
+    # ID's own heading, `## cN: handoff ID8`; else the old count rule: more writers (an id-less heading counts one,
+    # each other ID8 one) than ID has predecessors (its Supersedes chain)
+    have=$(awk -v h="## c$n: handoff" -v me="${id:0:8}" 'index($0, h) == 1 { r = substr($0, length(h) + 1)
+      if (r ~ /^ [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]([^0-9a-f]|$)/) { t = substr(r, 2, 8); if (t == me) mine = 1; if (!s[t]++) c++ } else if (r ~ /^([^A-Za-z0-9]|$)/) c++ }
+      END { print mine ? "own" : c + 0 }' "$b" 2>/dev/null); have=${have:-0}
+    if [ "$have" != own ]; then
+      hops=0 cur=$id
+      while cur=$(awk -v id="$cur" '$2 == id {print $1; exit}' <<<"$pairs") && [ -n "$cur" ] && (( hops < 100 )); do hops=$(( hops + 1 )); done
+      (( have > hops )) || { if (( have )); then echo "no new \`## c$n: handoff\` in $rdir/$key-build.md: the $have there are from \"$name\"'s $hops predecessors; ask \"$name\" to write its own, $own, first"
+        else echo "no \`## c$n: handoff\` in $rdir/$key-build.md: ask \"$name\" to write $own first"; fi; exit 2; }
+    fi
+    if [ -n "$self" ] && { [ -z "$model" ] || [ -z "$effort" ]; }; then   # the plan row's model/effort (--plan's parse)
+      me=$(bash "$SELF" --plan "$rd/$key.md" --brief "$n" 2>/dev/null | grep -m1 -oE 'Model: [^ ]+/[^ ]+'); me=${me#Model: }
+      [ -z "$me" ] || ! model_ok "${me%/*}" "${me#*/}" || { model=${model:-${me%/*}}; effort=${effort:-${me#*/}}; }
+    fi
   fi
   if [ -n "$pid" ]; then stop_session "$pre" "$id" || { echo "couldn't stop \"$name\" (${id:0:8}): nothing started"; exit 1; }; fi
   base=$name; [[ $name =~ ^(.+)-prev-[0-9]+$ ]] && base=${BASH_REMATCH[1]}   # renamed already by its own handoff

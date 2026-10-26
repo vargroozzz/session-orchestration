@@ -430,6 +430,13 @@ out=$(CLAUDE_CODE_SESSION_ID=$kid run --handover --self -- 'Go on.')
 c=$(calls)
 [ "$out" = 'handed over; rename yourself (call name_session with "PROJ-9-c3b-prev-1"), then end your turn now ("PROJ-9-c3b" (abcdef12) supersedes this session)' ] && ! grep -q ' stop ' <<<"$c" &&
   grep -q '^cfg --bg -n PROJ-9-c3b Session task: PROJ-9$' <<<"$c" || { echo "self handover: $out"; echo "$c"; exit 1; }
+# --self takes a chunk's model/effort from its plan row, a flag given wins; no session id is said plainly.
+printf '## Plan\n\n| # | Chunk | Kind | Deps | Touches | Est | Model/effort | Done when |\n|---|---|---|---|---|---|---|---|\n| 3b | x | build | – | `a` | 60K | sonnet/low | y |\n' > "$root/replies/PROJ-9.md"
+c=$(CLAUDE_CODE_SESSION_ID=$kid run --handover --self --effort high -- 'Go on.' >/dev/null; calls)
+grep -q '^cfg --bg --model sonnet --effort high -n PROJ-9-c3b ' <<<"$c" || { echo "self handover took no plan model: $c"; exit 1; }
+rm "$root/replies/PROJ-9.md"
+[ "$(CLAUDE_CODE_SESSION_ID= run --handover --self -- x; echo $?)" = "$(printf '%s\n2' '--self: CLAUDE_CODE_SESSION_ID is unset (run it from the session handing itself over)')" ] ||
+  { echo "self handover without a session id"; exit 1; }
 # A successor (Supersedes: kid) that grew too: the one `## c3b: handoff` is its predecessor's, so it's refused until it
 # writes its own; then the new session continues from the last one. A renamed predecessor gets no shared-name line.
 k2=eeeeeeee-2222-3333-4444-555555555555
@@ -441,11 +448,31 @@ out=$(run --handover "$k2" -- 'x') && rc=0 || rc=$?
 printf '## c3b: handoff\nmore\n' >> "$root/replies/PROJ-9-build.md"
 [ "$(run --handover "$k2" -- 'x')" = 'handed PROJ-9 c3b over: "PROJ-9-c3b" (eeeeeeee) stopped, superseded by "PROJ-9-c3b" (abcdef12)
 "PROJ-9-c3b" (old) wasn'"'"'t renamed: two sessions share PROJ-9-c3b until it is' ] || { echo "handover after the second handoff"; exit 1; }
+# Headings name their writer: kid's two count once, so k2 (which wrote none) is refused; its own lets it through.
+printf '## c3b: handoff dddddddd\na\n## c3b: handoff dddddddd\nb\n' > "$root/replies/PROJ-9-build.md"
+setacct cfg "$(sess "$k2" "PROJ-9-c3b" idle 1)"; calls >/dev/null
+out=$(run --handover "$k2" -- 'x') && rc=0 || rc=$?
+[ "$rc" = 2 ] && [[ $out == *'write its own, `## c3b: handoff eeeeeeee`, first' ]] && [ -z "$(calls | grep -v ' agents ')" ] ||
+  { echo "one writer's two headings let its successor through: $rc $out"; exit 1; }
+printf '## c3b: handoff eeeeeeee\nc\n' >> "$root/replies/PROJ-9-build.md"
+[[ $(run --handover "$k2" -- 'x') == 'handed PROJ-9 c3b over'* ]] || { echo "handover after its own heading"; exit 1; }
+# A done chunk: nothing to hand over, nothing stopped.
+printf '## c3b: done\n' >> "$root/replies/PROJ-9-build.md"; setacct cfg "$(sess "$k2" "PROJ-9-c3b" idle 1)"; calls >/dev/null
+[ "$(run --handover "$k2" -- 'x'; echo $?)" = "$(printf 'c3b is done (## c3b: done in replies/PROJ-9-build.md): nothing to hand over\n2')" ] &&
+  [ -z "$(calls | grep -v ' agents ')" ] || { echo "done chunk handed over"; exit 1; }
 rm "$proj/$k2.jsonl"
+# A first prompt as text blocks is a chunk too (lib.sh first_prompt, the hook's reader).
+k3=cccccccc-3333-3333-4444-555555555555
+jq -nc '{type: "user", message: {content: [{type: "text", text: "Session task: PROJ-8\nChunk: PROJ-8/3\nGo."}]}}' > "$proj/$k3.jsonl"
+setacct cfg "$(sess "$k3" "PROJ-8-c3" idle 1)"
+[[ $(run --handover "$k3" -- 'x') == 'no `## c3: handoff` in replies/PROJ-8-build.md'* ]] || { echo "text-block chunk: $(run --handover "$k3" -- x)"; exit 1; }
+rm "$proj/$k3.jsonl"
 # --prev-name: the lowest free K over every listed name, live or retired; NAME defaults to the caller's own.
 setacct cfg "$(sess "$k2" "PROJ-9-c3b" idle 1),$(sess "$kid" "PROJ-9-c3b-prev-1" idle null),$(sess "$hid" "PROJ-9-c3b-prev-3" idle null)"
 [ "$(CLAUDE_CODE_SESSION_ID=$k2 run --prev-name)" = PROJ-9-c3b-prev-2 ] && [ "$(run --prev-name PROJ-9-c3b-prev-3)" = PROJ-9-c3b-prev-2 ] &&
   [ "$(run --prev-name other)" = other-prev-1 ] && ! run --prev-name 2>/dev/null || { echo "--prev-name failed"; exit 1; }
+setacct cfg "$(sess "$kid" "x-prev-1" idle 1)"
+[ "$(CLAUDE_CODE_SESSION_ID=$kid run --prev-name)" = x-prev-1 ] || { echo "--prev-name renamed an already-renamed caller"; exit 1; }
 
 # --peek: the main thread's last turns as markdown (no sidechain, no system reminder), then what it does now.
 pid=cccccccc-2222-3333-4444-555555555555

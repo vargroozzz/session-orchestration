@@ -42,7 +42,7 @@ for k in chunk task; do
   expect "$k" "$p" 160000 ''
 done
 grep -q 'handoff ready: PROJ-123 c2' <<<"$(fire chunk2 "$chunk" 126000)" || fail 'chunk message names PROJ-123 c2'
-grep -q '## c2: handoff' <<<"$(fire chunk3 "$chunk" 126000)" || fail 'chunk message names its build section'
+grep -q '## c2: handoff chunklon' <<<"$(fire chunklong9 "$chunk" 126000)" || fail 'chunk message names its build section'
 grep -qE 'Rename yourself: call name_session with the name `.*session-status --prev-name` prints.* Message the coordinator' <<<"$(fire chunk5 "$chunk" 151000)" || fail 'chunk hard text: rename before the coordinator message'
 out=$(fire task2 "$task" 126000); grep -q 'handoff ready: PROJ-123"' <<<"$out" && grep -q '## Handoff' <<<"$out" || fail "task message: $out"
 expect coord "$coord" 144000 ''
