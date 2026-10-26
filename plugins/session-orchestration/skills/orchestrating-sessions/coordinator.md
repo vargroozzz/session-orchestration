@@ -424,7 +424,8 @@ A multi-step task becomes chunks run by separate sessions, so none outgrows its 
    Write one brief per chunk, `<replies>/PROJ-123-cN.md`, from `--plan FILE --brief N`, plus a shared
    `PROJ-123-chunk-rules.md` (paths, setup, interface, checks, landing by fast-forward). Keep plans in the replies folder.
 3. **Start** what `--plan FILE --next` prints. It stops at `plan.max_parallel` (2 when chunks share a top-level
-   directory) and re-lists a chunk you started until its `## cN: done` lands: don't start it twice (`-n PROJ-123-cN`).
+   directory), counting chunks whose `PROJ-123-cN` session is live as running: it doesn't list those. A chunk it
+   lists again has no live session and no `## cN: done` (it died or handed off): start it, or take its handoff.
    With `plan.enabled: false` it starts nothing and says so: run the task without a plan.
    **While the planner is evaluated**, odd task starts get a plan and even ones run as before, with `plan: off` in the
    brief (`rnd.py trial` compares the two).

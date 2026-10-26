@@ -874,4 +874,27 @@ out=$(run --plan "$pd/PROJ-9.md" --next | grep '^claude' | sed "s/ 'Session.*//"
 claude --bg --permission-mode default --model opus --effort medium -n PROJ-9-c4' ] || { echo "--plan --next, cap and plan mode: $out"; exit 1; }
 echo '{}' > "$tmp/cfg/settings.json"
 run --plan "$pd/PROJ-9.md" --next | grep -q '^claude --bg --model opus --effort medium -n PROJ-9-c1 ' || { echo "--plan --next, plain account"; exit 1; }
+# Any `## cN: done` is done: a handoff written after it doesn't make c2 runnable again (c3, overlapping it, now is).
+printf '## c1: done\n## c2: done\nok\n## c2: handoff 1234abcd\nlate\n## c4: done\n' > "$pd/PROJ-123-build.md"
+[ "$(run --plan "$plan" --next | grep '^claude' | sed "s/ 'Session.*//" | awk '{print $NF}' | paste -sd, -)" = PROJ-123-c3,PROJ-123-c5 ] &&
+  run --plan "$plan" | grep -qE '^c2 +done ' || { echo "--plan: done then handoff isn't done"; exit 1; }
+# A live KEY-cN session is running: --next doesn't list it, and it holds one of max_parallel 2's slots. A KEY-cN-prev-K
+# name isn't running; the waves view says running.
+printf '| 1 | a | build | – | `a/` | 9K | default | x |\n| 2 | b | build | – | `b/` | 9K | default | x |\n| 3 | c | build | – | `c/` | 9K | default | x |\n' |
+  cat <(sed -n '1,4p' "$pd/PROJ-9.md") - > "$pd/PROJ-10.md"
+cp "$tmp/bin/claude" "$tmp/claude.saved"
+printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"a1\",\"name\":\"PROJ-10-c2\",\"cwd\":\"/\"},{\"sessionId\":\"a2\",\"name\":\"PROJ-10-c1-prev-1\",\"cwd\":\"/\"}]'" > "$tmp/bin/claude"
+mkdir -p "$tmp/.config/session-orchestration"; echo '{"plan": {"max_parallel": 2}}' > "$tmp/.config/session-orchestration/config.json"
+out=$(run --plan "$pd/PROJ-10.md" --next | grep '^claude' | sed "s/ 'Session.*//")
+[ "$out" = 'claude --bg --model opus --effort medium -n PROJ-10-c1' ] && run --plan "$pd/PROJ-10.md" | grep -qE '^c2 +running ' &&
+  run --plan "$pd/PROJ-10.md" | grep -qE '^c1 +ready ' || { echo "--plan --next, running chunk: $out"; exit 1; }
+# A running chunk keeps its place under the top-level-directory cap: hooks/'s c1 runs, so only skills/'s c4 starts.
+printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"a1\",\"name\":\"PROJ-9-c1\",\"cwd\":\"/\"}]'" > "$tmp/bin/claude"
+out=$(run --plan "$pd/PROJ-9.md" --next | grep '^claude' | sed "s/ 'Session.*//")
+[ "$out" = 'claude --bg --model opus --effort medium -n PROJ-9-c4' ] || { echo "--plan --next, running chunk and the directory cap: $out"; exit 1; }
+# A listing that failed is said on stderr.
+printf '#!/bin/sh\necho junk\n' > "$tmp/bin/claude"
+[ "$(run --plan "$pd/PROJ-10.md" --next 2>&1 >/dev/null)" = "couldn't list an account's sessions: a running chunk may show as not running" ] ||
+  { echo "--plan --next, failed listing"; exit 1; }
+mv "$tmp/claude.saved" "$tmp/bin/claude"; rm "$tmp/.config/session-orchestration/config.json"
 echo ok
