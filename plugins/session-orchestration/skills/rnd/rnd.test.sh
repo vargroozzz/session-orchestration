@@ -171,6 +171,56 @@ grep -qx $'press\tattach\t1\t2026-09-01\t' <<<"$out" && grep -qx $'press\tcompac
   && grep -q $'^press\tcopy-command\t0\t'"$(date -u +%F)"$'\t$' <<<"$out" && grep -q $'^flag\t--peek\t.*[0-9-]\t$' <<<"$out" \
   && [ "$(wc -l < "$st/usage.jsonl" | tr -d ' ')" = 1 ] && [ -e "$st/inventory/$(date -u +%F).json" ] || fail "usage" "$out"
 
+# chunks and trial: chunk PROJ-1/1 in two sessions, the first compacted before it handed off (growth 20K, then 10K
+# after the compaction; the jump across it doesn't count, nor its summary as a step-in), with a /plug:code-review run
+# whose subagent's ReportFindings call has 2 findings, a human message, a `!` command and a merge; its successor
+# joins through Supersedes: (+5K). PROJ-2 is the off arm, one $5 session with a merge. Usage log: this chunk's line
+# (14:10) and an older build chunk for the ratio.
+cat > "$a/abcdef01-1111.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-12T13:00:00.000Z","message":{"content":"Session task: PROJ-1\nChunk: PROJ-1/1\nRead the brief."}}
+{"type":"assistant","timestamp":"2026-10-12T13:00:01.000Z","requestId":"m1","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10000},"content":[{"type":"tool_use","id":"m9","name":"Bash","input":{"command":"gh pr merge 31"}}]}}
+{"type":"user","timestamp":"2026-10-12T13:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m9","content":"merged"}]}}
+{"type":"assistant","timestamp":"2026-10-12T13:01:00.000Z","requestId":"m2","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":20000,"cache_creation_input_tokens":9990}}}
+{"type":"user","timestamp":"2026-10-12T13:02:00.000Z","message":{"content":"<command-name>/plug:code-review</command-name>"}}
+{"type":"user","timestamp":"2026-10-12T13:03:00.000Z","message":{"content":"also fix the tests"}}
+{"type":"user","timestamp":"2026-10-12T13:04:00.000Z","message":{"content":"<bash-input>git status</bash-input>"}}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-10-12T13:10:00.000Z"}
+{"type":"user","isCompactSummary":true,"timestamp":"2026-10-12T13:10:01.000Z","message":{"content":"This session is being continued from a previous conversation."}}
+{"type":"assistant","timestamp":"2026-10-12T13:11:00.000Z","requestId":"m3","message":{"model":"claude-opus-5-5","usage":{"input_tokens":50000}}}
+{"type":"assistant","timestamp":"2026-10-12T13:12:00.000Z","requestId":"m4","message":{"model":"claude-opus-5-5","usage":{"input_tokens":60000}}}
+EOF
+mkdir -p "$a/abcdef01-1111/subagents"
+cat > "$a/abcdef01-1111/subagents/agent-r.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-10-12T13:05:00.000Z","message":{"content":[{"type":"tool_use","id":"m8","name":"ReportFindings","input":{"findings":[{"file":"a"},{"file":"b"}]}}]}}
+EOF
+# A fork review that returns its finding as a JSON block in its last message.
+cat > "$a/abcdef01-1111/subagents/agent-s.jsonl" <<'EOF'
+{"type":"assistant","timestamp":"2026-10-12T13:06:00.000Z","message":{"content":[{"type":"text","text":"One finding.\n\n```json\n[{\"file\":\"c\",\"failure_scenario\":\"x\"}]\n```"}]}}
+EOF
+cat > "$a/nnnnnnnn-2222.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-12T13:30:00.000Z","message":{"content":"Work on PROJ-1: continue. Supersedes: abcdef01 (transcript x)"}}
+{"type":"assistant","timestamp":"2026-10-12T13:30:01.000Z","requestId":"n1","message":{"model":"claude-opus-5-5","usage":{"input_tokens":20000}}}
+{"type":"assistant","timestamp":"2026-10-12T14:00:00.000Z","requestId":"n2","message":{"model":"claude-opus-5-5","usage":{"input_tokens":25000}}}
+EOF
+cat > "$a/oooooooo-3333.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-12T15:00:00.000Z","message":{"content":"Session task: PROJ-2\nDo it."}}
+{"type":"assistant","timestamp":"2026-10-12T15:00:01.000Z","requestId":"o1","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000000},"content":[{"type":"tool_use","id":"o9","name":"Bash","input":{"command":"gh pr merge 41"}}]}}
+{"type":"user","timestamp":"2026-10-12T15:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"o9","content":"merged"}]}}
+EOF
+printf '%s\n' '{"t":1791814200,"k":"chunk","what":"build","model":"opus","effort":"medium","est":50,"act":35}' \
+  '{"t":1791795600,"k":"chunk","what":"build","model":"opus","effort":"medium","est":20,"act":20}' >> "$st/usage.jsonl"
+out=$(XDG_STATE_HOME=$tmp/state rnd chunks 7)
+[ "$(grep -v '^key' <<<"$out")" = $'PROJ-1\t1\tbuild/opus/medium\t50\t35\t60000\t20000\t0\t0.93\t6\t1\tafter\t60\nratio\tbuild\t0.85\tn=2' ] \
+  || fail "chunks: two sessions summed, the log line matched, handoff after a compaction, ratio" "$out"
+out=$(rnd chunks 7 --session nnnnnnnn)
+grep -q $'^-\tnnnnnnnn\t?/opus/?\t?\t5\t25000\t' <<<"$out" || fail "chunks --session: one session, no log" "$out"
+out=$(rnd trial 7)
+# The off arm also has the `Work on ABC-n` sessions above (ABC-1, ABC-9 with merge 11; kkkkkkkk has no requests).
+for m in $'tasks\t1\t3' $'units\t1\t2' $'usd_per_unit_median\t0.93\t3.12' $'usd_per_unit_total\t0.93\t' $'compacts_per_session\t0.5\t' \
+  $'handoffs_after\t1\t0' $'findings_per_unit\t3.0\t0.0' $'reviews_per_unit\t1.0\t0.0' $'stepins_per_unit\t2.0\t'; do
+  grep -q "^$m" <<<"$out" || fail "trial: $m" "$out"
+done
+
 printf '#!/bin/sh\necho "$@" > %q\n' "$tmp/claude.args" > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"
 out=$(HOME=$tmp RND_LOG=$tmp/log "$here/rnd-weekly" "$tmp" --dry-run)
 grep -q 'claude --bg -n rnd-weekly-' <<<"$out" && [ ! -e "$tmp/claude.args" ] || fail "rnd-weekly --dry-run starts nothing" "$out"

@@ -20,14 +20,21 @@ usage: python3 -I rnd.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args]
   usage [days=30]                 one row per plugin feature (pane button, tool, skill, doc, session-status flag,
                                   config key): uses in the window, first seen, `unused` when 0 uses all window;
                                   presses from the local usage log (telemetry=local), which it trims to 180 days
-  html IN.md OUT.html             Markdown report -> self-contained HTML
+  chunks [days=7] [--session PREFIX]  one row per chunk (first prompt `Chunk: KEY/N`, successors joined through
+                                  Supersedes: and summed) or per matching session: kind/model/effort, est, act growth
+                                  (K), peak, cache read, out, USD, turns, compactions, handoff (none|before|after a
+                                  compaction), minutes; then a `ratio` line per kind (median act/est, last 20)
+  trial [days=28]                 the planner trial's arms side by side (tasks with a chunk session vs the rest):
+                                  units, median USD and tokens per unit, peak, compactions, handoffs, /code-review
+                                  findings and runs per unit, step-ins per unit
+  html IN.md OUT.html            Markdown report -> self-contained HTML
 
 Transcripts: <account>/projects/*/*.jsonl for every account dir ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*),
 each distinct projects/ tree once (accounts that share one through a symlink are read once).
 The window is the `days` before --until (UTC, default now): rerun an old window with --until.
 Cost uses rough Opus-class list rates (USD/Mtok in, out, cache read, cache write), override via env RATES="in,out,cr,cw".
 """
-import glob, html, json, os, re, sys, time
+import glob, html, json, os, re, statistics, sys, time
 from datetime import datetime, timezone
 
 R_IN, R_OUT, R_CR, R_CW = map(float, os.environ.get("RATES", "5,25,0.5,10").split(","))
@@ -188,14 +195,28 @@ def events(days=7):
                     if name == "Bash":
                         row("bash", inp.get("command", ""), pd.get("reasonType") or pd.get("source") or "")
                 txt = c if isinstance(c, str) else " ".join(b.get("text", "") for b in blocks if b.get("type") == "text")
-                if "cross-session-message" in txt:
+                k = said(o, txt)
+                if k == "xmsg":
                     mm = re.search(r"<cross-session-message[^>]*>", txt)
                     row("xmsg", mm.group(0) if mm else "", txt[mm.end():][:200] if mm else "")
-                elif "<bash-input>" in txt:
-                    for cmd in re.findall(r"<bash-input>([\s\S]*?)</bash-input>", txt):
+                elif k == "ran":
+                    for cmd in RAN.findall(txt):
                         row("ran", cmd.strip())
-                elif txt and not o.get("toolUseResult") and not txt.startswith("<") and not o.get("isMeta"):
+                elif k == "human":
                     row("human", txt)
+
+
+RAN = re.compile(r"<bash-input>([\s\S]*?)</bash-input>")
+
+
+def said(o, txt):
+    """What a user line's text is: xmsg (another session), ran (the user's `!` commands), human, or ''."""
+    if "cross-session-message" in txt:
+        return "xmsg"
+    if "<bash-input>" in txt:
+        return "ran"
+    return "human" if txt and not o.get("toolUseResult") and not txt.startswith("<") and not o.get("isMeta") \
+        and not o.get("isCompactSummary") else ""
 
 
 def headless(f):
@@ -281,42 +302,240 @@ def units(days=7, *opts):
     for f in transcripts():
         if not proj.search(os.path.basename(os.path.dirname(f))):
             continue
-        sid, uses, name, first = os.path.basename(f)[:8], {}, "", ""
+        sid = os.path.basename(f)[:8]
         cost = sum(usd(u.get("input_tokens", 0), u.get("output_tokens", 0), u.get("cache_read_input_tokens", 0),
                        u.get("cache_creation_input_tokens", 0)) for _, _, u in requests(f))
         total += cost
-        for _, o in lines(f):
-            ts = o.get("timestamp") or ""
-            name = o.get("agentName") or name
-            c = (o.get("message") or {}).get("content")
-            if not first and o.get("type") == "user" and isinstance(c, str) and not c.startswith("<"):
-                first = c[:200]
-            # Only the conversation's own rows: an api-request-blob repeats a call with no timestamp.
-            if out_of(ts) or o.get("isSidechain") or o.get("type") not in ("user", "assistant"):
-                continue
-            for b in c if isinstance(c, list) else []:
-                if b.get("type") == "tool_use" and b.get("name") == "Bash":
-                    uses[b.get("id")] = (ts, (b.get("input") or {}).get("command", ""))
-                if b.get("type") != "tool_result" or b.get("tool_use_id") not in uses:
-                    continue
-                ts, cmd = uses.pop(b["tool_use_id"])  # a result line may carry no timestamp: the call's
-                if b.get("is_error") or (o.get("permissionDecision") or {}).get("decision") == "reject" or "--help" in cmd:
-                    continue
-                repo = re.search(r"(?:--repo|-R)[ =](\S+)", cmd)
-                for k, r in rx.items():
-                    if k == "post" and not re.search("review", name + first, re.I):
-                        continue
-                    for uid in r.findall(cmd):
-                        uid = f"{repo.group(1)}#{uid}" if repo and k != "done" else uid  # PR numbers repeat across repos
-                        key = (k, uid, sid) if k == "post" else (k, uid)  # a later review round is another post
-                        if key not in found:
-                            found[key] = sid
-                            print("\t".join([k, uid, sid, ts[:16], clip(cmd, 120)]))
-        if re.search("review", name + first, re.I):
+        hits, is_review = unit_hits(f, rx)
+        for key, ts, cmd in hits:
+            if key not in found:
+                found[key] = sid
+                print("\t".join([key[0], key[1], sid, ts[:16], clip(cmd, 120)]))
+        if is_review:
             review += cost
     n = {k: sum(1 for key in found if key[0] == k) for k in UNITS}
     per = lambda k, v: f"{k}={v} per_{k}={(review if k == 'post' else total) / v:.1f}" if v else f"{k}=0"
     print(f"usd={total:.0f} review_usd={review:.1f} " + " ".join(per(k, v) for k, v in n.items()), file=sys.stderr)
+
+
+def unit_hits(f, rx):
+    """A transcript's units whose command ran: ([(key, ts, command)], whether it's a review session). key is
+    (kind, id), or (kind, id, session) for a post."""
+    sid, uses, name, first, hits = os.path.basename(f)[:8], {}, "", "", []
+    for _, o in lines(f):
+        ts = o.get("timestamp") or ""
+        name = o.get("agentName") or name
+        c = (o.get("message") or {}).get("content")
+        if not first and o.get("type") == "user" and isinstance(c, str) and not c.startswith("<"):
+            first = c[:200]
+        # Only the conversation's own rows: an api-request-blob repeats a call with no timestamp.
+        if out_of(ts) or o.get("isSidechain") or o.get("type") not in ("user", "assistant"):
+            continue
+        for b in c if isinstance(c, list) else []:
+            if b.get("type") == "tool_use" and b.get("name") == "Bash":
+                uses[b.get("id")] = (ts, (b.get("input") or {}).get("command", ""))
+            if b.get("type") != "tool_result" or b.get("tool_use_id") not in uses:
+                continue
+            ts, cmd = uses.pop(b["tool_use_id"])  # a result line may carry no timestamp: the call's
+            if b.get("is_error") or (o.get("permissionDecision") or {}).get("decision") == "reject" or "--help" in cmd:
+                continue
+            repo = re.search(r"(?:--repo|-R)[ =](\S+)", cmd)
+            for k, r in rx.items():
+                if k == "post" and not re.search("review", name + first, re.I):
+                    continue
+                for uid in r.findall(cmd):
+                    uid = f"{repo.group(1)}#{uid}" if repo and k != "done" else uid  # PR numbers repeat across repos
+                    hits.append(((k, uid, sid) if k == "post" else (k, uid), ts, cmd))  # a later review round is another post
+    return hits, bool(re.search("review", name + first, re.I))
+
+
+SUP = re.compile(r"(?:Supersedes: |[Yy]ou replace (?:session )?)([0-9a-f]{8})")
+
+
+def stat(f):
+    """One session's numbers inside the window, for chunks and trial. growth: the sum of context increases between
+    requests (each message id once), not counting a session's first request or the one after a compaction."""
+    s = dict(sid=os.path.basename(f)[:8], first="", ts0="", ts1="", growth=0, peak=0, inp=0, out=0, cr=0, cw=0,
+             turns=0, comp=0, models={}, findings=0, reviews=0, steps=0)
+    seen, prev = set(), None
+    for _, o in lines(f):
+        ts, t = o.get("timestamp") or "", o.get("type")
+        m = o.get("message") or {}
+        c = m.get("content")
+        blocks = c if isinstance(c, list) else []
+        txt = c if isinstance(c, str) else " ".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        if t == "user" and not s["first"] and not o.get("isSidechain") and said(o, txt) == "human":
+            s["first"], s["ts0"] = txt, ts  # the brief, even before the window (it holds the markers); not a step-in
+            continue
+        if out_of(ts) or o.get("isSidechain"):
+            continue
+        if t == "system" and o.get("subtype") == "compact_boundary":
+            s["comp"] += 1
+            prev = None
+        if t == "assistant":
+            rid = m.get("id") or o.get("requestId")
+            if rid and rid not in seen:
+                seen.add(rid)
+                u = m.get("usage") or {}
+                ctx = u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+                s["growth"] += max(0, ctx - prev) if prev is not None else 0
+                prev = ctx
+                s["peak"] = max(s["peak"], ctx)
+                s["inp"] += u.get("input_tokens", 0); s["out"] += u.get("output_tokens", 0)
+                s["cr"] += u.get("cache_read_input_tokens", 0); s["cw"] += u.get("cache_creation_input_tokens", 0)
+                s["turns"] += 1
+                s["ts1"] = max(s["ts1"], ts)
+                mod = re.search(r"opus|sonnet|haiku|fable", str(m.get("model")))
+                if mod:
+                    s["models"][mod.group(0)] = s["models"].get(mod.group(0), 0) + 1
+            for b in blocks:
+                if b.get("type") == "tool_use" and b.get("name") == "ReportFindings":
+                    s["findings"] += len((b.get("input") or {}).get("findings") or [])
+                if b.get("type") == "tool_use" and b.get("name") == "Skill" and \
+                        str((b.get("input") or {}).get("skill", "")).split(":")[-1] == "code-review":
+                    s["reviews"] += 1
+        if t == "user":
+            s["reviews"] += len(re.findall(r"<command-name>/?(?:[\w-]+:)?code-review</command-name>", txt))
+            k = said(o, txt)
+            if k == "ran":
+                s["steps"] += len(RAN.findall(txt))
+            elif k == "human":
+                s["steps"] += 1
+    if not seen:
+        return None
+    # /code-review runs in a subagent (the session's subagents/ transcripts): it reports through ReportFindings, or as
+    # a ```json list of findings (each with a failure_scenario) in its last message.
+    for sub in glob.glob(f"{f[:-6]}/subagents/*.jsonl"):
+        last = ""
+        for _, o in lines(sub):
+            if o.get("type") == "assistant" and not out_of(o.get("timestamp") or ""):
+                for b in (o.get("message") or {}).get("content") or []:
+                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "ReportFindings":
+                        s["findings"] += len((b.get("input") or {}).get("findings") or [])
+                    if isinstance(b, dict) and b.get("type") == "text":
+                        last = b.get("text", "")
+        for block in re.findall(r"```json\s*(\[[\s\S]*?\])\s*```", last):
+            try:
+                s["findings"] += sum(1 for x in json.loads(block) if isinstance(x, dict) and "failure_scenario" in x)
+            except ValueError:
+                pass
+    mark = lambda rx: (re.search(rx, s["first"], re.M) or [None, ""])[1]
+    # A key: `Session task: KEY` (trailing punctuation dropped), or a brief starting `Work on PROJ-123`.
+    s.update(task=mark(r"^Session task: ([\w./-]*\w)") or mark(r"^Work on ([A-Za-z][\w]*-\d+)\b"), chunk=mark(r"^Chunk: (\S+)"), sup=mark(SUP.pattern),
+             model=max(s["models"], key=s["models"].get, default="?"), usd=usd(s["inp"], s["out"], s["cr"], s["cw"]))
+    s["ts0"] = s["ts0"] or s["ts1"]
+    return s
+
+
+def stats():
+    """Every session's stat in the window, by 8-char id, with `task` and `chunk` carried to successors (Supersedes:)
+    and `handoff` set on a predecessor: after (it was compacted first) or before."""
+    ss = {}
+    for f in transcripts():
+        s = stat(f)
+        if s:
+            ss[s["sid"]] = s
+    for s in sorted(ss.values(), key=lambda s: s["ts0"]):  # a predecessor starts first, so it's resolved first
+        p = ss.get(s["sup"])
+        if p:
+            s["task"], s["chunk"] = s["task"] or p["task"], s["chunk"] or p["chunk"]
+            p["handoff"] = "after" if p["comp"] else "before"
+    return ss
+
+
+def chunk_lines():
+    """The usage log's chunk lines (lib.sh usage): [{t, what, model, effort, est, act}], up to the window's end."""
+    log = os.path.join(STATE, "usage.jsonl")
+    if not os.path.exists(log):
+        return []
+    return sorted((o for _, o in lines(log) if isinstance(o, dict) and o.get("k") == "chunk"
+                   and isinstance(o.get("t"), (int, float)) and o["t"] <= END), key=lambda o: o["t"])
+
+
+def chunks(days=7, *opts):
+    """One row per chunk (sessions whose first prompt has `Chunk: KEY/N`, successors joined through Supersedes: and
+    summed), or per session matching --session PREFIX. Kind, effort and est come from the usage log's chunk line
+    when one matches, else `?`. Then a `ratio` line per kind: the median act/est over its last 20 chunk lines."""
+    if str(days).startswith("--"):
+        days, opts = 7, (days,) + opts
+    window(days)
+    o_ = dict(zip(opts[::2], opts[1::2]))
+    if "--session" in o_:
+        groups = {}
+        for f in transcripts():
+            s = os.path.basename(f).startswith(o_["--session"]) and stat(f)
+            if s:
+                s["chunk"] = s["chunk"] or s["sid"]
+                groups[s["sid"]] = [s]
+    else:
+        groups = {}
+        for s in stats().values():
+            if s["chunk"]:
+                groups.setdefault(s["chunk"], []).append(s)
+    logged = chunk_lines()
+    epoch = lambda ts: P(ts).timestamp()
+    print("key\tchunk\tkind/model/effort\test\tact_K\tpeak\tcache_read\tout\tusd\tturns\tcompacts\thandoff\tminutes")
+    for name, g in sorted(groups.items(), key=lambda kv: min(s["ts0"] for s in kv[1])):
+        t0, t1 = min(s["ts0"] for s in g), max(s["ts1"] for s in g)
+        act = sum(s["growth"] for s in g) / 1000
+        # ponytail: a log line carries no key, so it's matched by time (from the chunk's start to an hour after its
+        # last request) and then by the closest act; parallel chunks of the same size could swap. Add the key if so.
+        near = [o for o in logged if epoch(t0) <= o["t"] <= epoch(t1) + 3600]
+        hit = min(near, key=lambda o: abs((o.get("act") or 0) - act), default={})
+        if hit:
+            logged.remove(hit)
+        key, _, n = name.rpartition("/")
+        print("\t".join(map(str, [key or "-", n, f"{hit.get('what', '?')}/{g[0]['model']}/{hit.get('effort', '?')}",
+                                  hit.get("est", "?"), round(act), max(s["peak"] for s in g), sum(s["cr"] for s in g),
+                                  sum(s["out"] for s in g), round(sum(s["usd"] for s in g), 2), sum(s["turns"] for s in g),
+                                  sum(s["comp"] for s in g), ",".join(s["handoff"] for s in g if s.get("handoff")) or "none",
+                                  round((epoch(t1) - epoch(t0)) / 60)])))
+    by = {}
+    for o in chunk_lines():
+        if o.get("est") and isinstance(o.get("act"), (int, float)):
+            by.setdefault(o.get("what", "?"), []).append(o["act"] / o["est"])
+    for kind, rs in sorted(by.items()):
+        print(f"ratio\t{kind}\t{statistics.median(rs[-20:]):.2f}\tn={len(rs[-20:])}")
+
+
+def trial(days=28):
+    """The planner trial's two arms side by side: tasks (`Session task:` KEY, successors joined) with any chunk
+    session, and the rest. Per arm: finished units (merges, finished tickets, as `units`), median USD per unit (per
+    task), tokens per unit, median peak, compactions per session, handoffs before/after a compaction, /code-review
+    findings (ReportFindings) and runs per unit, and step-ins (human messages after the brief, `!` commands) per unit.
+    ponytail: changed lines per unit, reverted commits and an external reviewer's findings per PR need the code host
+    or the adapter, not transcripts: chunk 3b."""
+    window(days)
+    ss = stats()
+    files = {os.path.basename(f)[:8]: f for f in transcripts()}
+    rx = {k: re.compile(v) for k, v in UNITS.items() if k != "post"}
+    tasks = {}
+    for s in ss.values():
+        if s["task"]:
+            tasks.setdefault(s["task"], []).append(s)
+    arms = {"planner": {}, "off": {}}
+    for key, g in tasks.items():
+        found = {k for s in g for k, _, _ in unit_hits(files[s["sid"]], rx)[0]}
+        arms["planner" if any(s["chunk"] for s in g) else "off"][key] = (g, len(found))
+    med = lambda xs: statistics.median(xs) if xs else 0
+    rows = []
+    for arm, ts in arms.items():
+        ses = [s for g, _ in ts.values() for s in g]
+        n = sum(u for _, u in ts.values())
+        per = lambda v: round(v / n, 2) if n else "-"
+        tot = lambda k: sum(s[k] for s in ses)
+        hand = [s.get("handoff") for s in ses]
+        # The median is over tasks that finished something; the total also charges unfinished tasks' cost.
+        rows.append([len(ts), len(ses), n, round(med([sum(s["usd"] for s in g) / u for g, u in ts.values() if u]), 2),
+                     per(tot("usd")), per(tot("out")), per(tot("cr")), per(tot("cw")), med([s["peak"] for s in ses]),
+                     round(tot("comp") / len(ses), 2) if ses else "-", hand.count("before"), hand.count("after"),
+                     per(tot("findings")), per(tot("reviews")), per(tot("steps"))])
+    print("measure\tplanner\toff")
+    names = ["tasks", "sessions", "units", "usd_per_unit_median", "usd_per_unit_total", "out_per_unit", "cache_read_per_unit",
+             "cache_write_per_unit", "peak_median", "compacts_per_session", "handoffs_before", "handoffs_after",
+             "findings_per_unit", "reviews_per_unit", "stepins_per_unit"]
+    for i, m in enumerate(names):
+        print(f"{m}\t{rows[0][i]}\t{rows[1][i]}")
 
 
 def waits(days=7, min_minutes=5):
@@ -690,7 +909,7 @@ def usage(days=30):
 
 
 CMDS = {"sessions": sessions, "events": events, "context": context, "units": units, "waits": waits, "bgtasks": bgtasks, "replies": replies,
-        "triggers": triggers, "usage": usage, "html": md2html}
+        "triggers": triggers, "usage": usage, "chunks": chunks, "trial": trial, "html": md2html}
 
 if __name__ == "__main__":
     a = sys.argv[1:]
