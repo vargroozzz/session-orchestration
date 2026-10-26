@@ -213,13 +213,35 @@ out=$(XDG_STATE_HOME=$tmp/state rnd chunks 7)
 [ "$(grep -v '^key' <<<"$out")" = $'PROJ-1\t1\tbuild/opus/medium\t50\t35\t60000\t20000\t0\t0.93\t6\t1\tafter\t60\nratio\tbuild\t0.85\tn=2' ] \
   || fail "chunks: two sessions summed, the log line matched, handoff after a compaction, ratio" "$out"
 out=$(rnd chunks 7 --session nnnnnnnn)
-grep -q $'^-\tnnnnnnnn\t?/opus/?\t?\t5\t25000\t' <<<"$out" || fail "chunks --session: one session, no log" "$out"
+grep -q $'^-\tnnnnnnnn\t?/opus/?\t?\t35\t60000\t' <<<"$out" || fail "chunks --session: summed over its Supersedes: chain, no log" "$out"
 out=$(rnd trial 7)
 # The off arm also has the `Work on ABC-n` sessions above (ABC-1, ABC-9 with merge 11; kkkkkkkk has no requests).
 for m in $'tasks\t1\t3' $'units\t1\t2' $'usd_per_unit_median\t0.93\t3.12' $'usd_per_unit_total\t0.93\t' $'compacts_per_session\t0.5\t' \
   $'handoffs_after\t1\t0' $'findings_per_unit\t3.0\t0.0' $'reviews_per_unit\t1.0\t0.0' $'stepins_per_unit\t2.0\t'; do
   grep -q "^$m" <<<"$out" || fail "trial: $m" "$out"
 done
+
+# chunks joins a log line by the t the session's own `--plan --done` printed: PROJ-3/1 (growth 10K) printed A, PROJ-3/2
+# (30K, starting inside c1's time window) printed B and quoted A in another tool result. By time and closest act,
+# c1 would take B (act 10).
+cat > "$a/pppppppp-1111.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-12T16:00:00.000Z","message":{"content":"Session task: PROJ-3\nChunk: PROJ-3/1\nGo."}}
+{"type":"assistant","timestamp":"2026-10-12T16:00:01.000Z","requestId":"p1","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10000}}}
+{"type":"assistant","timestamp":"2026-10-12T16:10:00.000Z","requestId":"p2","message":{"model":"claude-opus-5-5","usage":{"input_tokens":20000},"content":[{"type":"tool_use","id":"pd","name":"Bash","input":{"command":"session-status --plan R/PROJ-3.md --done 1"}}]}}
+{"type":"user","timestamp":"2026-10-12T16:10:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"pd","content":"{\"t\":1791821400,\"k\":\"chunk\",\"what\":\"scan\",\"model\":\"opus\",\"effort\":\"low\",\"est\":11,\"act\":30}"}]}}
+EOF
+cat > "$a/qqqqqqqq-1111.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-12T16:20:00.000Z","message":{"content":"Session task: PROJ-3\nChunk: PROJ-3/2\nGo."}}
+{"type":"assistant","timestamp":"2026-10-12T16:20:01.000Z","requestId":"q1","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10000},"content":[{"type":"tool_use","id":"qc","name":"Bash","input":{"command":"cat R/PROJ-3-build.md"}}]}}
+{"type":"user","timestamp":"2026-10-12T16:20:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"qc","content":"{\"t\":1791821400,\"k\":\"chunk\",\"what\":\"scan\"}"}]}}
+{"type":"assistant","timestamp":"2026-10-12T16:30:00.000Z","requestId":"q2","message":{"model":"claude-opus-5-5","usage":{"input_tokens":40000},"content":[{"type":"tool_use","id":"qd","name":"Bash","input":{"command":"session-status --plan R/PROJ-3.md --done 2"}}]}}
+{"type":"user","timestamp":"2026-10-12T16:30:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"qd","content":[{"type":"text","text":"{\"t\":1791822600,\"k\":\"chunk\",\"what\":\"scan\",\"model\":\"opus\",\"effort\":\"low\",\"est\":22,\"act\":10}"}]}]}}
+EOF
+printf '%s\n' '{"t":1791821400,"k":"chunk","what":"scan","model":"opus","effort":"low","est":11,"act":30}' \
+  '{"t":1791822600,"k":"chunk","what":"scan","model":"opus","effort":"low","est":22,"act":10}' >> "$st/usage.jsonl"
+out=$(XDG_STATE_HOME=$tmp/state rnd chunks 7)
+grep -q $'^PROJ-3\t1\tscan/opus/low\t11\t10\t' <<<"$out" && grep -q $'^PROJ-3\t2\tscan/opus/low\t22\t30\t' <<<"$out" ||
+  fail "chunks: each log line on the chunk whose --done printed it" "$out"
 
 printf '#!/bin/sh\necho "$@" > %q\n' "$tmp/claude.args" > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"
 out=$(HOME=$tmp RND_LOG=$tmp/log "$here/rnd-weekly" "$tmp" --dry-run)

@@ -13,7 +13,8 @@
 # - Past at: one additionalContext (reach the stop point, write the handoff, tell the coordinator, end the turn);
 #   past hard: one more (stop now). A window other than compact.window adds one line to the first one.
 # - SessionStart after a compaction, chunk sessions only: write the handoff from what's on disk and stop. A
-#   compaction or resume also clears the stamps (a resume may bring another window: the thresholds too).
+#   compaction or resume also clears the stamps (a resume may bring another window: the thresholds too, and the
+#   compacted-mid-chunk stamp).
 # Subagents' tool calls (agent_id set) are skipped: they carry the parent's transcript.
 # Stamps: ${XDG_CACHE_HOME:-~/.cache}/session-status/handoff-<sid>.<level>; .kind caches the kind and thresholds.
 # ponytail: thresholds cached per session at its first firing; a config change reaches the next session.
@@ -25,7 +26,7 @@ here=$(cd "$(dirname "$0")" && pwd); input=$(cat)
 d=${XDG_CACHE_HOME:-$HOME/.cache}/session-status; s=$d/handoff-$sid
 claim() { (set -C; : > "$1") 2>/dev/null; }   # atomic: parallel tool calls fire the hook at once
 if [ "$ev" = SessionStart ]; then
-  rm -f "$s.soft" "$s.hard" "$s.noted"; [ "$src" = compact ] || { rm -f "$s.kind"; exit 0; }
+  rm -f "$s.soft" "$s.hard" "$s.noted"; [ "$src" = compact ] || { rm -f "$s.kind" "$s.compact"; exit 0; }
   [ -e "$s.compact" ] && exit 0
 elif [ -e "$s.hard" ]; then exit 0
 fi
@@ -71,14 +72,15 @@ say() {
   [ -e "$s.noted" ] || { [ -z "$note" ] || set -- "$1 $note"; touch "$s.noted"; }
   jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName: $e, additionalContext: $m}}'
 }
-texts() {   # where the handoff goes, whom to tell, and (chunk and task) the self-handover
+texts() {   # where the handoff goes, the -prev-K rename, whom to tell, and (chunk and task) the self-handover
+  printf -v ss %q "${here%/hooks}/skills/orchestrating-sessions/session-status"
+  local rn=" Rename yourself: call name_session with the name \`$ss --prev-name\` prints (your successor takes your name)."
   case $kind in
     chunk) where="\`## c$n: handoff\` appended to $key-build.md in the replies folder"
-           tell=" Message the coordinator \"handoff ready: $key c$n\"." ;;
-    task) where="\`## Handoff\` in your replies file"; tell=" Message the coordinator \"handoff ready: $key\"." ;;
+           tell="$rn Message the coordinator \"handoff ready: $key c$n\"." ;;
+    task) where="\`## Handoff\` in your replies file"; tell="$rn Message the coordinator \"handoff ready: $key\"." ;;
     *) where="the handover file your coordinator doc names"; tell= ;;
   esac
-  printf -v ss %q "${here%/hooks}/skills/orchestrating-sessions/session-status"
   case $kind in chunk|task) selfh=" If no coordinator is running (\`$ss --coordinator\` prints nothing), finish with \`$ss --handover --self -- '<next step>'\`." ;; *) selfh= ;; esac
 }
 if [ "$ev" = SessionStart ]; then
@@ -93,10 +95,13 @@ fi
 # Subagent (sidechain) lines and all-zero usage (a synthetic or failed reply) don't count.
 # The same pass tests a task session's tail against coord_re (lib.sh: session-status's definition): a match makes it
 # a coordinator from then on, `Session task:` line or not, with its own at and text. Each extra process costs ~10 ms.
-scan() { LC_ALL=C grep -E "\"usage\":${re:+|$re}" | jq -Rrn --arg re "$re" '[inputs] | (if $re != "" and any(.[]; test($re))
-  then "coordinator" else "-" end) + " " + ([.[] | fromjson? | select(.type == "assistant" and (.isSidechain | not))
+# A compact_boundary resets it: a manual /compact writes no assistant line before the next prompt, so the usage
+# before it is stale (none after it: no ctx yet).
+scan() { LC_ALL=C grep -E "\"usage\":|compact_boundary${re:+|$re}" | jq -Rrn --arg re "$re" '[inputs] | (if $re != "" and any(.[]; test($re))
+  then "coordinator" else "-" end) + " " + ([.[] | fromjson? | if .type == "system" and .subtype == "compact_boundary" then -1
+  else select(.type == "assistant" and (.isSidechain | not))
   | .message.usage // empty | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)
-  | select(. > 0)] | last // "" | tostring)' 2>/dev/null; }
+  | select(. > 0) end] | reduce .[] as $x (""; if $x < 0 then "" else $x end) | tostring)' 2>/dev/null; }
 out=$(tail -c 262144 "$tp" | scan); ctx=${out#* }
 [ -n "$ctx" ] || { ctx=$(tail -n 300 "$tp" | scan); ctx=${ctx#* }; }
 if [ "${out%% *}" = coordinator ]; then kind=coordinator key=- n= re=; rm -f "$s.soft"; thresholds; fi

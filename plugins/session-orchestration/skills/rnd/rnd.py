@@ -356,8 +356,8 @@ def stat(f):
     """One session's numbers inside the window, for chunks and trial. growth: the sum of context increases between
     requests (each message id once), not counting a session's first request or the one after a compaction."""
     s = dict(sid=os.path.basename(f)[:8], first="", ts0="", ts1="", growth=0, peak=0, inp=0, out=0, cr=0, cw=0,
-             turns=0, comp=0, models={}, findings=0, reviews=0, steps=0)
-    seen, prev = set(), None
+             turns=0, comp=0, models={}, findings=0, reviews=0, steps=0, done_t=set())
+    seen, prev, done_ids = set(), None, set()
     for _, o in lines(f):
         ts, t = o.get("timestamp") or "", o.get("type")
         m = o.get("message") or {}
@@ -389,12 +389,20 @@ def stat(f):
                 if mod:
                     s["models"][mod.group(0)] = s["models"].get(mod.group(0), 0) + 1
             for b in blocks:
+                cmd = str((b.get("input") or {}).get("command", "")) if b.get("type") == "tool_use" and b.get("name") == "Bash" else ""
+                if "--plan" in cmd and "--done" in cmd:
+                    done_ids.add(b.get("id"))
                 if b.get("type") == "tool_use" and b.get("name") == "ReportFindings":
                     s["findings"] += len((b.get("input") or {}).get("findings") or [])
                 if b.get("type") == "tool_use" and b.get("name") == "Skill" and \
                         str((b.get("input") or {}).get("skill", "")).split(":")[-1] == "code-review":
                     s["reviews"] += 1
         if t == "user":
+            for b in blocks:   # the chunk line this session's own `--plan --done` printed: its t joins it to the log
+                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in done_ids:
+                    r = b.get("content")
+                    r = r if isinstance(r, str) else " ".join(x.get("text", "") for x in r or [] if isinstance(x, dict))
+                    s["done_t"].update(int(x) for x in re.findall(r'\{"t":(\d+),"k":"chunk"', r))
             s["reviews"] += len(re.findall(r"<command-name>/?(?:[\w-]+:)?code-review</command-name>", txt))
             k = said(o, txt)
             if k == "ran":
@@ -460,30 +468,40 @@ def chunks(days=7, *opts):
         days, opts = 7, (days,) + opts
     window(days)
     o_ = dict(zip(opts[::2], opts[1::2]))
-    if "--session" in o_:
-        groups = {}
-        for f in transcripts():
+    if "--session" in o_:   # the session and the predecessors its Supersedes: chain reaches (a handed-over chunk)
+        groups, files = {}, {os.path.basename(f)[:8]: f for f in transcripts()}
+        for f in files.values():
             s = os.path.basename(f).startswith(o_["--session"]) and stat(f)
             if s:
-                s["chunk"] = s["chunk"] or s["sid"]
-                groups[s["sid"]] = [s]
+                g = [s]
+                while g[0]["sup"] in files and len(g) < 50:
+                    p = stat(files[g[0]["sup"]])
+                    if not p:
+                        break
+                    g.insert(0, p)
+                groups[s["sid"]] = g
     else:
         groups = {}
         for s in stats().values():
             if s["chunk"]:
                 groups.setdefault(s["chunk"], []).append(s)
     logged = chunk_lines()
+    own = set().union(*(s["done_t"] for g in groups.values() for s in g))
+    pool = [o for o in logged if o["t"] not in own]   # the time match below is for sessions without their own --done
     epoch = lambda ts: P(ts).timestamp()
     print("key\tchunk\tkind/model/effort\test\tact_K\tpeak\tcache_read\tout\tusd\tturns\tcompacts\thandoff\tminutes")
     for name, g in sorted(groups.items(), key=lambda kv: min(s["ts0"] for s in kv[1])):
         t0, t1 = min(s["ts0"] for s in g), max(s["ts1"] for s in g)
         act = sum(s["growth"] for s in g) / 1000
-        # ponytail: a log line carries no key, so it's matched by time (from the chunk's start to an hour after its
-        # last request) and then by the closest act; parallel chunks of the same size could swap. Add the key if so.
-        near = [o for o in logged if epoch(t0) <= o["t"] <= epoch(t1) + 3600]
-        hit = min(near, key=lambda o: abs((o.get("act") or 0) - act), default={})
-        if hit:
-            logged.remove(hit)
+        # The line the chunk's own `--plan --done` printed (its t), else, for one that ran none, by time (from the chunk's
+        # start to an hour after its last request) and then by the closest act among lines no session printed.
+        ts = set().union(*(s["done_t"] for s in g))
+        hit = next((o for o in reversed(logged) if o["t"] in ts), None)
+        if not hit:
+            near = [o for o in pool if epoch(t0) <= o["t"] <= epoch(t1) + 3600]
+            hit = min(near, key=lambda o: abs((o.get("act") or 0) - act), default={})
+            if hit:
+                pool.remove(hit)
         key, _, n = name.rpartition("/")
         print("\t".join(map(str, [key or "-", n, f"{hit.get('what', '?')}/{g[0]['model']}/{hit.get('effort', '?')}",
                                   hit.get("est", "?"), round(act), max(s["peak"] for s in g), sum(s["cr"] for s in g),

@@ -154,6 +154,9 @@ detect_host() {
 #   handoff.stop_room   integer tokens: room left under the compaction ceiling (person only)   default 15000
 #   compact.window      integer tokens: the autoCompactWindow sessions are expected to have (person only)
 #                                                                       default 220000
+# model_ok MODEL [EFFORT]: a model name the CLI takes, never fable, and an effort it takes. One rule for config
+# plan.models, --plan (its Python copy: okme) and --handover.
+model_ok() { [[ $1 =~ ^[a-z][a-z0-9.-]*$ && $1 != *fable* ]] && { [ $# = 1 ] || [[ $2 =~ ^(low|medium|high|xhigh|max)$ ]]; }; }
 config() {
   local key=${1:-} v ok=
   case $key in
@@ -177,7 +180,7 @@ config() {
     feedback.mode) case $v in auto|pr|fork-pr|issue|local) ok=1 ;; esac ;;
     telemetry) case $v in local|off) ok=1 ;; esac ;;
     plan.max_parallel) [[ $v =~ ^[1-9][0-9]{0,2}$ ]] && ok=1 ;;
-    plan.models.*) [[ $v =~ ^[a-z][a-z0-9.-]*/(low|medium|high|xhigh|max)$ && $v != fable* ]] && ok=1 ;;
+    plan.models.*) [[ $v == */* ]] && model_ok "${v%%/*}" "${v#*/}" && ok=1 ;;
     handoff.*|compact.window) [[ $v =~ ^(0|[1-9][0-9]{0,6})$ ]] && ok=1 ;;
     feedback.repo_dir) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [ -d "$v" ] && ok=1 ;;
   esac

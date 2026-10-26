@@ -419,14 +419,22 @@ A multi-step task becomes chunks run by separate sessions, so none outgrows its 
 
 1. **Split.** One chunk per step with a done-when, an est and a clean stop point (everything committed, nothing running).
    The est is growth in context, kept within `handoff.at.chunk` − ~60K; a chunk with more than 3 separate pieces is split.
+   Size classes: S ≤ 22K, M ≤ 43K, L ≤ 65K.
 2. **Write the plan** as a table under `## Plan` in `<replies>/PROJ-123.md`, and run `session-status --plan FILE --check`.
    Write one brief per chunk, `<replies>/PROJ-123-cN.md`, from `--plan FILE --brief N`, plus a shared
    `PROJ-123-chunk-rules.md` (paths, setup, interface, checks, landing by fast-forward). Keep plans in the replies folder.
 3. **Start** what `--plan FILE --next` prints. It stops at `plan.max_parallel` (2 when chunks share a top-level
    directory) and re-lists a chunk you started until its `## cN: done` lands: don't start it twice (`-n PROJ-123-cN`).
+   With `plan.enabled: false` it starts nothing and says so: run the task without a plan.
+   **While the planner is evaluated**, odd task starts get a plan and even ones run as before, with `plan: off` in the
+   brief (`rnd.py trial` compares the two).
 4. **Models** by kind, from `plan.models` (`default` in the table); never `fable`.
 5. **A `handoff ready: PROJ-123 cN` message**: `session-status --handover <id> --model M --effort E -- '<next step>'`. A
-   chunk that has `## cN: done` gets no resume.
+   chunk that has `## cN: done` gets no resume. **A `handoff ready: PROJ-123` message** (a task):
+   `session-status --handover <id> -- '<next step>'`, the next step from `## Handoff` in its replies file. The old
+   session renames itself `NAME-prev-K` before it ends its turn (`session-status --prev-name`), and the successor
+   takes the plain name: a `-prev-K` name is a finished predecessor, so message and attach the plain one. When
+   `--handover` says the old session wasn't renamed, two sessions share the name until it is.
 6. **Recalibrate** with `rnd.py chunks` (its ratio line, act against est) and size the next ests by it.
 
 ## Propose first, or start at once

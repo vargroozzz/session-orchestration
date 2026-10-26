@@ -103,6 +103,8 @@
 #                       big to resume is stopped and a fresh one takes its task over, under its name, from the replies
 #                       folder's KEY.md (a chunk: KEY-build.md's handoff); --self, a session hands itself over when no
 #                       coordinator runs (see the block)
+#        session-status --prev-name [NAME]   NAME-prev-K, the name a session renames itself to when it hands off: K the
+#                       lowest free number over every listed session name (NAME: the caller's own)
 #        session-status --init [--check | --write …]   set this folder up for coordination: the setting-up-coordination
 #                       skill's session-init documents the modes; runs in the cwd, not the root
 #        session-status --config KEY   a config value (lib.sh at the plugin root lists the keys), e.g. approvals.delegate
@@ -123,16 +125,32 @@ set -uo pipefail
 [ "${1:-}" = --init ] && { shift; exec bash "$(dirname "$0")/../setting-up-coordination/session-init" "$@"; }
 . "$(dirname "$0")/../../lib.sh" || exit 1
 [ "${1:-}" = --config ] && { config "${2:-}"; exit; }
+# prev_name NAME: NAME-prev-K, the name a session takes when it hands off (its successor keeps NAME). NAME loses any
+# -prev-K first; K is the lowest number no session of a listed account (lib.sh list_sessions --all: live or
+# retired) carries, so no two sessions share a name. Listing failed: K = 1.
+prev_name() {
+  local b=$1 k=1 names; [[ $b =~ ^(.+)-prev-[0-9]+$ ]] && b=${BASH_REMATCH[1]}
+  names=$(list_sessions --all | cut -f2)
+  while grep -qxF -- "$b-prev-$k" <<<"$names"; do k=$(( k + 1 )); done
+  echo "$b-prev-$k"
+}
+# --prev-name [NAME]: prev_name's name for NAME, by default the caller's own (by $CLAUDE_CODE_SESSION_ID).
+if [ "${1:-}" = --prev-name ]; then
+  want=${2:-$(list_sessions --all | awk -F'\t' -v s="${CLAUDE_CODE_SESSION_ID:-}" 's != "" && $1 == s {print $2; exit}')}
+  [ -n "$want" ] || { echo "usage: session-status --prev-name [NAME] (this session isn't listed: name it)" >&2; exit 2; }
+  prev_name "$want"; exit 0
+fi
 # --plan FILE [--check | --next | --brief N]: FILE's plan table (the first table under `## Plan` or `## Build plan`:
 # # | Chunk | Kind | Deps | Touches | Est | Model/effort | Done when), with each chunk's state from the
 # `## cN: done` sections of KEY-build.md beside it (KEY: FILE's name without .md). Alone: the waves and each row's
 # state. --check: one line per problem, exit 1. --next: the waves, then a `claude --bg` line per runnable chunk.
 # --brief N: a brief skeleton for row N, to finish by hand. --done N: row N's kind, model/effort (default: plan.models)
-# and est, with this session's act_K from `rnd.py chunks 2 --session` (left out if rnd fails), go to lib.sh usage as a
+# and est, with this session's act_K from `rnd.py chunks 7 --session` (summed over the sessions its Supersedes: chain
+# reaches; left out if rnd fails), go to lib.sh usage as a
 # chunk line; it prints the line or why nothing was logged.
 if [ "${1:-}" = --plan ]; then
   models=; for k in design build mechanical review release scan; do models+="$k=$(config "plan.models.$k") "; done
-  shift; PLAN_MAXP=$(config plan.max_parallel) PLAN_AT=$(config handoff.at.chunk) PLAN_MODELS=$models PLAN_LIB=$(dirname "$0")/../../lib.sh \
+  shift; PLAN_MAXP=$(config plan.max_parallel) PLAN_AT=$(config handoff.at.chunk) PLAN_MODELS=$models PLAN_LIB=$(dirname "$0")/../../lib.sh PLAN_ON=$(config plan.enabled) \
     PLAN_TELEMETRY=$(config telemetry) PLAN_LOG=$(usage_log) exec python3 -I - "$@" <<'PY'
 import os, re, shlex, subprocess, sys
 die = lambda msg: sys.exit(print(msg, file=sys.stderr) or 2)
@@ -144,8 +162,10 @@ if not a or a[1:2] not in ([], ["--check"], ["--next"], ["--brief"], ["--done"])
 if not os.path.isfile(a[0]): die(f"no file {a[0]}")
 path = os.path.abspath(a[0]); mode = a[1] if len(a) > 1 else ""
 d, key = os.path.dirname(path), os.path.basename(path).removesuffix(".md")
+MODEL_EFFORT = r"[a-z][a-z0-9.-]*/(low|medium|high|xhigh|max)"
 KINDS = dict(m.split("=", 1) for m in os.environ["PLAN_MODELS"].split())
 MAXP, AT = max(1, int(os.environ["PLAN_MAXP"])), int(os.environ["PLAN_AT"])
+okme = lambda me: bool(re.fullmatch(MODEL_EFFORT, me)) and "fable" not in me   # lib.sh model_ok: one rule
 START = 60000   # ponytail: a constant session start; a later chunk calibrates it from rnd.py's measured base
 
 lines, i = open(path).read().splitlines(), 0
@@ -207,7 +227,7 @@ if mode == "--check":
         out += [f"c{n}: unknown dep {x}" for x in r["deps"] if x not in R]
         if r["kind"] not in KINDS: out.append(f"c{n}: unknown kind {r['kind'] or '(none)'}")
         if not r["done"]: out.append(f"c{n}: no done-when")
-        if r["model"] != "default" and not re.fullmatch(r"[\w.-]+/[\w.-]+", r["model"]): out.append(f"c{n}: model/effort {r['model'] or '(none)'} is not like opus/medium")
+        if r["model"] != "default" and not okme(r["model"]): out.append(f"c{n}: model/effort {r['model'] or '(none)'} is not like opus/medium (efforts: low medium high xhigh max; no fable)")
         if r["est"] is None: out.append(f"c{n}: est {r['raw_est'] or '(none)'} is not like 60K")
         elif AT > 0 and r["est"] > AT - START: out.append(f"c{n}: est {r['est'] // 1000}K over the {(AT - START) // 1000}K budget")
     for cy in cycles:
@@ -233,7 +253,7 @@ if mode == "--done":   # row N's kind, model/effort and est, and this session's 
     try:   # growth has one definition: rnd.py's; no session id, no act
         if not sid: raise ValueError
         out = subprocess.run([sys.executable, "-I", os.path.join(os.path.dirname(os.environ["PLAN_LIB"]), "skills/rnd/rnd.py"),
-                              "chunks", "2", "--session", sid], capture_output=True, text=True, timeout=120).stdout.splitlines()
+                              "chunks", "7", "--session", sid], capture_output=True, text=True, timeout=120).stdout.splitlines()
         act = out[1].split("\t")[out[0].split("\t").index("act_K")] if len(out) > 1 else ""
     except (OSError, ValueError, IndexError, subprocess.SubprocessError): pass
     log = os.environ["PLAN_LOG"]; size = os.path.getsize(log) if os.path.exists(log) else 0
@@ -262,7 +282,9 @@ Kind: {r['kind']} · Model: {me} · Est: {r['raw_est']} growth · Deps: {', '.jo
     sys.exit()
 
 print(f"waves: {waves or '(none)'}")
-if mode == "--next":
+if mode == "--next" and os.environ["PLAN_ON"] == "false":
+    print("plan.enabled is false: run tasks without a plan")
+elif mode == "--next":
     cand = []
     for n in R:   # runnable, in row order, skipping one whose touches overlap a chunk already picked
         if not isdone(n) and wave[n] and all(isdone(x) for x in R[n]["deps"]) and len(cand) < MAXP and \
@@ -270,7 +292,9 @@ if mode == "--next":
     tops = [{t.split("/")[0] if "/" in t else "." for t in R[n]["touch"]} for n in cand]
     if any(tops[i] & tops[j] for i in range(len(tops)) for j in range(i)): cand = cand[:2]   # 2+ in one top-level directory
     for n in cand:
-        r = R[n]; m, _, e = (KINDS.get(r["kind"], "opus/medium") if r["model"] == "default" else r["model"]).partition("/")
+        r = R[n]; me = KINDS.get(r["kind"], "opus/medium") if r["model"] == "default" else r["model"]
+        if not okme(me): print(f"c{n}: model/effort {me} not allowed (--check): not started"); continue
+        m, _, e = me.partition("/")
         prompt = f"Session task: {key}\nChunk: {key}/{n}\nRead {d}/{key}-c{n}.md and do it."
         print(f"claude --bg --model {shlex.quote(m)} --effort {shlex.quote(e)} -n {shlex.quote(f'{key}-c{n}')} {shlex.quote(prompt)}")
 else:
@@ -752,8 +776,8 @@ if [ -n "$HANDOVER" ]; then
   [ "${1:-}" = -- ] && shift; next=${1:-}
   [ "${#want}" -ge 8 ] && [ -n "$next" ] && [ $# = 1 ] ||
     { echo "usage: session-status --handover ID|--self [--model M] [--effort E] [--] 'WHAT NEXT' (ID: 8+ characters)"; exit 2; }
-  [ -z "$model" ] || [[ $model =~ ^[a-z][a-z0-9.-]*$ && $model != fable* ]] || { echo "--model $model: not a model name like opus"; exit 2; }
-  [ -z "$effort" ] || [[ $effort =~ ^(low|medium|high|xhigh|max)$ ]] || { echo "--effort $effort: one of low medium high xhigh max"; exit 2; }
+  [ -z "$model" ] || model_ok "$model" || { echo "--model $model: not a model name like opus (never fable)"; exit 2; }
+  [ -z "$effort" ] || model_ok opus "$effort" || { echo "--effort $effort: one of low medium high xhigh max"; exit 2; }
   row=$(find_session "$want") || { echo "couldn't list the sessions; try again"; exit 1; }
   [ -n "$row" ] || { echo "no session $want in any account"; exit 2; }
   if [ -n "$self" ]; then   # after find_session: --coordinator prints nothing, not an error, when the listing fails
@@ -773,7 +797,8 @@ if [ -n "$HANDOVER" ]; then
     [ "$(grep -c . <<<"$keys")" = 1 ] || { echo "\"$name\" (${id:0:8}) names several task keys ($(paste -sd' ' - <<<"$keys")): hand over by hand"; exit 2; }
     key=$keys
   fi
-  succ=$(ls "$(dirname "$f")"/*.jsonl 2>/dev/null | supersedes | awk -v id="$id" '$1 == id {print substr($2, 1, 8)}' | tail -1)
+  pairs=$(ls "$(dirname "$f")"/*.jsonl 2>/dev/null | supersedes)
+  succ=$(awk -v id="$id" '$1 == id {print substr($2, 1, 8)}' <<<"$pairs" | tail -1)
   [ -z "$succ" ] || { echo "\"$name\" (${id:0:8}) is superseded by $succ already: not handed over again"; exit 2; }
   [ -z "$self" ] || pid=   # the caller itself: never stopped, and its own turn is the one running
   if [ -n "$pid" ]; then
@@ -785,19 +810,25 @@ if [ -n "$HANDOVER" ]; then
   [ -n "$rdir" ] || { echo "$ROOT/CLAUDE.md names no replies folder: nothing to hand over from"; exit 2; }
   case $rdir in /*) rd=$rdir ;; *) rd=$ROOT/$rdir ;; esac
   [ -n "$n" ] || [ -f "$rd/$key.md" ] || { echo "no $rdir/$key.md: ask \"$name\" for a status report first, or write one"; exit 2; }
-  [ -z "$n" ] || grep -qE "^## c$n: handoff" "$rd/$key-build.md" 2>/dev/null ||
-    { echo "no \`## c$n: handoff\` in $rdir/$key-build.md: ask \"$name\" to write it first"; exit 2; }
+  if [ -n "$n" ]; then   # one heading per session of the chunk: ID and each session its Supersedes chain reaches back to
+    hops=0 cur=$id
+    while cur=$(awk -v id="$cur" '$2 == id {print $1; exit}' <<<"$pairs") && [ -n "$cur" ] && (( hops < 100 )); do hops=$(( hops + 1 )); done
+    have=$(grep -cE "^## c$n: handoff" "$rd/$key-build.md" 2>/dev/null); have=${have:-0}
+    (( have > hops )) || { if (( have )); then echo "no new \`## c$n: handoff\` in $rdir/$key-build.md: the $have there are from \"$name\"'s $hops predecessors; ask \"$name\" to write its own first"
+      else echo "no \`## c$n: handoff\` in $rdir/$key-build.md: ask \"$name\" to write it first"; fi; exit 2; }
+  fi
   if [ -n "$pid" ]; then stop_session "$pre" "$id" || { echo "couldn't stop \"$name\" (${id:0:8}): nothing started"; exit 1; }; fi
-  case $(tr '[:lower:]' '[:upper:]' <<<"$name") in
-    "$key"|"$key"[!0-9]*) new=$name ;;
-    *) slug=$(tr '[:upper:]' '[:lower:]' <<<"$name" | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//'); new=$key${slug:+-$slug} ;;
+  base=$name; [[ $name =~ ^(.+)-prev-[0-9]+$ ]] && base=${BASH_REMATCH[1]}   # renamed already by its own handoff
+  case $(tr '[:lower:]' '[:upper:]' <<<"$base") in
+    "$key"|"$key"[!0-9]*) new=$base ;;
+    *) slug=$(tr '[:upper:]' '[:lower:]' <<<"$base" | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//'); new=$key${slug:+-$slug} ;;
   esac
   [ -z "$n" ] || new=$key-c$n
   case $pre in claude) cfg=$CUR ;; 'env -u CLAUDE_CONFIG_DIR claude') cfg=$HOME/.claude ;; *) cfg=${pre#CLAUDE_CONFIG_DIR=}; cfg=${cfg% claude}; cfg=${cfg/#\~/$HOME} ;; esac
   pm=; [ "$(jq -r '.permissions.defaultMode // empty' "$cfg/settings.json" 2>/dev/null)" != plan ] || pm=' --permission-mode default'
   pm+=${model:+ --model $model}${effort:+ --effort $effort}
   if [ -n "$n" ]; then
-    text=$(printf 'Session task: %s\nChunk: %s/%s\nSupersedes: %s\nContinue from "## c%s: handoff" in %s/%s-build.md, then follow %s/%s-c%s.md.\n%s' \
+    text=$(printf 'Session task: %s\nChunk: %s/%s\nSupersedes: %s\nContinue from the last "## c%s: handoff" in %s/%s-build.md, then follow %s/%s-c%s.md.\n%s' \
       "$key" "$key" "$n" "$id" "$n" "$rd" "$key" "$rd" "$key" "$n" "$next")
   else
     text="Work on $key: continue from $rdir/$key.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole)."
@@ -805,8 +836,9 @@ if [ -n "$HANDOVER" ]; then
   out=$(bash -c "$pre --bg$pm -n \"\$0\" \"\$1\"" "$new" "$text" 2>&1)
   nid=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1); nid=${nid##* }
   [ -n "$nid" ] || { echo "${pid:+stopped \"$name\" (${id:0:8}), but }the new session didn't start: $(tail -1 <<<"$out")"; exit 1; }
-  [ -z "$self" ] || { echo "handed over; end your turn now (\"$new\" ($nid) supersedes this session)"; exit 0; }
+  [ -z "$self" ] || { echo "handed over; rename yourself (call name_session with \"$(prev_name "$name")\"), then end your turn now (\"$new\" ($nid) supersedes this session)"; exit 0; }
   echo "handed $key${n:+ c$n} over: \"$name\" (${id:0:8}) ${pid:+stopped, }superseded by \"$new\" ($nid)"
+  [ "$name" != "$new" ] || echo "\"$name\" (old) wasn't renamed: two sessions share $name until it is"
   exit 0
 fi
 

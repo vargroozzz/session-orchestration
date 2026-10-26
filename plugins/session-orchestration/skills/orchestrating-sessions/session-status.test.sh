@@ -401,7 +401,7 @@ gid=bbbbbbbb-2222-3333-4444-555555555555
 printf '%s\n' '{"type":"user","message":{"content":"Work on ABC-41"}}' '{"type":"assistant","input":{"command":"session-status ABC-41"}}' > "$proj/$gid.jsonl"
 echo report > "$root/replies/ABC-41.md"; echo '{"permissions":{"defaultMode":"plan"}}' > "$tmp/cfg/settings.json"
 setacct cfg "$(sess "$gid" "abc-41 thing" idle 1)"; calls >/dev/null
-run --handover "$gid" 'Go on' | grep -q 'superseded by "abc-41 thing" (abcdef12)' &&
+out=$(run --handover "$gid" 'Go on'); grep -q 'superseded by "abc-41 thing" (abcdef12)' <<<"$out" &&
   calls | grep -qF "cfg --bg --permission-mode default -n abc-41 thing Work on ABC-41: continue from replies/ABC-41.md. Go on. Supersedes: $gid" ||
   { echo "handover of a status-running worker failed"; calls; exit 1; }
 rm "$tmp/cfg/settings.json"
@@ -413,10 +413,12 @@ out=$(run --handover "$kid" -- 'x') && rc=0 || rc=$?
 [ "$rc" = 2 ] && [[ $out == *'no `## c3b: handoff` in replies/PROJ-9-build.md'* ]] && [ -z "$(calls | grep -v ' agents ')" ] ||
   { echo "chunk handover without its handoff not refused: $rc $out"; exit 1; }
 printf '## c3b: handoff\nstate\n' > "$root/replies/PROJ-9-build.md"
-[ "$(run --handover "$kid" --model opus --effort high -- 'Then land it.')" = 'handed PROJ-9 c3b over: "PROJ-9-c3b" (dddddddd) stopped, superseded by "PROJ-9-c3b" (abcdef12)' ] &&
-  [ "$(calls | grep -v ' agents ')" = "$(printf 'cfg stop dddddddd\ncfg --bg --model opus --effort high -n PROJ-9-c3b Session task: PROJ-9\nChunk: PROJ-9/3b\nSupersedes: %s\nContinue from "## c3b: handoff" in %s/replies/PROJ-9-build.md, then follow %s/replies/PROJ-9-c3b.md.\nThen land it.' "$kid" "$root" "$root")" ] ||
+# It kept its name (no -prev-K rename): started anyway, with a line saying so.
+[ "$(run --handover "$kid" --model opus --effort high -- 'Then land it.')" = 'handed PROJ-9 c3b over: "PROJ-9-c3b" (dddddddd) stopped, superseded by "PROJ-9-c3b" (abcdef12)
+"PROJ-9-c3b" (old) wasn'"'"'t renamed: two sessions share PROJ-9-c3b until it is' ] &&
+  [ "$(calls | grep -v ' agents ')" = "$(printf 'cfg stop dddddddd\ncfg --bg --model opus --effort high -n PROJ-9-c3b Session task: PROJ-9\nChunk: PROJ-9/3b\nSupersedes: %s\nContinue from the last "## c3b: handoff" in %s/replies/PROJ-9-build.md, then follow %s/replies/PROJ-9-c3b.md.\nThen land it.' "$kid" "$root" "$root")" ] ||
   { echo "chunk handover failed"; calls; exit 1; }
-for bad in '--model fable' '--effort ultra' '--model'; do
+for bad in '--model fable' '--model claude-fable-5-1' '--effort ultra' '--model'; do
   out=$(run --handover "$kid" $bad -- 'x') && rc=0 || rc=$?
   [ "$rc" = 2 ] && ! calls | grep -q 'stop\|--bg' || { echo "handover $bad not refused: $out"; exit 1; }; done
 # --self: refused while a coordinator is live; else the successor starts and the caller, mid-turn, isn't stopped.
@@ -426,8 +428,24 @@ out=$(CLAUDE_CODE_SESSION_ID=$kid run --handover --self -- 'Go on.') && rc=0 || 
 setacct cfg "$(sess "$kid" "PROJ-9-c3b" busy 1)"
 out=$(CLAUDE_CODE_SESSION_ID=$kid run --handover --self -- 'Go on.')
 c=$(calls)
-[ "$out" = 'handed over; end your turn now ("PROJ-9-c3b" (abcdef12) supersedes this session)' ] && ! grep -q ' stop ' <<<"$c" &&
+[ "$out" = 'handed over; rename yourself (call name_session with "PROJ-9-c3b-prev-1"), then end your turn now ("PROJ-9-c3b" (abcdef12) supersedes this session)' ] && ! grep -q ' stop ' <<<"$c" &&
   grep -q '^cfg --bg -n PROJ-9-c3b Session task: PROJ-9$' <<<"$c" || { echo "self handover: $out"; echo "$c"; exit 1; }
+# A successor (Supersedes: kid) that grew too: the one `## c3b: handoff` is its predecessor's, so it's refused until it
+# writes its own; then the new session continues from the last one. A renamed predecessor gets no shared-name line.
+k2=eeeeeeee-2222-3333-4444-555555555555
+jq -nc --arg k "$kid" '{type: "user", message: {content: ("Session task: PROJ-9\nChunk: PROJ-9/3b\nSupersedes: " + $k + "\nContinue.")}}' > "$proj/$k2.jsonl"
+setacct cfg "$(sess "$k2" "PROJ-9-c3b" idle 1),$(sess "$kid" "PROJ-9-c3b-prev-1" idle null)"; calls >/dev/null
+out=$(run --handover "$k2" -- 'x') && rc=0 || rc=$?
+[ "$rc" = 2 ] && [[ $out == *'no new `## c3b: handoff`'*"1 predecessors"* ]] && [ -z "$(calls | grep -v ' agents ')" ] ||
+  { echo "handover on a stale handoff not refused: $rc $out"; exit 1; }
+printf '## c3b: handoff\nmore\n' >> "$root/replies/PROJ-9-build.md"
+[ "$(run --handover "$k2" -- 'x')" = 'handed PROJ-9 c3b over: "PROJ-9-c3b" (eeeeeeee) stopped, superseded by "PROJ-9-c3b" (abcdef12)
+"PROJ-9-c3b" (old) wasn'"'"'t renamed: two sessions share PROJ-9-c3b until it is' ] || { echo "handover after the second handoff"; exit 1; }
+rm "$proj/$k2.jsonl"
+# --prev-name: the lowest free K over every listed name, live or retired; NAME defaults to the caller's own.
+setacct cfg "$(sess "$k2" "PROJ-9-c3b" idle 1),$(sess "$kid" "PROJ-9-c3b-prev-1" idle null),$(sess "$hid" "PROJ-9-c3b-prev-3" idle null)"
+[ "$(CLAUDE_CODE_SESSION_ID=$k2 run --prev-name)" = PROJ-9-c3b-prev-2 ] && [ "$(run --prev-name PROJ-9-c3b-prev-3)" = PROJ-9-c3b-prev-2 ] &&
+  [ "$(run --prev-name other)" = other-prev-1 ] && ! run --prev-name 2>/dev/null || { echo "--prev-name failed"; exit 1; }
 
 # --peek: the main thread's last turns as markdown (no sidechain, no system reminder), then what it does now.
 pid=cccccccc-2222-3333-4444-555555555555
@@ -750,7 +768,7 @@ c3: est 70K over the 65K budget
 c6: unknown dep 9
 c6: unknown kind planning
 c6: no done-when
-c6: model/effort opus is not like opus/medium
+c6: model/effort opus is not like opus/medium (efforts: low medium high xhigh max; no fable)
 cycle: c6 → c6
 c2 and c3 both touch docs/*.md ~ docs/guide.md
 EOF
@@ -768,6 +786,20 @@ c4   done     build      hook
 c5   ready    review     review
 c6   blocked  planning   loop
 EOF
+# One model/effort rule (lib.sh model_ok): no fable anywhere, efforts the CLI takes. --check reports a bad row, --next
+# doesn't start it, config falls back to the default. plan.enabled false: --next starts nothing.
+sed -e '/^| [2-6] /d' -e 's#| opus/medium | suite#| fable/high | suite#' "$plan" > "$pd/PROJ-8.md"
+printf '| 2 | b | build | – | `b/` | 9K | claude-fable-5-1/high | x |\n| 3 | c | build | – | `c/` | 9K | opus/ultra | x |\n| 4 | d | build | – | `d/` | 9K | default | x |\n' >> "$pd/PROJ-8.md"
+rc=0; out=$(run --plan "$pd/PROJ-8.md" --check) || rc=$?
+[ $rc = 1 ] && [ "$(grep -c 'is not like opus/medium' <<<"$out")" = 3 ] || { echo "--check took fable or a bad effort: $out"; exit 1; }
+mkdir -p "$tmp/.config/session-orchestration"; echo '{"plan": {"max_parallel": 5, "models": {"build": "claude-fable-5-1/high"}}}' > "$tmp/.config/session-orchestration/config.json"
+out=$(run --plan "$pd/PROJ-8.md" --next 2>/dev/null)
+! grep -q fable <<<"$(grep '^claude' <<<"$out")" && grep -q '^c1: model/effort fable/high not allowed' <<<"$out" &&
+  grep -q '^claude --bg --model opus --effort medium -n PROJ-8-c4 ' <<<"$out" || { echo "--next started fable: $out"; exit 1; }
+echo '{"plan": {"enabled": false}}' > "$tmp/.config/session-orchestration/config.json"
+[ "$(run --plan "$plan" --next | tail -1)" = 'plan.enabled is false: run tasks without a plan' ] && ! run --plan "$plan" --next | grep -q '^claude' ||
+  { echo "--next ran with plan.enabled false"; exit 1; }
+rm "$tmp/.config/session-orchestration/config.json"
 out=$(run --plan "$plan" --brief 2)
 grep -qxF 'Kind: mechanical · Model: sonnet/medium · Est: 20K growth · Deps: none · Wave 1' <<<"$out" &&
   grep -qxF "**First:** read \`$pd/PROJ-123-chunk-rules.md\` (paths, setup, interface, landing). N = 2." <<<"$out" &&

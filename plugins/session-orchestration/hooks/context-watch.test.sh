@@ -43,6 +43,7 @@ for k in chunk task; do
 done
 grep -q 'handoff ready: PROJ-123 c2' <<<"$(fire chunk2 "$chunk" 126000)" || fail 'chunk message names PROJ-123 c2'
 grep -q '## c2: handoff' <<<"$(fire chunk3 "$chunk" 126000)" || fail 'chunk message names its build section'
+grep -qE 'Rename yourself: call name_session with the name `.*session-status --prev-name` prints.* Message the coordinator' <<<"$(fire chunk5 "$chunk" 151000)" || fail 'chunk hard text: rename before the coordinator message'
 out=$(fire task2 "$task" 126000); grep -q 'handoff ready: PROJ-123"' <<<"$out" && grep -q '## Handoff' <<<"$out" || fail "task message: $out"
 expect coord "$coord" 144000 ''
 out=$(fire coord "$coord" 146000); grep -q 'handover file' <<<"$out" && ! grep -q 'handoff ready' <<<"$out" || fail "coordinator soft: $out"
@@ -91,6 +92,19 @@ expect sc "$chunk" 1000 'compacted mid-chunk.*c2: handoff' SessionStart
 expect sc "$chunk" 1000 '' SessionStart
 expect st "$task" 1000 '' SessionStart
 expect so "$coord" 1000 '' SessionStart
+# A resume clears the compacted-mid-chunk stamp: the next compaction says it again.
+EXTRA='{"source": "resume"}' expect sc "$chunk" 1000 '' SessionStart
+expect sc "$chunk" 1000 'compacted mid-chunk' SessionStart
+# A manual /compact: boundary, summary, then a prompt with no assistant line yet. The 160K before the boundary is
+# stale: nothing, and the soft line still comes later.
+echo {} > "$XDG_CONFIG_HOME/session-orchestration/config.json"
+expect mc "$task" 100000 ''
+{ echo '{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}'
+  jq -nc '{type: "user", isCompactSummary: true, message: {role: "user", content: "summary"}}'; } >> "$t/mc.jsonl"
+sed 's/"cache_read_input_tokens":98995/"cache_read_input_tokens":158995/' "$t/mc.jsonl" > "$t/mc.t" && mv "$t/mc.t" "$t/mc.jsonl"
+out=$(jq -nc --arg f "$t/mc.jsonl" --arg c "$t/proj" '{session_id: "mc", transcript_path: $f, hook_event_name: "UserPromptSubmit", cwd: $c}' |
+  bash "$here/context-watch.sh"); [ -z "$out" ] || fail "stale ctx after /compact: $out"
+expect mc "$task" 130000 'at 130K: hand off'
 
 # Config: defaults, a bad value, and a repo file can't set the person keys.
 rm "$XDG_CONFIG_HOME/session-orchestration/config.json"
