@@ -9,7 +9,7 @@
 #                                            repo's when the person file names one, see shared_dir)
 #   .claude/coordination.local.json          person keys: approvals.delegate, features.accounts, terminal, messages
 #                                            (and its module's block, e.g. msgraph), trusted, team, feedback.mode,
-#                                            feedback.repo_dir, telemetry (always excluded;
+#                                            feedback.repo_dir, telemetry, handoff.*, compact.window (always excluded;
 #                                            the repo file can't set them)
 # No file means every default. `config KEY` prints the key's value; an unknown value prints the default and one
 # warning line on stderr.
@@ -52,7 +52,7 @@ coord_json() {
   for f in "$(user_config)" "${p:-}"; do
     [ -n "$f" ] && [ -f "$f" ] && j=$(jq -r '.messages // empty | strings' "$f" 2>/dev/null) && [ -n "$j" ] && m=$j
   done
-  drop="del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry$( [[ ${m:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$m\"]")) | if .features | type == \"object\" then del(.features.accounts) else . end"
+  drop="del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact$( [[ ${m:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$m\"]")) | if .features | type == \"object\" then del(.features.accounts) else . end"
   s=$(shared_dir 2>/dev/null) && s=$s/coordination.json
   # Lowest first: the person's file for every project (person-wide keys such as feedback.*), the repo file, the
   # project's person file.
@@ -142,18 +142,32 @@ detect_host() {
 #   feedback.mode       auto | pr | fork-pr | issue | local: how plugin feedback cases are sent
 #                       (skills/orchestrating-sessions/feedback.md)    default auto
 #   feedback.repo_dir   a clone of the plugin repo you can push to (~ expanded)     default empty
+#   telemetry           local | off: pane presses to the local usage log (usage below)     default off
+#   plan.enabled        true | false: the task planner splits big tasks into chunks         default true
+#   plan.max_parallel   integer >= 1: chunk sessions at once                                default 3
+#   plan.models.KIND    MODEL/EFFORT (effort low|medium|high|xhigh|max; never fable), KIND design | build | mechanical | review
+#                       | release | scan     default opus/xhigh, opus/medium, sonnet/medium, opus/xhigh,
+#                       sonnet/medium, haiku/low
+#   handoff.at.KIND     integer tokens, 0 = off: context where hooks/context-watch.sh asks a session to hand off,
+#                       KIND chunk | task | coordinator (person only)   default 125000, 120000, 145000
+#   handoff.hard_after  integer tokens: the hard stop, this far past handoff.at (person only)   default 25000
+#   handoff.stop_room   integer tokens: room left under the compaction ceiling (person only)   default 15000
+#   compact.window      integer tokens: the autoCompactWindow sessions are expected to have (person only)
+#                                                                       default 220000
 config() {
   local key=${1:-} v ok=
   case $key in
     tracker|host|key_pattern|approvals.delegate|features.accounts|features.review_inbox|terminal|messages|feedback.mode|feedback.repo_dir|telemetry) ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate features.accounts features.review_inbox terminal messages feedback.mode feedback.repo_dir telemetry)" >&2; return 2 ;;
+    plan.enabled|plan.max_parallel|plan.models.design|plan.models.build|plan.models.mechanical|plan.models.review|plan.models.release|plan.models.scan) ;;
+    handoff.at.chunk|handoff.at.task|handoff.at.coordinator|handoff.hard_after|handoff.stop_room|compact.window) ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate features.accounts features.review_inbox terminal messages feedback.mode feedback.repo_dir telemetry plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
     tracker) case $v in none|github|jira) ok=1 ;; esac ;;
     host) case $v in github|bitbucket|none) ok=1 ;; esac ;;
     key_pattern) { grep -qE -- "$v" </dev/null; [ $? -le 1 ]; } 2>/dev/null && ok=1 ;;
-    approvals.delegate|features.accounts) case $v in true|false) ok=1 ;; esac ;;
+    approvals.delegate|features.accounts|plan.enabled) case $v in true|false) ok=1 ;; esac ;;
     features.review_inbox) case $v in false) ok=1 ;;
       true) [ "$(config host 2>/dev/null)" = bitbucket ] && ok=1 ||
               { echo "warning: features.review_inbox needs host=bitbucket (GitHub support is a TODO): off" >&2; echo false; return 0; } ;;
@@ -162,6 +176,9 @@ config() {
     messages) [ "$v" = none ] && ok=1 || { [[ $v =~ ^[A-Za-z0-9_-]+$ ]] && find_module messages "$v" >/dev/null && ok=1; } ;;
     feedback.mode) case $v in auto|pr|fork-pr|issue|local) ok=1 ;; esac ;;
     telemetry) case $v in local|off) ok=1 ;; esac ;;
+    plan.max_parallel) [[ $v =~ ^[1-9][0-9]{0,2}$ ]] && ok=1 ;;
+    plan.models.*) [[ $v =~ ^[a-z][a-z0-9.-]*/(low|medium|high|xhigh|max)$ && $v != fable* ]] && ok=1 ;;
+    handoff.*|compact.window) [[ $v =~ ^(0|[1-9][0-9]{0,6})$ ]] && ok=1 ;;
     feedback.repo_dir) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [ -d "$v" ] && ok=1 ;;
   esac
   [ -n "$ok" ] && { echo "$v"; return 0; }
@@ -170,6 +187,11 @@ config() {
   case $key in
     tracker) echo none ;; host) detect_host ;; key_pattern) ;; approvals.delegate|features.*) echo false ;; terminal) echo plain ;; messages) echo none ;;
     feedback.mode) echo auto ;; feedback.repo_dir) ;; telemetry) echo off ;;
+    plan.enabled) echo true ;; plan.max_parallel) echo 3 ;;
+    plan.models.design|plan.models.review) echo opus/xhigh ;; plan.models.build) echo opus/medium ;;
+    plan.models.mechanical|plan.models.release) echo sonnet/medium ;; plan.models.scan) echo haiku/low ;;
+    handoff.at.chunk) echo 125000 ;; handoff.at.task) echo 120000 ;; handoff.at.coordinator) echo 145000 ;;
+    handoff.hard_after) echo 25000 ;; handoff.stop_room) echo 15000 ;; compact.window) echo 220000 ;;
   esac
 }
 
