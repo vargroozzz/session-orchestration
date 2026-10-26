@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HIDDEN_BY_MARKDOWN, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf } from './register'
+import { HIDDEN_BY_MARKDOWN, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, usageName } from './register'
 
 test('status rows parse whatever the columns hold', async () => {
   const pad = (k: string, st: string) => `${k.padEnd(9)} ${st.padEnd(14)} `
@@ -690,4 +690,10 @@ test('a failed /reload-plugins says so and names the command to run', async ($, 
   await $.tool.call({ tool: 'mcp__session-orchestration__reload_plugins' })
   const r = await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
   expect(r.text).toMatch(/^done\n\nReloading plugins failed \(.*\)\. Run \/reload-plugins\.$/)
+})
+
+test('usage names: fixed words lib.sh usage accepts', () => {
+  const names = [...Object.values(BUILTIN_KEYS), ...USAGE_EXTRA].map(usageName)
+  expect(usageName('Attach in tab')).toBe('attach-in-tab')
+  expect(names.every(n => /^[a-z0-9-]{1,40}$/.test(n))).toBe(true)
 })

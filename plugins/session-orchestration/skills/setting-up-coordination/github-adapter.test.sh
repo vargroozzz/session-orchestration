@@ -3,7 +3,7 @@
 # approved PR, a conflict, a failed build, changes asked (and a bot's approval not counting), a merge;
 # `done`; the minute cache; a gh failure, with and without an older answer; and `mine` (ownership).
 # Run: bash github-adapter.test.sh  (prints "ok" or what failed).
-set -euo pipefail
+set -euo pipefail; unset XDG_CONFIG_HOME   # the person-wide config.json: never the real one
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/p"

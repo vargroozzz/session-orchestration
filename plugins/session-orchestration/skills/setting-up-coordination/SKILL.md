@@ -78,7 +78,8 @@ below reads the project's:
   (e.g. `msgraph`), `features.accounts`, `trusted`, `team`, `feedback` (ignored in the repo file: a committed file never
   delegates or trusts for anyone, and the terminal, messages, accounts and feedback are the person's own);
 - below both, `${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json`, the person's for every project:
-  any key, meant for the person-wide ones (`feedback`). Setup doesn't write it.
+  any key but `team` (the project's file only), meant for the person-wide ones (`feedback`, `telemetry`). Setup
+  doesn't write it.
 
 Both are excluded from git, the repo file until shared mode commits it. `session-status --config KEY` prints a key's value in effect.
 
@@ -94,6 +95,7 @@ Both are excluded from git, the repo file until shared mode commits it. `session
 | `features.review_inbox` | `true` \| `false`: PR findings go to the review inbox page (`features/review-inbox.md`); Bitbucket only, GitHub is a TODO | `false`; setup writes `true` when the project's docs name an inbox URL and the host is Bitbucket |
 | `feedback.mode` | `auto` \| `pr` \| `fork-pr` \| `issue` \| `local`: how plugin feedback cases are sent (`../orchestrating-sessions/feedback.md`) | `auto`: `pr` with `feedback.repo_dir` set, else `fork-pr` when `gh` is signed in, else `issue`; setup doesn't write it |
 | `feedback.repo_dir` | a clone of the plugin repo you can push to (`~` expanded) | unset; setup doesn't write it |
+| `telemetry` | `local` \| `off`: with `local`, each pane press appends a fixed name to `${XDG_STATE_HOME:-~/.local/state}/session-orchestration/usage.jsonl`, read only by `rnd.py usage`; nothing leaves the machine | `off`; setup doesn't write it (set it in the person-wide file to measure your own use) |
 
 A value outside its set falls back to the default, with one warning line. A GitLab remote gives `host=none` and a
 Linear tracker `tracker=none`, each with a warning or a note in the proposal: neither is supported yet.

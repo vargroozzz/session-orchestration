@@ -162,6 +162,15 @@ printf 'see PRs\n#3879 and #4490\n\n#3879 alone\n' > "$tmp/h.md"
 rnd html "$tmp/h.md" "$tmp/h.html"
 grep -q '<p>see PRs #3879 and #4490</p><p>#3879 alone</p>' "$tmp/h.html" || fail "html: # line in a paragraph" "$(cat "$tmp/h.html")"
 
+# usage: a press in the window counts; one there since 09-01 with none is unused; a 2026-01-01 line is trimmed.
+st=$tmp/state/session-orchestration; mkdir -p "$st/inventory"
+echo '[["press","attach"],["press","compact"]]' > "$st/inventory/2026-09-01.json"
+printf '%s\n' '{"t":1791799200,"k":"press","what":"attach"}' '{"t":1767225600,"k":"press","what":"compact"}' 'junk' > "$st/usage.jsonl"
+out=$(XDG_STATE_HOME=$tmp/state rnd usage)
+grep -qx $'press\tattach\t1\t2026-09-01\t' <<<"$out" && grep -qx $'press\tcompact\t0\t2026-09-01\tunused' <<<"$out" \
+  && grep -q $'^press\tcopy-command\t0\t'"$(date -u +%F)"$'\t$' <<<"$out" && grep -q $'^flag\t--peek\t.*[0-9-]\t$' <<<"$out" \
+  && [ "$(wc -l < "$st/usage.jsonl" | tr -d ' ')" = 1 ] && [ -e "$st/inventory/$(date -u +%F).json" ] || fail "usage" "$out"
+
 printf '#!/bin/sh\necho "$@" > %q\n' "$tmp/claude.args" > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"
 out=$(HOME=$tmp RND_LOG=$tmp/log "$here/rnd-weekly" "$tmp" --dry-run)
 grep -q 'claude --bg -n rnd-weekly-' <<<"$out" && [ ! -e "$tmp/claude.args" ] || fail "rnd-weekly --dry-run starts nothing" "$out"

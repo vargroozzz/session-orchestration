@@ -17,6 +17,9 @@ usage: python3 -I rnd.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args]
                                   its session); totals on stderr
   replies [days=7]                task sessions idle > 6 h that never wrote replies/<KEY>* (lost reports); totals on stderr
   triggers SESSION_PREFIX [days=7]     a session's wakes, requests and USD by trigger: human/xmsg/bgtask/cron/other
+  usage [days=30]                 one row per plugin feature (pane button, tool, skill, doc, session-status flag,
+                                  config key): uses in the window, first seen, `unused` when 0 uses all window;
+                                  presses from the local usage log (telemetry=local), which it trims to 180 days
   html IN.md OUT.html             Markdown report -> self-contained HTML
 
 Transcripts: <account>/projects/*/*.jsonl for every account dir ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*),
@@ -580,8 +583,114 @@ def md2html(src, dst):
                          f"<title>{html.escape(title)}</title><style>{CSS}</style></head><body><main>{''.join(out)}</main></body></html>")
 
 
+PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+STATE = os.path.join(os.environ.get("XDG_STATE_HOME") or f"{HOME}/.local/state", "session-orchestration")
+
+
+def inventory():
+    """What the plugin has, from its own files: {(kind, name)}. kind: press, tool, skill, doc, flag, config."""
+    reg = open(f"{PLUGIN}/hooks/register.tsx", errors="replace").read()
+    keys = re.search(r"BUILTIN_KEYS: Record<string, string> = \{([\s\S]*?)\n\}", reg)
+    extra = re.search(r"USAGE_EXTRA = \[([^\]]*)\]", reg)
+    labels = re.findall(r"'([^']+)'", (keys.group(1) if keys else "") + (extra.group(1) if extra else ""))
+    labels += re.findall(r"label: '([^']+)'", reg[:reg.find("BUILTIN_KEYS")])  # FIXES, spread into BUILTIN_KEYS
+    slug = lambda s: re.sub(r"^-|-$", "", re.sub(r"[^a-z0-9]+", "-", s.lower()))
+    inv = {("press", slug(s)) for s in labels}
+    inv |= {("tool", t) for t in re.findall(r"tool\.register\(\{\s*name: '([a-z_]+)'", reg)}
+    inv |= {("skill", d) for d in os.listdir(f"{PLUGIN}/skills") if os.path.isfile(f"{PLUGIN}/skills/{d}/SKILL.md")}
+    inv |= {("doc", os.path.basename(f)) for f in glob.glob(f"{PLUGIN}/**/*.md", recursive=True)
+            if os.path.basename(f) not in ("SKILL.md", "README.md")}
+    ss = open(f"{PLUGIN}/skills/orchestrating-sessions/session-status", errors="replace").read()
+    inv |= {("flag", fl) for fl in re.findall(r"^#\s+session-status (--[a-z-]+)", ss, re.M)}
+    lib = open(f"{PLUGIN}/lib.sh", errors="replace").read()
+    keys = re.search(r"^\s+(tracker\|host\|[a-z_.|]+)\) ;;", lib, re.M)
+    inv |= {("config", k) for k in (keys.group(1).split("|") if keys else [])}
+    return inv
+
+
+def usage(days=30):
+    """Each feature with its uses in the window and first-seen date; `unused` when 0 uses and it existed all window.
+    Uses: the pane's usage log (telemetry=local), transcript tool calls, skill loads, doc reads, session-status flags.
+    First-seen: the earliest inventory snapshot listing it (one saved per run in the state folder). Also trims the
+    log to 180 days."""
+    window(days)
+    inv = inventory()
+    snaps = os.path.join(STATE, "inventory")
+    os.makedirs(snaps, exist_ok=True)
+    today = time.strftime("%Y-%m-%d", time.gmtime())  # the real date even with --until: it's what exists now
+    with open(os.path.join(snaps, f"{today}.json"), "w") as fh:
+        json.dump(sorted(map(list, inv)), fh)
+    first = {}
+    for f in sorted(glob.glob(f"{snaps}/*.json")):
+        try:
+            for k, n in json.load(open(f)):
+                first.setdefault((k, n), os.path.basename(f)[:10])
+        except Exception:
+            continue
+    count = dict.fromkeys(inv, 0)
+    log = os.path.join(STATE, "usage.jsonl")
+    on = False  # presses are judged only when the log starts by the window's start (telemetry on all window)
+    if os.path.exists(log):
+        rows = [(l, o) for l, o in lines(log) if isinstance(o, dict) and isinstance(o.get("t"), (int, float))]
+        on = any(o["t"] <= CUT for _, o in rows)
+        keep = [l for l, o in rows if o["t"] >= time.time() - 180 * 86400]
+        if len(keep) < len(rows) or len(rows) < sum(1 for _ in open(log, errors="replace")):
+            # ponytail: a press appended between the read and the replace is lost; a lock if that ever matters.
+            with open(log + ".tmp", "w") as fh:
+                fh.writelines(keep)
+            os.replace(log + ".tmp", log)
+        for _, o in rows:
+            h = (o.get("k"), o.get("what"))
+            if CUT <= o["t"] <= END:
+                if h in count or h[0] == "path":
+                    count[h] = count.get(h, 0) + 1
+    flags = [n for k, n in inv if k == "flag"]
+    # The pane runs these itself (no transcript shows it): their presses are measured instead, never flagged here.
+    reg = open(f"{PLUGIN}/hooks/register.tsx", errors="replace").read()
+    pane = {("flag", fl) for fl in flags if f"'{fl}'" in reg}
+    docs = re.compile(r"/session-orchestration/\S*?([\w.-]+\.md)\b")  # the plugin's docs only, not a project's namesakes
+    for f in transcripts():
+        for _, o in lines(f):
+            if out_of(o.get("timestamp", "")):
+                continue
+            c = (o.get("message") or {}).get("content")
+            if o.get("type") == "user" and isinstance(c, str):  # a skill started by its slash command
+                for s in re.findall(r"<command-name>/?(?:[\w-]+:)?([\w-]+)</command-name>", c):
+                    if ("skill", s) in count:
+                        count[("skill", s)] += 1
+            if o.get("type") != "assistant":
+                continue
+            for b in c or []:
+                if not isinstance(b, dict) or b.get("type") != "tool_use":
+                    continue
+                name, inp = b.get("name", ""), b.get("input") or {}
+                hit = []
+                if name.startswith("mcp__session-orchestration__"):
+                    hit = [("tool", name.split("__")[-1])]
+                elif name == "Skill":
+                    hit = [("skill", str(inp.get("skill", "")).split(":")[-1])]
+                elif name == "Read":
+                    hit = [("doc", d) for d in docs.findall(str(inp.get("file_path", "")))]
+                elif name == "Bash":
+                    cmd = str(inp.get("command", ""))
+                    hit = [("doc", d) for d in docs.findall(cmd)]  # cat/sed of a doc
+                    if "session-status" in cmd:
+                        hit += [("flag", fl) for fl in flags if re.search(rf"session-status\b[^|;&]*\s{fl}\b", cmd)]
+                for h in hit:
+                    if h in count:
+                        count[h] += 1
+    print("kind\tfeature\tuses\tfirst_seen\tflag")
+    start = time.strftime("%Y-%m-%d", time.gmtime(CUT))
+    # ponytail: config keys have no use count (they're set in files, not called): listed, never flagged; count the
+    # roots that set each one if a key's removal comes up. Presses count only with the log; path lines aren't inventoried.
+    for k, n in sorted(count):
+        known = k not in ("config", "path") and (k != "press" or on)
+        unused = known and (k, n) not in pane and count[(k, n)] == 0 and first.get((k, n), today) <= start
+        print(f"{k}\t{n}\t{count[(k, n)] if known or k == 'path' else '-'}\t{first.get((k, n), '-' if k == 'path' else today)}\t{'unused' if unused else ''}")
+
+
 CMDS = {"sessions": sessions, "events": events, "context": context, "units": units, "waits": waits, "bgtasks": bgtasks, "replies": replies,
-        "triggers": triggers, "html": md2html}
+        "triggers": triggers, "usage": usage, "html": md2html}
 
 if __name__ == "__main__":
     a = sys.argv[1:]

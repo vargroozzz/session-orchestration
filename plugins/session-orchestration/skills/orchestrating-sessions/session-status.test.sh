@@ -2,7 +2,7 @@
 # Self-check for session-status without an adapter: a throwaway repo with one worktree, a worker and a coordinator
 # transcript, and a stubbed `claude agents`. Also --coordinator, --watch, an adapter's notices in --changes, and
 # --changes skipping a session that only started working. Run: bash session-status.test.sh  (prints "ok" or the diff).
-set -euo pipefail
+set -euo pipefail; unset XDG_CONFIG_HOME   # the person-wide config.json: never the real one
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; trap 'echo "failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 root=$(mkdir -p "$tmp/proj" && cd "$tmp/proj" && pwd -P)

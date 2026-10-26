@@ -264,6 +264,17 @@ export const BUILTIN_KEYS: Record<string, string> = {
   t: 'Attach in tab', l: 'Logs in split', y: 'Yesterday', b: 'Earlier day', n: 'Later day', s: 'Summary or list',
 }
 const taken = (key: string) => /^\d$/.test(key) ? 'a 1-9 item key' : BUILTIN_KEYS[key]
+
+// Usage telemetry (telemetry: local): one line per press in the local usage log, through lib.sh's `usage`, which
+// checks the config. The names are fixed: the built-in buttons' (BUILTIN_KEYS) plus USAGE_EXTRA, never a key,
+// path, label of the project's own or command text.
+// ponytail: one bash + lib.sh config read per press even with telemetry off; presses are human-paced. Cache the
+// setting in pane state if a press ever feels slow.
+export const USAGE_EXTRA = ['Stop', 'Run handed','Copy handed', 'Dismiss handed', 'Approval answer', 'Project action']
+export const usageName = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+const logPress = ($: EngineInterface, label: string) => void $.process
+  .run(['bash', '-c', '. "$0" && usage "$1" press', `${$.plugin.root}/lib.sh`, usageName(label)], { timeoutMs: 10_000 })
+  .catch(() => undefined)
 export const ACTIONS_FILE = '.claude/coordinator-actions.json'
 const FIELDS = ['label', 'hotkey', 'command', 'when']
 // .claude/coordinator-actions.json: `[{ "label", "hotkey", "command", "when"? }]`. A bad entry becomes an error
@@ -1317,6 +1328,7 @@ export const register: Register = on => {
         return claimed ? l.map((x): Ask => (x.id === a.id ? { ...x, sending: true } : x)) : l
       })
       if (!claimed) return $.ui.toast('That ask is gone: withdrawn, answered, or expired after 24h.')
+      logPress($, 'Approval answer')
       await syncStatus($)
       try {
         await $.prompt.submit({ text: answerText(a, option), asUser: true })
@@ -1364,6 +1376,7 @@ export const register: Register = on => {
     }
     const act = (hotkey: string, label: string, onPress: (p: UiPressArgument) => unknown) =>
       <Button key={`act-${hotkey}`} plain hotkey={hotkey} label={label} onPress={async p => {
+        logPress($, label === 'Stop' ? label : BUILTIN_KEYS[hotkey] ?? 'Project action')  // a card's s is Stop
         try {
           await onPress(p)
         } catch (err) {
@@ -1772,10 +1785,10 @@ export const register: Register = on => {
         <Box flexDirection="column">
           <Box marginTop={1} columnGap={2}>
             <Text bold>Since {(ydRead?.loading ? '' : r.since) || (ydPicked ?? 'the last working day')}</Text>
-            {shown && <Button key="yd-earlier" plain hotkey="b" dimColor label="‹ earlier" onPress={pick(stepDay(shown, -1))} />}
-            {ydPicked && <Button key="yd-later" plain hotkey="n" dimColor label="later ›" onPress={pick(later && later < today ? later : null)} />}
+            {shown && <Button key="yd-earlier" plain hotkey="b" dimColor label="‹ earlier" onPress={() => (logPress($, 'Earlier day'), pick(stepDay(shown, -1))())} />}
+            {ydPicked && <Button key="yd-later" plain hotkey="n" dimColor label="later ›" onPress={() => (logPress($, 'Later day'), pick(later && later < today ? later : null)())} />}
             {ydPicked && <Button key="yd-auto" plain dimColor label="last working day" onPress={pick(null)} />}
-            <Button key="yd-list" plain hotkey="s" dimColor label={ydRaw ? 'summary' : 'list'} onPress={async () => {
+            <Button key="yd-list" plain hotkey="s" dimColor label={ydRaw ? 'summary' : 'list'} onPress={async () => { logPress($, 'Summary or list');
               await update($, ydList, v => !v)
               const of = (await read($, ydText))?.text ?? ''
               if (!(await read($, ydList)) && (await read($, ydSum))?.of !== of) await summarize($, of)
@@ -1809,20 +1822,20 @@ export const register: Register = on => {
             {counts && <Text dimColor>  {counts}</Text>}
           </Text>
           <Box flexShrink={0} columnGap={2}>
-            <Button key="yesterday" plain hotkey="y" dimColor label={`yesterday ${yd ? '●' : '○'}`} onPress={async () => {
+            <Button key="yesterday" plain hotkey="y" dimColor label={`yesterday ${yd ? '●' : '○'}`} onPress={async () => { logPress($, 'Yesterday');
               let opening = false
               await update($, yesterdayTab, v => (opening = !v))
               // Read afresh each time it opens (a reading from before midnight is another day's), unless one runs.
               if (opening && !(await read($, ydText))?.loading) await loadYesterday($)
             }} />
-            <Button key="allprojects" plain hotkey="w" dimColor label={`all projects ${allP ? '●' : '○'}`} onPress={async () => {
+            <Button key="allprojects" plain hotkey="w" dimColor label={`all projects ${allP ? '●' : '○'}`} onPress={async () => { logPress($, 'All projects');
               await update($, allProjects, v => !v)
               await activityInFlight // a reading started before the press would land after this one
               await refreshActivity($)
             }} />
             {yd
-              ? <Button key="refresh" plain hotkey="r" dimColor label={ydRead?.loading ? '↻ …' : `↻ ${ydRead?.at ?? ''}`.trim()} onPress={() => loadYesterday($)} />
-              : <Button key="refresh" plain hotkey="r" dimColor label={busy ? '↻ …' : `↻ ${b?.at ?? ''}`.trim()} onPress={() => refresh($)} />}
+              ? <Button key="refresh" plain hotkey="r" dimColor label={ydRead?.loading ? '↻ …' : `↻ ${ydRead?.at ?? ''}`.trim()} onPress={() => (logPress($, 'Refresh'), loadYesterday($))} />
+              : <Button key="refresh" plain hotkey="r" dimColor label={busy ? '↻ …' : `↻ ${b?.at ?? ''}`.trim()} onPress={() => (logPress($, 'Refresh'), refresh($))} />}
           </Box>
         </Box>
 
@@ -1872,9 +1885,9 @@ export const register: Register = on => {
                     {c.cwd !== (acts?.root ?? c.cwd) && <Text dimColor wrap="wrap">handed over from {c.cwd}; it runs in {acts?.root}</Text>}
                     {c.outcome && <Text color="error" wrap="wrap">last run: {c.outcome}</Text>}
                     <Box columnGap={2}>
-                      <Button key={`hrun-${c.id}`} label={c.running ? 'Running…' : 'Run'} onPress={() => runHanded($, c)} />
-                      <Button key={`hcopy-${c.id}`} plain label="Copy" onPress={copy(c.command)} />
-                      <Button key={`hdrop-${c.id}`} plain dimColor label="Dismiss" onPress={() => dropHanded($, c)} />
+                      <Button key={`hrun-${c.id}`} label={c.running ? 'Running…' : 'Run'} onPress={() => (logPress($, 'Run handed'), runHanded($, c))} />
+                      <Button key={`hcopy-${c.id}`} plain label="Copy" onPress={p => (logPress($, 'Copy handed'), copy(c.command)(p))} />
+                      <Button key={`hdrop-${c.id}`} plain dimColor label="Dismiss" onPress={() => (logPress($, 'Dismiss handed'), dropHanded($, c))} />
                     </Box>
                   </Box>
                 ))}
@@ -1901,7 +1914,7 @@ export const register: Register = on => {
             <Box key={`action-row-${a.label}`} paddingLeft={2} columnGap={2}>
               <Box flexShrink={0}>
                 <Button key={`action-${a.label}`} plain hotkey={a.hotkey} label={running === a.label ? `${a.label}…` : a.label}
-                  onPress={() => runAction($, a)} />
+                  onPress={() => (logPress($, 'Project action'), runAction($, a))} />
               </Box>
               <Text dimColor wrap={wrap}>{a.command}</Text>
             </Box>

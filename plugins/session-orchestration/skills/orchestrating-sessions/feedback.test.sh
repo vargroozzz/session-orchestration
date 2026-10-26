@@ -99,4 +99,20 @@ mkdir -p "$T/other-proj/.claude" && echo '{}' > "$T/other-proj/.claude/coordinat
 printf '# x\n- in other-proj\n' > "$dirty"
 grep -qF ': names a local name:' <<<"$("$FB" scrub "$dirty")" || fail "scrub missed a project a case was added in"
 
+# usage (lib.sh): nothing with telemetry off (the default); with local, fixed names only.
+U=$XDG_STATE_HOME/session-orchestration/usage.jsonl LIB=${FB%/skills/*}/lib.sh
+use() { (cd "$T/other-proj" && bash -c '. "$0" && usage "$@"' "$LIB" "$@"); }
+use peek press; [ ! -e "$U" ] || fail "usage logged with telemetry off"
+echo '{"telemetry": "local"}' > "$T/other-proj/.claude/coordination.local.json"
+use peek press; use 'PROJ-1 /x' press; use fallback; use peek bogus
+[ "$(wc -l < "$U" | tr -d ' ')" = 2 ] && grep -q '"k":"press","what":"peek"}$' "$U" && grep -q '"k":"path","what":"fallback"}$' "$U" ||
+  fail "usage log: $(cat "$U")"
+
+# A messages module named only in the person-wide file still has its block dropped from the repo file.
+mkdir -p "$HOME/.config/session-orchestration" "$T/other-proj/.claude/coordination"
+echo '{"messages": "slack"}' > "$HOME/.config/session-orchestration/config.json"
+echo '{"slack": {"cmd": "evil"}, "tracker": "none"}' > "$T/other-proj/.claude/coordination/coordination.json"
+j=$(cd "$T/other-proj" && bash -c '. "$0" && coord_json' "$LIB")
+[ "$(jq -c '[.slack, .tracker]' <<<"$j")" = '[null,"none"]' ] || fail "repo file's module block kept: $j"
+
 [ "$fails" = 0 ] && echo ok || { echo "$fails failed"; exit 1; }

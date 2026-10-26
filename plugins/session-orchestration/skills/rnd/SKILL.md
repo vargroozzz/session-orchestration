@@ -77,6 +77,9 @@ schedules it.
      the fork's row. Name them when a figure hinges on them.
    - Time to done: review written → posted, "merge it" → merged.
    - Weekly $ only as context, one line.
+   - Feature use: `usage 30 > usage.tsv`. Each `unused` row (0 uses in 30 days, there all window) is a
+     candidate to drop or merge: at most one proposal listing them, never a removal on the run's own say. Pane
+     buttons show `-` without `telemetry: local` (setting-up-coordination, Config): say so, and judge them not at all.
 4. Run the project brief's own checks. If the project memory index has a graduation rule and the
    brief has no graduation check of its own, read every topic file, apply the rule to each entry, and
    list the ones to graduate (entry, target doc and section, why) and to drop, as one proposal outside

@@ -2,13 +2,14 @@
 # the date/file-time helpers that differ between GNU (Linux) and BSD (macOS).
 #
 # Config: two JSON files, each the nearest one up from the cwd within the project (a folder with its own adapter
-# ends the walk: a subproject never reads its parent's), merged key by key (the person's file wins):
+# ends the walk: a subproject never reads its parent's), merged key by key (the person's file wins), over the
+# person-wide user_config (any key but team, which only the project's file sets):
 #   .claude/coordination/coordination.json   repo keys: tracker, host, key_pattern, features.review_inbox
 #                                            (excluded from git until shared mode commits it; read from the team
 #                                            repo's when the person file names one, see shared_dir)
 #   .claude/coordination.local.json          person keys: approvals.delegate, features.accounts, terminal, messages
 #                                            (and its module's block, e.g. msgraph), trusted, team, feedback.mode,
-#                                            feedback.repo_dir (always excluded;
+#                                            feedback.repo_dir, telemetry (always excluded;
 #                                            the repo file can't set them)
 # No file means every default. `config KEY` prints the key's value; an unknown value prints the default and one
 # warning line on stderr.
@@ -46,8 +47,12 @@ user_config() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/session-orchestration/co
 coord_json() {
   local f out='{}' j s m p d drop
   # The block of the person's messages module too (e.g. .slack): its settings can name a command to run.
-  p=$(person_file) && m=$(jq -r '.messages // empty | strings' "$p" 2>/dev/null)
-  drop="del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback$( [[ ${m:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$m\"]")) | if .features | type == \"object\" then del(.features.accounts) else . end"
+  # Its name from either person's file, the project's winning.
+  p=$(person_file)
+  for f in "$(user_config)" "${p:-}"; do
+    [ -n "$f" ] && [ -f "$f" ] && j=$(jq -r '.messages // empty | strings' "$f" 2>/dev/null) && [ -n "$j" ] && m=$j
+  done
+  drop="del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry$( [[ ${m:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$m\"]")) | if .features | type == \"object\" then del(.features.accounts) else . end"
   s=$(shared_dir 2>/dev/null) && s=$s/coordination.json
   # Lowest first: the person's file for every project (person-wide keys such as feedback.*), the repo file, the
   # project's person file.
@@ -140,8 +145,8 @@ detect_host() {
 config() {
   local key=${1:-} v ok=
   case $key in
-    tracker|host|key_pattern|approvals.delegate|features.accounts|features.review_inbox|terminal|messages|feedback.mode|feedback.repo_dir) ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate features.accounts features.review_inbox terminal messages feedback.mode feedback.repo_dir)" >&2; return 2 ;;
+    tracker|host|key_pattern|approvals.delegate|features.accounts|features.review_inbox|terminal|messages|feedback.mode|feedback.repo_dir|telemetry) ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate features.accounts features.review_inbox terminal messages feedback.mode feedback.repo_dir telemetry)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
@@ -156,6 +161,7 @@ config() {
     terminal) [[ $v =~ ^[A-Za-z0-9_-]+$ ]] && find_module terminals "$v" >/dev/null && ok=1 ;;
     messages) [ "$v" = none ] && ok=1 || { [[ $v =~ ^[A-Za-z0-9_-]+$ ]] && find_module messages "$v" >/dev/null && ok=1; } ;;
     feedback.mode) case $v in auto|pr|fork-pr|issue|local) ok=1 ;; esac ;;
+    telemetry) case $v in local|off) ok=1 ;; esac ;;
     feedback.repo_dir) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [ -d "$v" ] && ok=1 ;;
   esac
   [ -n "$ok" ] && { echo "$v"; return 0; }
@@ -163,8 +169,21 @@ config() {
   [ -z "$v" ] || echo "warning: config $key=$v is not valid${kind:+ (no $kind/$v.sh found)}: using the default" >&2
   case $key in
     tracker) echo none ;; host) detect_host ;; key_pattern) ;; approvals.delegate|features.*) echo false ;; terminal) echo plain ;; messages) echo none ;;
-    feedback.mode) echo auto ;; feedback.repo_dir) ;;
+    feedback.mode) echo auto ;; feedback.repo_dir) ;; telemetry) echo off ;;
   esac
+}
+
+# usage NAME [KIND]: with telemetry=local, one line in the local usage log: {"t":EPOCH,"k":KIND,"what":NAME}. KIND is
+# press (a pane button, from the mod) or path (default: a script counting a path no transcript shows). NAME is a
+# fixed word (lowercase, digits, -), never a key, path or id, so the file is shareable as is. Never fails its caller.
+usage_log() { echo "${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/usage.jsonl"; }
+usage() {
+  local f
+  [[ ${1:-} =~ ^[a-z0-9-]{1,40}$ && ${2:-path} =~ ^(press|path)$ ]] || return 0
+  [ "$(config telemetry 2>/dev/null)" = local ] || return 0
+  f=$(usage_log); mkdir -p "${f%/*}" 2>/dev/null &&
+    printf '{"t":%s,"k":"%s","what":"%s"}\n' "$(date +%s)" "${2:-path}" "$1" >> "$f" 2>/dev/null
+  return 0
 }
 
 # find_module KIND NAME: the first KIND/NAME.sh along the lookup path; fails when there's none.

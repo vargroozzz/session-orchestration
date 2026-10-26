@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Self-check for approved-action.sh: a fake coordinator transcript holding the user's approvals, a worker transcript
 # holding the coordinator's relays, a stubbed `claude agents`. Run: bash approved-action.test.sh  (prints "ok" or the failure).
-set -euo pipefail
+set -euo pipefail; unset XDG_CONFIG_HOME   # the person-wide config.json: never the real one
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 root=$(mkdir -p "$tmp/proj" && cd "$tmp/proj" && pwd -P)
