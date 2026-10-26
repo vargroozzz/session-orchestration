@@ -3,7 +3,10 @@
 # compacts. ctx = input + cache read + cache write of the last assistant line with usage in the transcript's tail
 # (its last 256K, else its last 300 lines).
 # - Kind, from the first user prompt: a `Chunk: KEY/N` line is a chunk, `Act as a coordinator` a coordinator, else
-#   a task (its `Session task: KEY` line names it; a session without one isn't coordinated: left alone).
+#   a task (its `Session task: KEY` line names it; a session without one isn't coordinated: left alone). A task, or
+#   a session without the line, whose tail matches lib.sh's coord_re (session-status's coordinator test) is a
+#   coordinator from then on.
+# - Chunk and task texts end with the self-handover (session-status --handover --self) for when no coordinator runs.
 # - Window: $CLAUDE_CODE_AUTO_COMPACT_WINDOW, else autoCompactWindow in settings.json, else config compact.window.
 #   ceiling = window - 33000; hard = min(at + handoff.hard_after, ceiling - handoff.stop_room);
 #   at = min(handoff.at.KIND, hard - 10000). handoff.at.KIND = 0: off.
@@ -27,19 +30,26 @@ if [ "$ev" = SessionStart ]; then
 elif [ -e "$s.hard" ]; then exit 0
 fi
 
-if ! read -r kind key n at hard note 2>/dev/null < "$s.kind"; then
+# .kind: "KIND KEY N AT HARD NOTE"; a task's has coord_re on a second line, so no call sources lib.sh (13 ms).
+cached=1 re=
+if [ -f "$s.kind" ] && { read -r kind key n at hard note && { [ "$kind" != task ] || read -r re; }; } < "$s.kind"; then :
+else
   first=$(head -n 50 "$tp" | jq -Rrn 'first(inputs | fromjson? | select(.type == "user" and (.isMeta | not)) | .message.content
     | if type == "string" then . else (map(select(.type == "text") | .text) | join("\n")) end | select(length > 0)) // ""')
   [ -n "$first" ] || exit 0   # no prompt yet: decide later
-  key=-; n=-
+  key=-; n=-; cached=
   if c=$(grep -m1 -E '^Chunk: ' <<<"$first"); then
     kind=chunk; c=${c#Chunk: }; key=${c%%/*}; n=${c##*/}
   elif grep -q '^Act as a coordinator' <<<"$first"; then kind=coordinator
   else kind=task; c=$(grep -m1 -E '^Session task: ' <<<"$first") && key=${c#Session task: } && key=${key%% *}
   fi
   key=${key//[^A-Za-z0-9_.-]/}; n=${n//[^A-Za-z0-9]/}; key=${key:--}
-  [ "$kind" = task ] && [ "$key" = - ] && { mkdir -p "$d" && echo "task - - 0 0" > "$s.kind"; exit 0; }
   cd "${cwd:-.}" 2>/dev/null; . "$here/../lib.sh"
+  # ponytail: the adapter at the session's cwd (the project root as a rule); a subfolder session misses its status-names
+  [ "$kind" != task ] || { a=$(adapter_path . 2>/dev/null) && names=$("$a" status-names 2>/dev/null); re=$(coord_re "${names:-}"); }
+fi
+thresholds() {   # at, hard and note for $kind, cached
+  declare -F config >/dev/null || { cd "${cwd:-.}" 2>/dev/null; . "$here/../lib.sh"; }
   at=$(config "handoff.at.$kind" 2>/dev/null); after=$(config handoff.hard_after 2>/dev/null)
   room=$(config handoff.stop_room 2>/dev/null); expect=$(config compact.window 2>/dev/null)
   w=${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}; from=env
@@ -48,23 +58,32 @@ if ! read -r kind key n at hard note 2>/dev/null < "$s.kind"; then
   hard=$(( at + after )); (( w - 33000 - room < hard )) && hard=$(( w - 33000 - room ))
   (( at > 0 && hard - 10000 < at )) && at=$(( hard - 10000 ))
   note=; [ "$w" = "$expect" ] || note="This session's window is $w from $from; expected $expect."
-  mkdir -p "$d" && echo "$kind $key ${n:--} $at $hard $note" > "$s.kind"
+  mkdir -p "$d" && printf '%s %s %s %s %s %s\n%s' "$kind" "$key" "${n:--}" "$at" "$hard" "$note" "${re:+$re
+}" > "$s.kind"
+}
+if [ -z "$cached" ]; then
+  if [ "$kind" = task ] && [ "$key" = - ]; then at=0 hard=0 note=; mkdir -p "$d" && printf 'task - - 0 0\n%s\n' "$re" > "$s.kind"
+  else thresholds; fi
 fi
-(( at > 0 )) || exit 0
+(( at > 0 )) || [ "$kind" = task ] || exit 0
 
 say() {
   [ -e "$s.noted" ] || { [ -z "$note" ] || set -- "$1 $note"; touch "$s.noted"; }
   jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName: $e, additionalContext: $m}}'
 }
-case $kind in
-  chunk) where="\`## c$n: handoff\` appended to $key-build.md in the replies folder"
-         tell=" Message the coordinator \"handoff ready: $key c$n\"." ;;
-  task) where="\`## Handoff\` in your replies file"; tell=" Message the coordinator \"handoff ready: $key\"." ;;
-  *) where="the handover file your coordinator doc names"; tell= ;;
-esac
-
+texts() {   # where the handoff goes, whom to tell, and (chunk and task) the self-handover
+  case $kind in
+    chunk) where="\`## c$n: handoff\` appended to $key-build.md in the replies folder"
+           tell=" Message the coordinator \"handoff ready: $key c$n\"." ;;
+    task) where="\`## Handoff\` in your replies file"; tell=" Message the coordinator \"handoff ready: $key\"." ;;
+    *) where="the handover file your coordinator doc names"; tell= ;;
+  esac
+  printf -v ss %q "${here%/hooks}/skills/orchestrating-sessions/session-status"
+  case $kind in chunk|task) selfh=" If no coordinator is running (\`$ss --coordinator\` prints nothing), finish with \`$ss --handover --self -- '<next step>'\`." ;; *) selfh= ;; esac
+}
 if [ "$ev" = SessionStart ]; then
   [ "$kind" = chunk ] || exit 0
+  texts
   claim "$s.compact" || exit 0; say "You were compacted mid-chunk. Write the handoff ($where) from what's on disk and stop.$tell"
   exit 0
 fi
@@ -72,17 +91,23 @@ fi
 # The last 256K first: BSD tail -n 300 on a transcript of large tool results reads ~10 MB (150 ms); 256K takes 20 ms.
 # ponytail: the last 300 lines only when 256K holds no usage (a tool result bigger than that).
 # Subagent (sidechain) lines and all-zero usage (a synthetic or failed reply) don't count.
-ctx_of() { LC_ALL=C grep -F '"usage":' | jq -Rn '[inputs | fromjson? | select(.type == "assistant" and (.isSidechain | not))
+# The same pass tests a task session's tail against coord_re (lib.sh: session-status's definition): a match makes it
+# a coordinator from then on, `Session task:` line or not, with its own at and text. Each extra process costs ~10 ms.
+scan() { LC_ALL=C grep -E "\"usage\":${re:+|$re}" | jq -Rrn --arg re "$re" '[inputs] | (if $re != "" and any(.[]; test($re))
+  then "coordinator" else "-" end) + " " + ([.[] | fromjson? | select(.type == "assistant" and (.isSidechain | not))
   | .message.usage // empty | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)
-  | select(. > 0)] | last // empty' 2>/dev/null; }
-ctx=$(tail -c 262144 "$tp" | ctx_of)
-[ -n "$ctx" ] || ctx=$(tail -n 300 "$tp" | ctx_of)
+  | select(. > 0)] | last // "" | tostring)' 2>/dev/null; }
+out=$(tail -c 262144 "$tp" | scan); ctx=${out#* }
+[ -n "$ctx" ] || { ctx=$(tail -n 300 "$tp" | scan); ctx=${ctx#* }; }
+if [ "${out%% *}" = coordinator ]; then kind=coordinator key=- n= re=; rm -f "$s.soft"; thresholds; fi
+(( at > 0 )) || exit 0
 [[ $ctx =~ ^[0-9]+$ ]] || exit 0
+texts
 k=$(( ctx / 1000 ))K
 if (( ctx > hard )); then
   claim "$s.hard" || exit 0; touch "$s.soft"
-  say "Context is at $k, past the hard stop. Stop now: start nothing else, write the handoff ($where) from what's on disk.$tell Then end your turn."
+  say "Context is at $k, past the hard stop. Stop now: start nothing else, write the handoff ($where) from what's on disk.$tell$selfh Then end your turn."
 elif (( ctx > at )) && claim "$s.soft"; then
-  say "Context is at $k: hand off. Reach your stop point: finish the current edit, commit, run the checks, and start no new step. Write the handoff ($where).$tell Then end your turn."
+  say "Context is at $k: hand off. Reach your stop point: finish the current edit, commit, run the checks, and start no new step. Write the handoff ($where).$tell$selfh Then end your turn."
 fi
 exit 0

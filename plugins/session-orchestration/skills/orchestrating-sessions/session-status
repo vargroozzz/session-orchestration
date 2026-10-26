@@ -99,13 +99,16 @@
 #                       --watch or --owner, or opened the pane), newest first, excluding the caller; no tracker calls
 #        session-status --owner KEY…   who owns each task and why: the row's session, then each candidate
 #                       (first prompt, marker, review, maybe) with its state, first prompt line and markers
-#        session-status --handover ID [--] 'WHAT NEXT'   a task session too big to resume is stopped and a fresh
-#                       one takes its task over, under its name, from the replies folder's KEY.md (see the block)
+#        session-status --handover ID|--self [--model M] [--effort E] [--] 'WHAT NEXT'   a task or chunk session too
+#                       big to resume is stopped and a fresh one takes its task over, under its name, from the replies
+#                       folder's KEY.md (a chunk: KEY-build.md's handoff); --self, a session hands itself over when no
+#                       coordinator runs (see the block)
 #        session-status --init [--check | --write …]   set this folder up for coordination: the setting-up-coordination
 #                       skill's session-init documents the modes; runs in the cwd, not the root
 #        session-status --config KEY   a config value (lib.sh at the plugin root lists the keys), e.g. approvals.delegate
-#        session-status --plan FILE [--check | --next | --brief N]   a design's plan table: waves and chunk states,
-#                       its problems (exit 1), the `claude --bg` lines of the runnable chunks, or row N's brief skeleton
+#        session-status --plan FILE [--check | --next | --brief N | --done N]   a design's plan table: waves and chunk
+#                       states, its problems (exit 1), the `claude --bg` lines of the runnable chunks, row N's brief
+#                       skeleton, or (run by chunk N once it landed) its usage chunk line
 #        session-status --open view [--account DIR] TITLE DIR -- CMD…   (or `--open split [--account DIR] DIR -- CMD…`)
 #                       opens CMD in a tab or split of the configured terminal (config terminal; lib.sh's
 #                       load_terminal), with its exit code: 2 means nothing opened and CMD is printed to copy
@@ -124,17 +127,19 @@ set -uo pipefail
 # # | Chunk | Kind | Deps | Touches | Est | Model/effort | Done when), with each chunk's state from the
 # `## cN: done` sections of KEY-build.md beside it (KEY: FILE's name without .md). Alone: the waves and each row's
 # state. --check: one line per problem, exit 1. --next: the waves, then a `claude --bg` line per runnable chunk.
-# --brief N: a brief skeleton for row N, to finish by hand.
+# --brief N: a brief skeleton for row N, to finish by hand. --done N: row N's kind, model/effort (default: plan.models)
+# and est, with this session's act_K from `rnd.py chunks 2 --session` (left out if rnd fails), go to lib.sh usage as a
+# chunk line; it prints the line or why nothing was logged.
 if [ "${1:-}" = --plan ]; then
-  cv() { config "$1" 2>/dev/null || echo "$2"; }   # the plan.* and handoff.* keys, with their defaults until lib.sh has them
-  models=; for k in design:opus/xhigh build:opus/medium mechanical:sonnet/medium review:opus/xhigh release:sonnet/medium scan:haiku/low; do
-    models+="${k%%:*}=$(cv "plan.models.${k%%:*}" "${k#*:}") "; done
-  shift; PLAN_MAXP=$(cv plan.max_parallel 3) PLAN_AT=$(cv handoff.at.chunk 125000) PLAN_MODELS=$models exec python3 -I - "$@" <<'PY'
-import os, re, shlex, sys
+  models=; for k in design build mechanical review release scan; do models+="$k=$(config "plan.models.$k") "; done
+  shift; PLAN_MAXP=$(config plan.max_parallel) PLAN_AT=$(config handoff.at.chunk) PLAN_MODELS=$models PLAN_LIB=$(dirname "$0")/../../lib.sh \
+    PLAN_TELEMETRY=$(config telemetry) PLAN_LOG=$(usage_log) exec python3 -I - "$@" <<'PY'
+import os, re, shlex, subprocess, sys
 die = lambda msg: sys.exit(print(msg, file=sys.stderr) or 2)
-usage = "usage: session-status --plan FILE [--check | --next | --brief N]"
+usage = "usage: session-status --plan FILE [--check | --next | --brief N | --done N]"
 a = sys.argv[1:]
-if not a or a[1:2] not in ([], ["--check"], ["--next"], ["--brief"]) or (len(a) == 3) != (a[1:2] == ["--brief"]) or len(a) > 3:
+if not a or a[1:2] not in ([], ["--check"], ["--next"], ["--brief"], ["--done"]) or \
+        (len(a) == 3) != (a[1:2] in (["--brief"], ["--done"])) or len(a) > 3:
     die(usage)
 if not os.path.isfile(a[0]): die(f"no file {a[0]}")
 path = os.path.abspath(a[0]); mode = a[1] if len(a) > 1 else ""
@@ -215,6 +220,26 @@ if mode == "--check":
                 both = [f"{s} ~ {t}" if s != t else s for s in R[x]["touch"] for t in R[y]["touch"] if overlap(s, t)]
                 if both: out.append(f"c{x} and c{y} both touch {', '.join(both)}")
     if out: sys.exit(print("\n".join(out)) or 1)
+    sys.exit()
+
+if mode == "--done":   # row N's kind, model/effort and est, and this session's act from rnd.py, as a usage chunk line
+    n = a[2].removeprefix("c")
+    if n not in R: die(f"no row {n} in {path}")
+    r = R[n]; m, _, e = (KINDS.get(r["kind"], "") if r["model"] == "default" else r["model"]).partition("/")
+    if r["est"] is None: sys.exit(print(f"nothing logged: c{n}'s est {r['raw_est'] or '(none)'} is not like 60K"))
+    if os.environ["PLAN_TELEMETRY"] != "local":
+        sys.exit(print(f"nothing logged: telemetry is {os.environ['PLAN_TELEMETRY']}, not local (config telemetry)"))
+    act, sid = "", os.environ.get("CLAUDE_CODE_SESSION_ID", "")[:8]
+    try:   # growth has one definition: rnd.py's; no session id, no act
+        if not sid: raise ValueError
+        out = subprocess.run([sys.executable, "-I", os.path.join(os.path.dirname(os.environ["PLAN_LIB"]), "skills/rnd/rnd.py"),
+                              "chunks", "2", "--session", sid], capture_output=True, text=True, timeout=120).stdout.splitlines()
+        act = out[1].split("\t")[out[0].split("\t").index("act_K")] if len(out) > 1 else ""
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError): pass
+    log = os.environ["PLAN_LOG"]; size = os.path.getsize(log) if os.path.exists(log) else 0
+    subprocess.run(["bash", "-c", '. "$0" && usage "$@"', os.environ["PLAN_LIB"], r["kind"], "chunk", m, e, str(r["est"] // 1000), act])
+    new = open(log).read()[size:].strip() if os.path.exists(log) else ""
+    print(new or f"nothing logged: usage refused or couldn't write kind {r['kind']}, model/effort {m}/{e}, est {r['est'] // 1000}, act {act or '-'}")
     sys.exit()
 
 if mode == "--brief":
@@ -715,21 +740,42 @@ fi
 # in the project root, same account (plus --permission-mode default where that account defaults to plan), with a
 # brief naming KEY.md, WHAT NEXT and a `Supersedes: ID` line (the owner mapping reads it). NAME: the old name if
 # it starts with KEY (any case), else KEY-<old name>; the old one is stopped, so the names don't clash live.
+# --model M / --effort E go onto the `claude --bg` line (none: the daemon's defaults). A chunk session (a `Chunk:
+# KEY/N` line in its first prompt) needs no KEY.md: its successor, KEY-cN, continues from `## cN: handoff` in
+# KEY-build.md and follows KEY-cN.md, both in the replies folder. --self (ID = $CLAUDE_CODE_SESSION_ID): a session
+# hands itself over as its last step, with no coordinator running (one would start the successor): it isn't
+# stopped, nor refused as mid-turn; the successor starts and the caller ends its turn.
 if [ -n "$HANDOVER" ]; then
-  want=${1:-}; [ $# -gt 0 ] && shift; [ "${1:-}" = -- ] && shift; next=${1:-}
-  [ "${#want}" -ge 8 ] && [ -n "$next" ] || { echo "usage: session-status --handover ID [--] 'WHAT NEXT' (ID: 8+ characters)"; exit 2; }
+  self= model= effort=
+  if [ "${1:-}" = --self ]; then self=1; want=${CLAUDE_CODE_SESSION_ID:-}; shift; else want=${1:-}; [ $# -gt 0 ] && shift; fi
+  while [ $# -ge 2 ] && case $1 in --model) model=$2 ;; --effort) effort=$2 ;; *) false ;; esac; do shift 2; done
+  [ "${1:-}" = -- ] && shift; next=${1:-}
+  [ "${#want}" -ge 8 ] && [ -n "$next" ] && [ $# = 1 ] ||
+    { echo "usage: session-status --handover ID|--self [--model M] [--effort E] [--] 'WHAT NEXT' (ID: 8+ characters)"; exit 2; }
+  [ -z "$model" ] || [[ $model =~ ^[a-z][a-z0-9.-]*$ && $model != fable* ]] || { echo "--model $model: not a model name like opus"; exit 2; }
+  [ -z "$effort" ] || [[ $effort =~ ^(low|medium|high|xhigh|max)$ ]] || { echo "--effort $effort: one of low medium high xhigh max"; exit 2; }
   row=$(find_session "$want") || { echo "couldn't list the sessions; try again"; exit 1; }
   [ -n "$row" ] || { echo "no session $want in any account"; exit 2; }
+  if [ -n "$self" ]; then   # after find_session: --coordinator prints nothing, not an error, when the listing fails
+    c=$(bash "$SELF" --coordinator 2>/dev/null | head -1)
+    [ -z "$c" ] || { echo "coordinator \"$c\" is running: it starts your successor. Message it \"handoff ready\" instead; not handed over"; exit 3; }
+  fi
   read_row id name st pre started cwd kind status pid
   f=$(transcript_of "$id"); [ -n "$f" ] || { echo "no transcript for \"$name\" (${id:0:8}): not handed over"; exit 2; }
-  first=$(first_prompt "$f"); marks=$(marks_of "$first" "$f")
-  ! grep -qE ' review([.,;:!)]|$)' <<<"$marks" || { echo "\"$name\" (${id:0:8}) is a review session: not handed over"; exit 2; }
-  keys=$( { first_key "$first"; grep -oE "$KEYRE" <<<"$marks"; } | sort -u)
-  [ -n "$keys" ] || { echo "\"$name\" (${id:0:8}) names no task key (first prompt or Session task: marker): not handed over"; exit 2; }
-  [ "$(grep -c . <<<"$keys")" = 1 ] || { echo "\"$name\" (${id:0:8}) names several task keys ($(paste -sd' ' - <<<"$keys")): hand over by hand"; exit 2; }
-  key=$keys
+  first=$(first_prompt "$f")
+  if c=$(grep -m1 -E '^Chunk: [^/]+/' <<<"$first"); then
+    c=${c#Chunk: }; key=${c%%/*}; n=${c##*/}; key=${key//[^A-Za-z0-9_.-]/}; n=${n//[^A-Za-z0-9]/}
+  else
+    n=; marks=$(marks_of "$first" "$f")
+    ! grep -qE ' review([.,;:!)]|$)' <<<"$marks" || { echo "\"$name\" (${id:0:8}) is a review session: not handed over"; exit 2; }
+    keys=$( { first_key "$first"; grep -oE "$KEYRE" <<<"$marks"; } | sort -u)
+    [ -n "$keys" ] || { echo "\"$name\" (${id:0:8}) names no task key (first prompt or Session task: marker): not handed over"; exit 2; }
+    [ "$(grep -c . <<<"$keys")" = 1 ] || { echo "\"$name\" (${id:0:8}) names several task keys ($(paste -sd' ' - <<<"$keys")): hand over by hand"; exit 2; }
+    key=$keys
+  fi
   succ=$(ls "$(dirname "$f")"/*.jsonl 2>/dev/null | supersedes | awk -v id="$id" '$1 == id {print substr($2, 1, 8)}' | tail -1)
   [ -z "$succ" ] || { echo "\"$name\" (${id:0:8}) is superseded by $succ already: not handed over again"; exit 2; }
+  [ -z "$self" ] || pid=   # the caller itself: never stopped, and its own turn is the one running
   if [ -n "$pid" ]; then
     { [ "$status" = busy ] || { [ -z "$status" ] && [ "$st" = working ]; }; } && { echo "\"$name\" is mid-turn: not handed over; try when its turn ends"; exit 3; }
     [ "$status" = waiting ] && { echo "\"$name\" is waiting on a prompt: not handed over; answer it first ($pre attach ${id:0:8})"; exit 3; }
@@ -737,20 +783,30 @@ if [ -n "$HANDOVER" ]; then
   fi
   rdir=$(sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1); rdir=${rdir%/}
   [ -n "$rdir" ] || { echo "$ROOT/CLAUDE.md names no replies folder: nothing to hand over from"; exit 2; }
-  case $rdir in /*) rfile=$rdir/$key.md ;; *) rfile=$ROOT/$rdir/$key.md ;; esac
-  [ -f "$rfile" ] || { echo "no $rdir/$key.md: ask \"$name\" for a status report first, or write one"; exit 2; }
+  case $rdir in /*) rd=$rdir ;; *) rd=$ROOT/$rdir ;; esac
+  [ -n "$n" ] || [ -f "$rd/$key.md" ] || { echo "no $rdir/$key.md: ask \"$name\" for a status report first, or write one"; exit 2; }
+  [ -z "$n" ] || grep -qE "^## c$n: handoff" "$rd/$key-build.md" 2>/dev/null ||
+    { echo "no \`## c$n: handoff\` in $rdir/$key-build.md: ask \"$name\" to write it first"; exit 2; }
   if [ -n "$pid" ]; then stop_session "$pre" "$id" || { echo "couldn't stop \"$name\" (${id:0:8}): nothing started"; exit 1; }; fi
   case $(tr '[:lower:]' '[:upper:]' <<<"$name") in
     "$key"|"$key"[!0-9]*) new=$name ;;
     *) slug=$(tr '[:upper:]' '[:lower:]' <<<"$name" | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//'); new=$key${slug:+-$slug} ;;
   esac
+  [ -z "$n" ] || new=$key-c$n
   case $pre in claude) cfg=$CUR ;; 'env -u CLAUDE_CONFIG_DIR claude') cfg=$HOME/.claude ;; *) cfg=${pre#CLAUDE_CONFIG_DIR=}; cfg=${cfg% claude}; cfg=${cfg/#\~/$HOME} ;; esac
   pm=; [ "$(jq -r '.permissions.defaultMode // empty' "$cfg/settings.json" 2>/dev/null)" != plan ] || pm=' --permission-mode default'
-  text="Work on $key: continue from $rdir/$key.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole)."
+  pm+=${model:+ --model $model}${effort:+ --effort $effort}
+  if [ -n "$n" ]; then
+    text=$(printf 'Session task: %s\nChunk: %s/%s\nSupersedes: %s\nContinue from "## c%s: handoff" in %s/%s-build.md, then follow %s/%s-c%s.md.\n%s' \
+      "$key" "$key" "$n" "$id" "$n" "$rd" "$key" "$rd" "$key" "$n" "$next")
+  else
+    text="Work on $key: continue from $rdir/$key.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole)."
+  fi
   out=$(bash -c "$pre --bg$pm -n \"\$0\" \"\$1\"" "$new" "$text" 2>&1)
   nid=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1); nid=${nid##* }
-  [ -n "$nid" ] || { echo "stopped \"$name\" (${id:0:8}), but the new session didn't start: $(tail -1 <<<"$out")"; exit 1; }
-  echo "handed $key over: \"$name\" (${id:0:8}) ${pid:+stopped, }superseded by \"$new\" ($nid)"
+  [ -n "$nid" ] || { echo "${pid:+stopped \"$name\" (${id:0:8}), but }the new session didn't start: $(tail -1 <<<"$out")"; exit 1; }
+  [ -z "$self" ] || { echo "handed over; end your turn now (\"$new\" ($nid) supersedes this session)"; exit 0; }
+  echo "handed $key${n:+ c$n} over: \"$name\" (${id:0:8}) ${pid:+stopped, }superseded by \"$new\" ($nid)"
   exit 0
 fi
 
@@ -781,8 +837,7 @@ fi
 # key: never owners. A worker running it for its own task, or only reading the docs, stays a worker.
 find "$TRANSCRIPTS" -maxdepth 1 -name '*.jsonl' -mtime -30 2>/dev/null > "$TMP/files"
 names=$(adapter status-names 2>/dev/null) || names=
-PAT="\"command\":\"[^\"]*(session-status${names:+|$names})"
-tr '\n' '\0' < "$TMP/files" | xargs -0 grep -l -E "$PAT +--(changes|watch|owner)|\"name\":\"mcp__session-orchestration__open_pane\"" > "$TMP/watchers"
+tr '\n' '\0' < "$TMP/files" | xargs -0 grep -l -E "$(coord_re "$names")" > "$TMP/watchers"
 grep -vxF -f "$TMP/watchers" "$TMP/files" > "$TMP/workers"
 
 # Coordinators: live sessions of this account in $TMP/watchers (workers run the status command for their own task

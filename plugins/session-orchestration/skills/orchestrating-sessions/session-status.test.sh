@@ -405,6 +405,29 @@ run --handover "$gid" 'Go on' | grep -q 'superseded by "abc-41 thing" (abcdef12)
   calls | grep -qF "cfg --bg --permission-mode default -n abc-41 thing Work on ABC-41: continue from replies/ABC-41.md. Go on. Supersedes: $gid" ||
   { echo "handover of a status-running worker failed"; calls; exit 1; }
 rm "$tmp/cfg/settings.json"
+# A chunk session: no KEY.md needed; --model/--effort and the four chunk lines reach `claude --bg`, named KEY-cN.
+kid=dddddddd-2222-3333-4444-555555555555
+jq -nc '{type: "user", message: {content: "Session task: PROJ-9\nChunk: PROJ-9/3b\nRead the brief."}}' > "$proj/$kid.jsonl"
+setacct cfg "$(sess "$kid" "PROJ-9-c3b" idle 1)"; calls >/dev/null
+out=$(run --handover "$kid" -- 'x') && rc=0 || rc=$?
+[ "$rc" = 2 ] && [[ $out == *'no `## c3b: handoff` in replies/PROJ-9-build.md'* ]] && [ -z "$(calls | grep -v ' agents ')" ] ||
+  { echo "chunk handover without its handoff not refused: $rc $out"; exit 1; }
+printf '## c3b: handoff\nstate\n' > "$root/replies/PROJ-9-build.md"
+[ "$(run --handover "$kid" --model opus --effort high -- 'Then land it.')" = 'handed PROJ-9 c3b over: "PROJ-9-c3b" (dddddddd) stopped, superseded by "PROJ-9-c3b" (abcdef12)' ] &&
+  [ "$(calls | grep -v ' agents ')" = "$(printf 'cfg stop dddddddd\ncfg --bg --model opus --effort high -n PROJ-9-c3b Session task: PROJ-9\nChunk: PROJ-9/3b\nSupersedes: %s\nContinue from "## c3b: handoff" in %s/replies/PROJ-9-build.md, then follow %s/replies/PROJ-9-c3b.md.\nThen land it.' "$kid" "$root" "$root")" ] ||
+  { echo "chunk handover failed"; calls; exit 1; }
+for bad in '--model fable' '--effort ultra' '--model'; do
+  out=$(run --handover "$kid" $bad -- 'x') && rc=0 || rc=$?
+  [ "$rc" = 2 ] && ! calls | grep -q 'stop\|--bg' || { echo "handover $bad not refused: $out"; exit 1; }; done
+# --self: refused while a coordinator is live; else the successor starts and the caller, mid-turn, isn't stopped.
+setacct cfg "$(sess "$kid" "PROJ-9-c3b" busy 1),$(sess "$cid" coord idle 1)"; calls >/dev/null
+out=$(CLAUDE_CODE_SESSION_ID=$kid run --handover --self -- 'Go on.') && rc=0 || rc=$?
+[ "$rc" = 3 ] && grep -q 'coordinator "coord" is running' <<<"$out" && ! calls | grep -q 'stop\|--bg' || { echo "self handover beside a coordinator: $out"; exit 1; }
+setacct cfg "$(sess "$kid" "PROJ-9-c3b" busy 1)"
+out=$(CLAUDE_CODE_SESSION_ID=$kid run --handover --self -- 'Go on.')
+c=$(calls)
+[ "$out" = 'handed over; end your turn now ("PROJ-9-c3b" (abcdef12) supersedes this session)' ] && ! grep -q ' stop ' <<<"$c" &&
+  grep -q '^cfg --bg -n PROJ-9-c3b Session task: PROJ-9$' <<<"$c" || { echo "self handover: $out"; echo "$c"; exit 1; }
 
 # --peek: the main thread's last turns as markdown (no sidechain, no system reminder), then what it does now.
 pid=cccccccc-2222-3333-4444-555555555555
@@ -750,4 +773,22 @@ grep -qxF 'Kind: mechanical · Model: sonnet/medium · Est: 20K growth · Deps: 
   grep -qxF "**First:** read \`$pd/PROJ-123-chunk-rules.md\` (paths, setup, interface, landing). N = 2." <<<"$out" &&
   grep -qxF '**Touches:** `docs/*.md`.' <<<"$out" && grep -qxF '**Done when:** scrub ok' <<<"$out" &&
   [ "$(run --plan "$plan" --brief 9 2>&1)" = "no row 9 in $plan" ] || { echo "--plan --brief: $out"; exit 1; }
+# --plan --done N: row 2 (mechanical, default: sonnet/medium, 20K) with this session's act from rnd.py (growth: 20K + 35K,
+# the first request not counted). telemetry off: nothing logged, and why. usage refuses a malformed chunk line.
+rm -f "$tmp/state"   # the stub's state file from above: the usage log lives under it
+did=eeeeeeee-2222-3333-4444-555555555555 now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+{ jq -nc --arg t "$now" '{type: "user", timestamp: $t, message: {content: "Session task: PROJ-123\nChunk: PROJ-123/2\nGo."}}'
+  for c in 1:10000 2:30000 3:25000 4:60000; do
+    jq -nc --arg t "$now" --arg i "m${c%%:*}" --argjson x "${c#*:}" '{type: "assistant", timestamp: $t, message: {id: $i, model: "claude-sonnet", usage: {input_tokens: $x}}}'; done
+} > "$proj/$did.jsonl"
+[ "$(CLAUDE_CODE_SESSION_ID=$did run --plan "$plan" --done 2)" = 'nothing logged: telemetry is off, not local (config telemetry)' ] || { echo "--plan --done, telemetry off"; exit 1; }
+mkdir -p "$tmp/.config/session-orchestration"; echo '{"telemetry": "local"}' > "$tmp/.config/session-orchestration/config.json"
+out=$(CLAUDE_CODE_SESSION_ID=$did run --plan "$plan" --done c2)
+[ "$(sed -E 's/"t":[0-9]+/"t":T/' <<<"$out")" = '{"t":T,"k":"chunk","what":"mechanical","model":"sonnet","effort":"medium","est":20,"act":55}' ] &&
+  [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl")" = "$out" ] || { echo "--plan --done: $out"; exit 1; }
+n0=$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")
+(cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state bash -c '. "$0"; usage build chunk opus loud 60 1; usage build chunk opus medium 6x; usage build chunk opus medium 60 1 extra
+  usage PROJ-9 chunk opus medium 60; usage build chunk /home/u medium 60' "$here/../../lib.sh")
+[ "$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")" = "$n0" ] || { echo "usage took a malformed chunk line"; tail -2 "$tmp/state/session-orchestration/usage.jsonl"; exit 1; }
+rm "$tmp/.config/session-orchestration/config.json"
 echo ok

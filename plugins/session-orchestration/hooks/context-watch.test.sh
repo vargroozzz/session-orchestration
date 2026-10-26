@@ -15,6 +15,7 @@ fire() {
   local f=$t/$1.jsonl
   { jq -nc --arg p "$2" '{type: "user", message: {role: "user", content: $p}}'
     jq -nc '{type: "assistant", message: {usage: {input_tokens: 5, cache_read_input_tokens: 1000, cache_creation_input_tokens: 10}}}'
+    [ -z "${LINE:-}" ] || echo "$LINE"
     jq -nc --argjson c "$3" '{type: "assistant", message: {usage: {input_tokens: 5, cache_read_input_tokens: ($c - 1005), cache_creation_input_tokens: 1000}}}'
   } > "$f"
   jq -nc --arg s "$1" --arg f "$f" --arg e "${4:-PostToolUse}" --arg c "$t/proj" --argjson x "${EXTRA:-null}" \
@@ -46,6 +47,15 @@ out=$(fire task2 "$task" 126000); grep -q 'handoff ready: PROJ-123"' <<<"$out" &
 expect coord "$coord" 144000 ''
 out=$(fire coord "$coord" 146000); grep -q 'handover file' <<<"$out" && ! grep -q 'handoff ready' <<<"$out" || fail "coordinator soft: $out"
 expect coord "$coord" 171000 'Stop now'
+# A coordinator by what it did (lib.sh coord_re: an open_pane tool use), without `Act as a coordinator`, with or
+# without a Session task line: the coordinator's thresholds and text. Chunk and task texts carry the self-handover.
+pane='{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__session-orchestration__open_pane","input":{}}]}}'
+LINE=$pane expect pane1 'Fix the bug.' 144000 ''
+out=$(LINE=$pane fire pane1 'Fix the bug.' 146000); grep -q 'handover file' <<<"$out" && ! grep -q 'self' <<<"$out" || fail "open_pane session: $out"
+LINE=$pane expect pane2 "$task" 130000 ''
+out=$(fire pane3 "$task" 130000); grep -q 'handover file' <<<"$(LINE=$pane fire pane3 "$task" 146000)" || fail 'task turned coordinator'
+grep -qF -- "orchestrating-sessions/session-status --handover --self -- '<next step>'" <<<"$out" || fail "task self-handover: $out"
+grep -qF -- 'session-status --coordinator` prints nothing' <<<"$(fire chunk4 "$chunk" 151000)" || fail 'chunk hard self-handover'
 [ -z "$(grep -l window "$t"/cache/session-status/* 2>/dev/null)" ] || fail 'window line under the expected window'
 
 # Window 200000 from env: the mismatch line once, and a lower hard (ceiling 167K - 15K = 152K; at 142K).
