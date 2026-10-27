@@ -1,6 +1,6 @@
 {
   "name": "session-orchestration",
-  "version": "0.57.0",
+  "version": "0.58.0",
   "description": "Coordinate several Claude Code sessions: a reply protocol for sessions that receive cross-session messages, and a playbook for the session that coordinates them.",
   "author": { "name": "vargroozzz" },
   "license": "MIT",
