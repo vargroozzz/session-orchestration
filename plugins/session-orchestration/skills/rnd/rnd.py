@@ -24,9 +24,12 @@ usage: python3 -I rnd.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args]
                                   Supersedes: and summed) or per matching session: kind/model/effort, est, act growth
                                   (K), peak, cache read, out, USD, turns, compactions, handoff (none|before|after a
                                   compaction), minutes; then a `ratio` line per kind (median act/est, last 20)
-  trial [days=28]                 the planner trial's arms side by side (tasks with a chunk session vs the rest):
-                                  units, median USD and tokens per unit, peak, compactions, handoffs, /code-review
-                                  findings and runs per unit, step-ins per unit
+  trial [days=28] [--start DATE]  the planner trial's arms side by side: off (`plan: off` in the task's first
+                                  brief), planner (no marker, started on or after DATE) and before (no marker,
+                                  started before it); DATE (UTC, optionally THH:MM) defaults to the day of the
+                                  oldest chunk line or Chunk: session, pass it for an exact start. Units, median USD and tokens per unit, peak and average context,
+                                  compactions, handoffs, /code-review findings and runs per unit, step-ins per unit,
+                                  minutes to the first unit
   html IN.md OUT.html            Markdown report -> self-contained HTML
 
 Transcripts: <account>/projects/*/*.jsonl for every account dir ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*),
@@ -356,7 +359,7 @@ def stat(f):
     """One session's numbers inside the window, for chunks and trial. growth: the sum of context increases between
     requests (each message id once), not counting a session's first request or the one after a compaction."""
     s = dict(sid=os.path.basename(f)[:8], first="", ts0="", ts1="", growth=0, peak=0, inp=0, out=0, cr=0, cw=0,
-             turns=0, comp=0, models={}, findings=0, reviews=0, steps=0, done_t=set())
+             turns=0, comp=0, models={}, findings=0, reviews=0, steps=0, done_t=set(), ctx_sum=0, ctx_n=0)
     seen, prev, done_ids = set(), None, set()
     for _, o in lines(f):
         ts, t = o.get("timestamp") or "", o.get("type")
@@ -378,7 +381,9 @@ def stat(f):
                 seen.add(rid)
                 u = m.get("usage") or {}
                 ctx = u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
-                s["growth"] += max(0, ctx - prev) if prev is not None else 0
+                if prev is not None:   # the average skips the requests growth skips
+                    s["growth"] += max(0, ctx - prev)
+                    s["ctx_sum"] += ctx; s["ctx_n"] += 1
                 prev = ctx
                 s["peak"] = max(s["peak"], ctx)
                 s["inp"] += u.get("input_tokens", 0); s["out"] += u.get("output_tokens", 0)
@@ -478,6 +483,7 @@ def chunks(days=7, *opts):
                     p = stat(files[g[0]["sup"]])
                     if not p:
                         break
+                    p["handoff"] = "after" if p["comp"] else "before"   # as stats() sets it
                     g.insert(0, p)
                 groups[s["sid"]] = g
     else:
@@ -516,44 +522,70 @@ def chunks(days=7, *opts):
         print(f"ratio\t{kind}\t{statistics.median(rs[-20:]):.2f}\tn={len(rs[-20:])}")
 
 
-def trial(days=28):
-    """The planner trial's two arms side by side: tasks (`Session task:` KEY, successors joined) with any chunk
-    session, and the rest. Per arm: finished units (merges, finished tickets, as `units`), median USD per unit (per
-    task), tokens per unit, median peak, compactions per session, handoffs before/after a compaction, /code-review
-    findings (ReportFindings) and runs per unit, and step-ins (human messages after the brief, `!` commands) per unit.
+def trial(days=28, *opts):
+    """The planner trial's arms side by side, by task (`Session task:` KEY, successors joined): off (its first
+    session's brief says `plan: off`), planner (no marker, started on or after --start DATE) and before (no marker,
+    started before it). --start defaults to the day of the usage log's oldest chunk line or the oldest Chunk: session,
+    whichever is earlier. Per arm: finished
+    units (merges, finished tickets, as `units`), median USD per unit (per task), tokens per unit, median peak, median
+    of each session's mean context per request (the requests growth counts), compactions per session, handoffs
+    before/after a compaction, /code-review findings (ReportFindings) and runs per unit, step-ins (human messages
+    after the brief, `!` commands) per unit, and the median minutes from a task's first prompt to its first unit.
     ponytail: changed lines per unit, reverted commits and an external reviewer's findings per PR need the code host
-    or the adapter, not transcripts: chunk 3b."""
+    or the adapter, not transcripts: chunk 3c."""
+    if str(days).startswith("--"):
+        days, opts = 28, (days,) + opts
     window(days)
+    o_ = dict(zip(opts[::2], opts[1::2]))
+    if "--start" in opts and not re.fullmatch(r"\d{4}-\d\d-\d\d(T\d\d:\d\d(:\d\d)?)?", o_.get("--start", "")):
+        sys.exit("trial: --start wants a UTC DATE or DATETHH:MM")
     ss = stats()
+    # The planner's first day: its oldest chunk line (written at --done, telemetry local only) or Chunk: session start.
+    first = [datetime.fromtimestamp(o["t"], timezone.utc).strftime("%Y-%m-%d") for o in chunk_lines()[:1]] \
+        + [s["ts0"][:10] for s in ss.values() if s["chunk"] and s["ts0"]]
+    start = o_.get("--start") or min(first, default="9999")
     files = {os.path.basename(f)[:8]: f for f in transcripts()}
     rx = {k: re.compile(v) for k, v in UNITS.items() if k != "post"}
     tasks = {}
     for s in ss.values():
         if s["task"]:
             tasks.setdefault(s["task"], []).append(s)
-    arms = {"planner": {}, "off": {}}
+    arms = {"planner": {}, "off": {}, "before": {}}
     for key, g in tasks.items():
-        found = {k for s in g for k, _, _ in unit_hits(files[s["sid"]], rx)[0]}
-        arms["planner" if any(s["chunk"] for s in g) else "off"][key] = (g, len(found))
+        hits = {}
+        for s in g:
+            for k, ts, _ in unit_hits(files[s["sid"]], rx)[0]:
+                if not hits.get(k) or ts and ts < hits[k]:   # a hit without a timestamp doesn't hide a timed one
+                    hits[k] = ts
+        head = min(g, key=lambda s: s["ts0"])   # a predecessor starts first: the head of the Supersedes chain
+        # `plan: off` anywhere in the brief: on its own line, or at the end of a one-line `Work on KEY: …` prompt.
+        arm = "off" if re.search(r"\bplan\s*:\s*off\b", head["first"], re.I) else \
+            "planner" if head["ts0"] >= start else "before"
+        t1 = min((t for t in hits.values() if t), default="")
+        mins = (P(t1) - P(head["ts0"])).total_seconds() / 60 if t1 and head["ts0"] else None
+        arms[arm][key] = (g, len(hits), mins)
     med = lambda xs: statistics.median(xs) if xs else 0
     rows = []
     for arm, ts in arms.items():
-        ses = [s for g, _ in ts.values() for s in g]
-        n = sum(u for _, u in ts.values())
+        ses = [s for g, _, _ in ts.values() for s in g]
+        n = sum(u for _, u, _ in ts.values())
+        mins = [m for _, _, m in ts.values() if m is not None]
+        avg = [s["ctx_sum"] / s["ctx_n"] for s in ses if s["ctx_n"]]
         per = lambda v: round(v / n, 2) if n else "-"
         tot = lambda k: sum(s[k] for s in ses)
         hand = [s.get("handoff") for s in ses]
         # The median is over tasks that finished something; the total also charges unfinished tasks' cost.
-        rows.append([len(ts), len(ses), n, round(med([sum(s["usd"] for s in g) / u for g, u in ts.values() if u]), 2),
+        rows.append([len(ts), len(ses), n, round(med([sum(s["usd"] for s in g) / u for g, u, _ in ts.values() if u]), 2),
                      per(tot("usd")), per(tot("out")), per(tot("cr")), per(tot("cw")), med([s["peak"] for s in ses]),
+                     round(med(avg)) if avg else "-",
                      round(tot("comp") / len(ses), 2) if ses else "-", hand.count("before"), hand.count("after"),
-                     per(tot("findings")), per(tot("reviews")), per(tot("steps"))])
-    print("measure\tplanner\toff")
+                     per(tot("findings")), per(tot("reviews")), per(tot("steps")), round(med(mins)) if mins else "-"])
+    print("measure\tplanner\toff\tbefore")
     names = ["tasks", "sessions", "units", "usd_per_unit_median", "usd_per_unit_total", "out_per_unit", "cache_read_per_unit",
-             "cache_write_per_unit", "peak_median", "compacts_per_session", "handoffs_before", "handoffs_after",
-             "findings_per_unit", "reviews_per_unit", "stepins_per_unit"]
+             "cache_write_per_unit", "peak_median", "context_avg_median", "compacts_per_session", "handoffs_before",
+             "handoffs_after", "findings_per_unit", "reviews_per_unit", "stepins_per_unit", "minutes_to_first_unit_median"]
     for i, m in enumerate(names):
-        print(f"{m}\t{rows[0][i]}\t{rows[1][i]}")
+        print("\t".join(map(str, [m] + [r[i] for r in rows])))
 
 
 def waits(days=7, min_minutes=5):

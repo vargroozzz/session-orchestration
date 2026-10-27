@@ -181,8 +181,7 @@ grep -q $'^config\ttracker\t' <<<"$out" && grep -q $'^config\tplan.max_parallel\
 # (14:10) and an older build chunk for the ratio.
 cat > "$a/abcdef01-1111.jsonl" <<'EOF'
 {"type":"user","timestamp":"2026-10-12T13:00:00.000Z","message":{"content":"Session task: PROJ-1\nChunk: PROJ-1/1\nRead the brief."}}
-{"type":"assistant","timestamp":"2026-10-12T13:00:01.000Z","requestId":"m1","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10000},"content":[{"type":"tool_use","id":"m9","name":"Bash","input":{"command":"gh pr merge 31"}}]}}
-{"type":"user","timestamp":"2026-10-12T13:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m9","content":"merged"}]}}
+{"type":"assistant","timestamp":"2026-10-12T13:00:01.000Z","requestId":"m1","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10000}}}
 {"type":"assistant","timestamp":"2026-10-12T13:01:00.000Z","requestId":"m2","message":{"model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":20000,"cache_creation_input_tokens":9990}}}
 {"type":"user","timestamp":"2026-10-12T13:02:00.000Z","message":{"content":"<command-name>/plug:code-review</command-name>"}}
 {"type":"user","timestamp":"2026-10-12T13:03:00.000Z","message":{"content":"also fix the tests"}}
@@ -203,10 +202,11 @@ EOF
 cat > "$a/nnnnnnnn-2222.jsonl" <<'EOF'
 {"type":"user","timestamp":"2026-10-12T13:30:00.000Z","message":{"content":"Work on PROJ-1: continue. Supersedes: abcdef01 (transcript x)"}}
 {"type":"assistant","timestamp":"2026-10-12T13:30:01.000Z","requestId":"n1","message":{"model":"claude-opus-5-5","usage":{"input_tokens":20000}}}
-{"type":"assistant","timestamp":"2026-10-12T14:00:00.000Z","requestId":"n2","message":{"model":"claude-opus-5-5","usage":{"input_tokens":25000}}}
+{"type":"assistant","timestamp":"2026-10-12T14:00:00.000Z","requestId":"n2","message":{"model":"claude-opus-5-5","usage":{"input_tokens":25000},"content":[{"type":"tool_use","id":"m9","name":"Bash","input":{"command":"gh pr merge 31"}}]}}
+{"type":"user","timestamp":"2026-10-12T14:00:01.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"m9","content":"merged"}]}}
 EOF
 cat > "$a/oooooooo-3333.jsonl" <<'EOF'
-{"type":"user","timestamp":"2026-10-12T15:00:00.000Z","message":{"content":"Session task: PROJ-2\nDo it."}}
+{"type":"user","timestamp":"2026-10-12T15:00:00.000Z","message":{"content":"Session task: PROJ-2\nDo it. Plan :OFF."}}
 {"type":"assistant","timestamp":"2026-10-12T15:00:01.000Z","requestId":"o1","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000000},"content":[{"type":"tool_use","id":"o9","name":"Bash","input":{"command":"gh pr merge 41"}}]}}
 {"type":"user","timestamp":"2026-10-12T15:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"o9","content":"merged"}]}}
 EOF
@@ -216,13 +216,25 @@ out=$(XDG_STATE_HOME=$tmp/state rnd chunks 7)
 [ "$(grep -v '^key' <<<"$out")" = $'PROJ-1\t1\tbuild/opus/medium\t50\t35\t60000\t20000\t0\t0.93\t6\t1\tafter\t60\nratio\tbuild\t0.85\tn=2' ] \
   || fail "chunks: two sessions summed, the log line matched, handoff after a compaction, ratio" "$out"
 out=$(rnd chunks 7 --session nnnnnnnn)
-grep -q $'^-\tnnnnnnnn\t?/opus/?\t?\t35\t60000\t' <<<"$out" || fail "chunks --session: summed over its Supersedes: chain, no log" "$out"
-out=$(rnd trial 7)
-# The off arm also has the `Work on ABC-n` sessions above (ABC-1, ABC-9 with merge 11; kkkkkkkk has no requests).
-for m in $'tasks\t1\t3' $'units\t1\t2' $'usd_per_unit_median\t0.93\t3.12' $'usd_per_unit_total\t0.93\t' $'compacts_per_session\t0.5\t' \
-  $'handoffs_after\t1\t0' $'findings_per_unit\t3.0\t0.0' $'reviews_per_unit\t1.0\t0.0' $'stepins_per_unit\t2.0\t'; do
+grep -q $'^-\tnnnnnnnn\t?/opus/?\t?\t35\t60000\t.*\tafter\t' <<<"$out" \
+  || fail "chunks --session: summed over its Supersedes: chain, no log, the compacted predecessor's handoff" "$out"
+# Arms: PROJ-1 (no marker, after --start) is planner, PROJ-2 (`plan: off`) off, the `Work on ABC-n` tasks before it
+# (ABC-1, ABC-9 with merge 11; kkkkkkkk has no requests). Average context: PROJ-1's sessions average 45K (30K, 60K:
+# the first request and the one after the compaction don't count) and 25K. Its merge is in the successor, an hour
+# after the predecessor's brief.
+out=$(rnd trial 7 --start 2026-10-12T12:30)
+for m in $'measure\tplanner\toff\tbefore' $'tasks\t1\t1\t2' $'units\t1\t1\t1' $'usd_per_unit_median\t0.93\t5.0\t1.25' \
+  $'usd_per_unit_total\t0.93\t' $'context_avg_median\t35000\t-\t-' $'compacts_per_session\t0.5\t' $'handoffs_after\t1\t0\t0' \
+  $'findings_per_unit\t3.0\t0.0' $'reviews_per_unit\t1.0\t0.0' $'stepins_per_unit\t2.0\t' $'minutes_to_first_unit_median\t60\t0\t0'; do
   grep -q "^$m" <<<"$out" || fail "trial: $m" "$out"
 done
+# --start defaults to the oldest chunk line's day or Chunk: session's start, 10-12 either way (and without the log,
+# as with telemetry off): ABC-9 is planner, ABC-1's brief (2020) is before. A bad --start stops.
+out=$(XDG_STATE_HOME=$tmp/state rnd trial 7)
+grep -q $'^tasks\t2\t1\t1$' <<<"$out" || fail "trial: --start from the oldest chunk line" "$out"
+out=$(rnd trial 7)
+grep -q $'^tasks\t2\t1\t1$' <<<"$out" || fail "trial: --start from the oldest Chunk: session" "$out"
+rnd trial 7 --start '2026-10-12 12:30' 2>/dev/null && fail "trial: a --start with a space stops" ""
 
 # chunks joins a log line by the t the session's own `--plan --done` printed: PROJ-3/1 (growth 10K) printed A, PROJ-3/2
 # (30K, starting inside c1's time window) printed B and quoted A in another tool result. By time and closest act,

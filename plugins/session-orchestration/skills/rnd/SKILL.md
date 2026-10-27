@@ -33,8 +33,10 @@ schedules it.
   transcripts (`$CLAUDE_CONFIG_DIR`, `~/.claude`, `~/.claude-*`; a `projects/` tree shared by symlink
   is read once) and all projects. `--until <UTC time>` reruns an old window.
 - Two commands read the planner's work: `chunks [days] [--session PREFIX]` gives one row per chunk (growth,
-  peak, cost, compactions, handoff before or after one) and a per-kind `ratio` line; `trial [days=28]` gives the
-  planner arm against the off arm.
+  peak, cost, compactions, handoff before or after one) and a per-kind `ratio` line; `trial [days=28] [--start DATE]`
+  gives the planner arm (no marker, started on or after DATE) against the off arm (`plan: off` in the first brief)
+  and the before window (no marker, started before DATE; DATE defaults to the day of the oldest chunk line or
+  `Chunk:` session).
 - Replies folder: the one the project's `CLAUDE.md` names (the orchestrating-sessions skill's "folder
   for this"). None named: stop and say so. Below, `<R>` is that folder.
 - Reports: `<R>/rnd-run-<N>.md` and `.html`. Data: `<R>/rnd/run-<N>/*.tsv`, a fresh folder per run.
