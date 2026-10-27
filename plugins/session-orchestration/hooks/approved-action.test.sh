@@ -182,6 +182,32 @@ check "gh pr comment 18 -R acme/app -F $tmp/body.txt" deny "a review's relay use
 check "$bb pr merge 12 --repo app" deny "a gh relay (acme/app#12) used for a bitbucket merge"
 check "which gh && gh pr merge 99 -R acme/app" deny "gh as an argument, then a gated call"
 check "gh --version" pass "gh flag only"
+# Commands that only mention a post or merge: a pattern, a message, a prompt, a heredoc a file is written from.
+check "grep -l 'gh pr create' f" pass "grep pattern naming gh"
+check "grep -rn 'gh pr merge 5 -R acme/app' docs" pass "grep pattern naming a gated gh call"
+check "grep -c 'forgejo-cli pr merge 5' f && $fj pr list --repo org/app" pass "grep pattern naming a gated forgejo call"
+check "claude --bg \"merge it: gh pr merge 5 -R acme/app once approved\"" pass "a prompt naming a merge"
+check "rtk proxy gh issue view 1 -R o/r --json state" pass "rtk proxy gh, read-only"
+check "rtk proxy gh pr merge 99 -R acme/app" deny "rtk proxy gh merge, no relay"
+check "gh api graphql -f query='{ viewer { login } }'" pass "gh api graphql read"
+check "gh api graphql -f query='mutation { mergePullRequest }'" deny "gh api graphql mutation"
+check "cat > $tmp/t.sh <<'EOF'
+gh pr merge 5 -R acme/app
+$bb pr merge 5 --repo app
+EOF" pass "heredoc written to a file"
+check "cat <<'EOF' | bash
+gh pr merge 99 -R acme/app
+EOF" deny "heredoc a shell runs"
+check "bash <<EOF
+gh pr merge 99 -R acme/app
+EOF" deny "heredoc into bash"
+check "echo \"\$(gh pr merge 99 -R acme/app)\"" deny "gh in \$(…) inside double quotes"
+check "sh -c \"gh pr merge 99 -R acme/app\"" deny "gh inside sh -c, double quotes"
+check "gh pr 'merge 99' -R acme/app" deny "gh verb and target in one quoted word"
+# A long heredoc stays fast (bash 3.2's ${x//pat/rep} took minutes on this, and the hook's timeout blocks).
+big="python3 - <<'EOF'"$'\n'$(printf 'x = "a b gh pr view" # it'"'"'s\n%.0s' $(seq 2000))$'\nEOF'
+s=$SECONDS; check "$big" pass "a 50 KB heredoc"
+[ $((SECONDS - s)) -lt 5 ] || { echo "FAIL: a 50 KB heredoc took $((SECONDS - s)) s"; exit 1; }
 CLAUDE_CODE_SESSION_ATTENDED=1 check "gh pr merge 99 -R acme/app" ask "attended, unapproved gh merge"
 CLAUDE_CODE_SESSION_ATTENDED=1 check "gh api -X POST repos/acme/app/merges" ask "attended, gh api write"
 CLAUDE_CODE_SESSION_ATTENDED=1 check "$bb pr merge 272 --repo app" ask "attended, unapproved merge"

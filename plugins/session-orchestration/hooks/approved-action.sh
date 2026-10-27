@@ -17,8 +17,9 @@
 # CLAUDE_CODE_SESSION_KIND=bg), so it is denied; unset or any other value is denied too. Fails closed: any error
 # here exits 2, which blocks (hooks.json also sets onFailure: block, for a timeout). Every other command exits 0 at once, with no decision.
 # gh counts as a call where a command starts; its words must be plain (no variable, $(…), alias or xargs), or it is
-# denied (asked, when attended). A post or merge it can't find as a call (inside bash -c, a quoted string, a commit
-# message) is denied too: post from a file.
+# denied (asked, when attended). A post or merge it can't find as a call (inside bash -c, a heredoc a shell reads) is
+# denied too: post from a file. A command that only mentions one (a grep pattern, a commit message, a prompt, a
+# heredoc written to a file) passes; read-only calls (gh pr view, gh api GET, a graphql query) pass too.
 # ponytail: gh subcommands outside pr/issue/api (release, repo, workflow) aren't gated; add them when a project
 # reserves them. A name split by quotes (g''h) isn't seen.
 # TODO: GitLab. glab mr merge|note|approve and glab issue note pass ungated; gate them like gh (glab has no body-file
@@ -43,34 +44,63 @@ ask_for() {
 
 cmd=$(jq -r '.tool_input.command // ""' <<<"$input") || exit 1
 cwd=$(jq -r '.cwd // ""' <<<"$input") tp=$(jq -r '.transcript_path // ""' <<<"$input") || exit 1
+# A shell or interpreter that runs text it is given: a quoted string or heredoc body next to one may be a call.
+runner='(^|[^A-Za-z0-9_.-])(bash|sh|zsh|dash|ksh|fish|eval|source|alias|trap|ssh|su|xargs|parallel|watch|script|tmux|screen|expect|osascript|node|perl|ruby|python[0-9.]*)([^A-Za-z0-9_.-]|$)|-exec|env[[:space:]]+-S'
+# A heredoc body that its line only writes (cat > f <<EOF) is text, not commands: dropped. A line naming a runner
+# (bash <<EOF, cat <<EOF | sh) keeps it.
+# ponytail: the runner must sit on the heredoc's own line; one a line later (cat <<EOF \ | bash) isn't seen.
+cmd=$(printf '%s\n' "$cmd" | awk -v run="$runner" '
+  skip { t = $0; if (dash) sub(/^\t+/, "", t); if (t == term) skip = 0; next }
+  { print }
+  match($0, /(^|[^<])<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/) && $0 !~ run {
+    h = substr($0, RSTART, RLENGTH); sub(/^[^<]*<</, "", h); dash = h ~ /^-/; gsub(/[- \t"\047]/, "", h); term = h; skip = 1 }')
 ops='bitbucketdc-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|comment[[:space:]]+(create|reply|update))([[:space:]]|$)|forgejo-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|review|comment[[:space:]]+(create|update))([[:space:]]|$)|jiradc-cli[^[:space:]]*.*[[:space:]]issue[[:space:]]+comment[[:space:]]+(create|update)([[:space:]]|$)'
 ghw='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)'
-# gh, then pr/issue/api in the same command (flags may sit between): what a gated gh call looks like.
-ghops='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-][^|;&]*[[:space:]]|[[:space:]]+)(pr|issue|api)([[:space:]]|$)'
+# gh, then pr/issue and a merge, comment or review, or api, in the same command (flags may sit between): what a gated
+# gh call looks like. gh pr view or gh issue list don't.
+ghops='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-][^|;&]*[[:space:]]|[[:space:]]+)((pr|issue)([[:space:]][^|;&]*)?[[:space:]](merge|comment|review)|api)([[:space:]]|$)'
 # gh named through a variable or $(…): x=gh, $(which gh), `command -v gh`.
 ghind='(=["'"'"']?|\$\(|`)[[:space:]]*((which|command[[:space:]]+-v|type[[:space:]]+-p)[[:space:]]+)?([^[:space:]]*/)?gh([^A-Za-z0-9_.-]|$)'
 # One line: continuations joined, other newlines made command separators.
-cont=$'\\\n' nl=$'\n'; cmd=${cmd//"$cont"/ }; cmd=${cmd//"$nl"/ ; }
-ghn=$(grep -oE "$ghw" <<<"$cmd" | wc -l | tr -d ' ')
+# (awk, not ${cmd//"$nl"/ ; }: bash 3.2's replace-all is quadratic, minutes on a 50 KB heredoc.)
+cmd=$(printf '%s\n' "$cmd" | awk 'NR > 1 { printf "%s", (c ? " " : " ; ") } { c = sub(/\\$/, ""); printf "%s", $0 }')
+# What the CLI mentions are counted in: the command without its quoted runs of words (a grep pattern, a commit
+# message, a prompt), which are arguments, not calls. A quoted single word stays (gh "pr" merge), and so do a value
+# (X='npx cli', run as $X later) and a "…" holding $( or `, which the shell runs. Next to a runner, the whole command
+# counts.
+scan=$(printf '%s' "$cmd" | awk -v q="'" '{ s = s (NR > 1 ? "\n" : "") $0 } END {
+  while (match(s, "[\\\\\"" q "]")) {
+    out = out substr(s, 1, RSTART - 1); c = substr(s, RSTART, 1); s = substr(s, RSTART + 1)
+    if (c == "\\") { out = out c substr(s, 1, 1); s = substr(s, 2); continue }
+    # The closing quote: for "…", the first one no backslash escapes.
+    if (c == q) e = index(s, q); else { e = 0; r = s; while (match(r, /\\.|"/)) { e += RSTART + RLENGTH - 1; if (RLENGTH == 1) break; r = substr(r, RSTART + 2) } if (RLENGTH != 1) e = 0 }
+    if (!e) e = length(s) + 1
+    b = substr(s, 1, e - 1); s = substr(s, e + 1)
+    if (b !~ /[ \t]/ || out ~ /=$/ || (c == "\"" && (index(b, "$(") || index(b, "`")))) out = out c b c
+  }
+  printf "%s", out s }')
+grep -qE "$runner" <<<"$scan" && scan=$cmd
+ghn=$(grep -oE "$ghw" <<<"$scan" | wc -l | tr -d ' ')
 # Matched with quotes dropped too, so a quoted subcommand (pr 'merge') or flag is still seen.
-uq=${cmd//[\"\']/}
+# (tr, not ${scan//[\"\']/}: bash 3.2's is quadratic, 11 s on a 5 KB heredoc.)
+uq=$(tr -d "\"'" <<<"$scan")
 bbops=; grep -qE "$ops" <<<"$uq" && bbops=1
 # forgejo-cli raw with a write method: the gh api twin.
 grep -qiE 'forgejo-cli[^[:space:]]*.*[[:space:]]raw[[:space:]].*--method[=[:space:]]+["'"'"']?(POST|PUT|PATCH|DELETE)' <<<"$uq" &&
   attended "Blocked: a forgejo-cli raw call that writes can't be named as an approved action. Use forgejo-cli pr merge|review|comment, or hand the user the command with hand_command."
 [ -n "$bbops" ] || [ "$ghn" -gt 0 ] || pass
-grep -qE "$ghind" <<<"$cmd" &&
+grep -qE "$ghind" <<<"$scan" &&
   attended "Blocked: gh reached through a variable or \$(…) can't be checked by the approval hook. Run it by its name (gh …), as one plain command."
 alone="Run that CLI call alone, as one plain command (the CLI, then its subcommand, then the arguments)."
 # Fails closed on anything it can't read as exactly one call: a second CLI call (chained, or glued to a token), a
 # subcommand behind global flags or a variable.
-bbn=$(grep -oE 'bitbucketdc-cli|forgejo-cli|jiradc-cli' <<<"$cmd" | wc -l | tr -d ' ')
+bbn=$(grep -oE 'bitbucketdc-cli|forgejo-cli|jiradc-cli' <<<"$scan" | wc -l | tr -d ' ')
 [ -z "$bbops" ] || [ "$bbn" = 1 ] ||
   decide deny "Blocked: a PR/Jira comment post, review or PR merge must be the only bitbucketdc-cli/forgejo-cli/jiradc-cli call in its command. $alone"
 
 # Tokens, quotes honoured (xargs fails on an unbalanced quote: a heredoc's text, say).
 tokstr=$(printf '%s' "$cmd" | xargs printf '%s\n' 2>/dev/null) && [ -n "$tokstr" ] ||
-  { [ -z "$bbops" ] && ! grep -qE "$ghops" <<<"$cmd" && pass; decide deny "Blocked: this command mentions a PR/Jira comment post or a PR merge, and the approval hook can't parse it. $alone"; }
+  { [ -z "$bbops" ] && ! grep -qE "$ghops" <<<"$scan" && pass; decide deny "Blocked: this command mentions a PR/Jira comment post or a PR merge, and the approval hook can't parse it. $alone"; }
 toks=()
 while IFS= read -r t; do toks+=("$t"); done <<<"$tokstr"
 # Walk the tokens: each CLI call (up to |, ;, &&, ||) is read as SUB TARGET [flags]; a gh call (gh where a command
@@ -85,7 +115,7 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     *bitbucketdc-cli*|*forgejo-cli*|*jiradc-cli*) h= ;;
     *) [ "${b##*/}" = gh ] || continue
        # Where a command starts: first, after a separator or a command prefix (env, VAR=x, sudo …).
-       case "$prev" in ''|'|'|'||'|'&&'|';'|'&'|*';'|'('|'$('|env|command|exec|time|nohup|sudo|xargs|then|do|else|'!'|[A-Za-z_]*=*) ;; *)
+       case "$prev" in ''|'|'|'||'|'&&'|';'|'&'|*';'|'('|'$('|env|command|rtk|proxy|exec|time|nohup|sudo|xargs|then|do|else|'!'|[A-Za-z_]*=*) ;; *)
          [ "$t" != "$b" ] || continue ;; esac
        [ "$prev" != xargs ] || attended "Blocked: gh run through xargs can't be checked by the approval hook. $alone"
        h=gh ;;
@@ -152,13 +182,16 @@ while [ "$i" -lt "${#toks[@]}" ]; do
   done
   # Its words must be plain: a variable or $(…) there, or an unknown group (an alias), can't be read.
   case "${pos[*]:-}" in *'$'*|*'`'*) attended "Blocked: gh with a variable or \$(…) in its words can't be checked by the approval hook. $alone" ;; esac
+  [[ "${pos[0]:-} ${pos[1]:-}" != *[[:space:]]*[[:space:]]* ]] ||
+    attended "Blocked: gh with a quoted run of words as its command (gh pr 'merge 5') can't be checked by the approval hook. $alone"
   [ -z "${pos[0]:-}" ] || [[ $groups == *" ${pos[0]} "* ]] ||
     attended "Blocked: \"gh ${pos[0]}\" isn't a gh command the approval hook knows (an alias?). Run the gh command it stands for, as one plain command."
   case "${pos[*]:0:2}" in
     'pr merge') k=merge ;;
     'pr comment'|'issue comment') k=prpost ;;
     'pr review') k=review ;;
-    # gh api sends fields as a POST unless -X says otherwise.
+    # gh api sends fields as a POST unless -X says otherwise. A graphql query with no mutation only reads.
+    'api graphql') [ -z "$meth" ] && ! grep -qiw mutation <<<"$cmd" || apiw=1; continue ;;
     api*) m=$(tr a-z A-Z <<<"$meth"); [ "${m:-${fields:+POST}}" = "" ] || [ "$m" = GET ] || apiw=1; continue ;;
     *) continue ;;
   esac
@@ -169,7 +202,7 @@ done
 if [ "$calls" = 0 ]; then
   # Only read-only gh calls (pr list, issue view, api GET) or gh as a word: nothing to gate. A post or merge the walk
   # couldn't find as a call (quoted, glued, inside bash -c) fails closed.
-  [ -z "$bbops" ] && { [ "$ghn" = "$ghcalls" ] || ! grep -qE "$ghops" <<<"$cmd"; } && pass
+  [ -z "$bbops" ] && { [ "$ghn" = "$ghcalls" ] || ! grep -qE "$ghops" <<<"$scan"; } && pass
   decide deny "Blocked: the approval hook can't read this as one PR/Jira comment post or PR merge. $alone"
 fi
 [ "$calls" = 1 ] && [ $((bbn + ghn)) = 1 ] ||
