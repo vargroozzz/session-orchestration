@@ -61,7 +61,7 @@ schedules it.
      when last run's "Next run" names one.
    - Refusals: count them from `denied.jsonl` for the window when it covers it, else from `deny` rows
      in `events.tsv` whose `test` column is empty (`-p`/`dontAsk`: headless permission tests); say which
-     source was used. A denial whose text starts "Background session: this compound command" is the
+     source was used. A denial whose text (a deny row's `detail2`, after `source/reasonType: `) starts "Background session: this compound command" is the
      plugin's split hint (0.36.0+), not a refusal: count those separately, and leave them and the retry
      after each out of the refusal and retry-waste counts, so runs stay comparable.
 3. Measure the yardstick, with last run's number beside each:

@@ -112,9 +112,9 @@ cat > "$a/gggggggg-7777.jsonl" <<'EOF'
 EOF
 cat > "$a/hhhhhhhh-8888.jsonl" <<'EOF'
 {"type":"user","timestamp":"2026-10-12T11:00:00.000Z","message":{"content":"Work on ABC-9"}}
-{"type":"assistant","timestamp":"2026-10-12T11:00:01.000Z","requestId":"h1","message":{"usage":{"input_tokens":250000},"content":[{"type":"tool_use","id":"h2","name":"Bash","input":{"command":"npx bitbucketdc-cli@latest pr merge 11 --repo app"}},{"type":"tool_use","id":"h3","name":"Bash","input":{"command":"npx bitbucketdc-cli@latest pr merge 12 --repo app"}},{"type":"tool_use","id":"h4","name":"Bash","input":{"command":"cat > notes.md <<'X'\nnext: pr merge 13\nX"}}]}}
+{"type":"assistant","timestamp":"2026-10-12T11:00:01.000Z","requestId":"h1","message":{"usage":{"input_tokens":250000},"content":[{"type":"tool_use","id":"h2","name":"Bash","input":{"command":"npx bitbucketdc-cli@latest pr merge 11 --repo app"}},{"type":"tool_use","id":"h3","name":"Bash","input":{"command":"npx bitbucketdc-cli@latest pr merge 12 --repo app"}},{"type":"tool_use","id":"h4","name":"Bash","input":{"command":"cat > notes.md <<'X'\nnext: npx bitbucketdc-cli@latest pr merge 13 --repo app\nX\ngrep -n 'glab mr merge 13' notes.md"}}]}}
 {"type":"user","timestamp":"2026-10-12T11:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"h2","content":"merged"},{"type":"tool_result","tool_use_id":"h4","content":""}]}}
-{"type":"user","timestamp":"2026-10-12T11:00:03.000Z","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook"},"message":{"content":[{"type":"tool_result","tool_use_id":"h3","is_error":true,"content":"denied"}]}}
+{"type":"user","timestamp":"2026-10-12T11:00:03.000Z","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook"},"message":{"content":[{"type":"tool_result","tool_use_id":"h3","is_error":true,"content":"Background session: this compound command\nwill wait on a prompt; split it"}]}}
 {"type":"api-request-blob","message":{"role":"assistant","content":[{"type":"tool_use","id":"h5","name":"Bash","input":{"command":"npx jiradc-cli@latest issue transition ABC-9 --to \"Ready for Test\""}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"h5","content":"ok"}]}}
 EOF
@@ -132,9 +132,11 @@ EOF
 uu() { for i in 0 1 2 3 4 5 6 7 8 9; do printf '{"type":"user","uuid":"u%s","message":{"content":"x"}}\n' "$i"; done; }
 uu > "$a/iiiiiiii-9999.jsonl"; uu > "$a/jjjjjjjj-0000.jsonl"
 out=$(rnd events 7)
-grep -q $'ffffffff\t2026-10-12T08:00\tdeny\tBash: rm -rf x\tconfig/mode\t-p' <<<"$out" || fail "events: a -p session's deny is tagged test" "$out"
-grep -q $'aaaaaaaa\t2026-10-12T10:20\tdeny\tBash: gh pr merge 7\tclassifier/x\t$' <<<"$out" || fail "events: a real deny has an empty test column" "$out"
+grep -q $'ffffffff\t2026-10-12T08:00\tdeny\tBash: rm -rf x\tconfig/mode: denied\t-p' <<<"$out" || fail "events: a -p session's deny is tagged test" "$out"
+grep -q $'aaaaaaaa\t2026-10-12T10:20\tdeny\tBash: gh pr merge 7\tclassifier/x: denied\t$' <<<"$out" || fail "events: a real deny has an empty test column" "$out"
 grep -q $'gggggggg\t2026-10-12T09:05\tran\tplugin-release rnd-x' <<<"$out" || fail "events: a ran row for the user's ! command" "$out"
+grep -q $'hhhhhhhh\t2026-10-12T11:00\tdeny\tBash: npx bitbucketdc-cli@latest pr merge 12 --repo app\thook/hook: Background session: this compound command will wait' <<<"$out" ||
+  fail "events: a deny row carries the hook's message" "$out"
 out=$(rnd units 7 2>&1)
 grep -q $'^merge\tapp#11\thhhhhhhh\t2026-10-12T11:00' <<<"$out" || fail "units: the merge that ran" "$out"
 grep -qE $'^merge\t([^\t]*#)?7\t' <<<"$out" && fail "units: a denied merge (gh) doesn't count" "$out"
