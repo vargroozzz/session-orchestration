@@ -114,4 +114,59 @@ grep -q 'seeded from transcripts: 1 open' <<<"$(run history --seed)" || fail "se
 [ "$(grep -c '^- ' "$root/notes/pending/KEEP-1.history.md")" = 2 ] || fail "seeded history: $(cat "$root/notes/pending/KEEP-1.history.md")"
 grep -qE '^- 2026-10-01 → 2026-10-05 [0-9:]+ OLD-9: will go · reason: OLD-9 is done, so I removed it\. → pending-archive/OLD-9.history.md$' "$root/notes/pending-archive.md" ||
   fail "seeded index: $(cat "$root/notes/pending-archive.md")"
+
+# --scan past a Bash write: a gap, then Edits with no file before them, counted by their patches (one rewords what the
+# sed wrote, one removes an entry)
+root=$(mkroot gap); P=$root/notes/pending.md
+d=$CLAUDE_CONFIG_DIR/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root"); mkdir -p "$d"
+{ jq -nc --arg f "$P" --arg c $'# Pending\n\n- 2026-10-01 A-1: first\n- 2026-10-01 B-2: other' '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "r1"}]},
+    toolUseResult: {file: {filePath: $f, content: $c, numLines: 4, totalLines: 4, startLine: 1}}, timestamp: "2026-10-05T10:01:00Z"}'
+  jq -nc --arg c "sed -i '' 's/first/first, by sed/' notes/pending.md" '{type: "assistant", message: {content: [{type: "tool_use", id: "b1", name: "Bash",
+    input: {command: $c}}]}, timestamp: "2026-10-05T10:02:00Z"}'
+  jq -nc --arg f "$P" '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "e1"}]},
+    toolUseResult: {filePath: $f, oldString: "first, by sed", newString: "first, by edit", contentNotInModelContext: true,
+      structuredPatch: [{lines: [" ", "-- 2026-10-01 A-1: first, by sed", "+- 2026-10-01 A-1: first, by edit", " - 2026-10-01 B-2: other"]}]},
+    timestamp: "2026-10-05T10:03:00Z"}'
+  jq -nc --arg f "$P" '{type: "user", message: {content: [{type: "tool_result", tool_use_id: "e2"}]},
+    toolUseResult: {filePath: $f, oldString: "\n- 2026-10-01 B-2: other", newString: "", contentNotInModelContext: true,
+      structuredPatch: [{lines: [" - 2026-10-01 A-1: first, by edit", "-- 2026-10-01 B-2: other"]}]}, timestamp: "2026-10-05T10:04:00Z"}'
+  # a hunk below the entries isn't one; a second line under A-1's label, then the first one removed: A-1 stays
+  for e in '"05", "\n\n## Log", "\n\n## Log\n- 2026-10-05 LOG-1: logged", [" ## Log", "+- 2026-10-05 LOG-1: logged"]' \
+    '"06", "first, by edit", "first, by edit\n- 2026-10-01 A-1: second line", [" - 2026-10-01 A-1: first, by edit", "+- 2026-10-01 A-1: second line"]' \
+    '"07", "- 2026-10-01 A-1: first, by edit\n", "", ["-- 2026-10-01 A-1: first, by edit", " - 2026-10-01 A-1: second line"]'; do
+    jq -nc --arg f "$P" "[$e] as [\$m, \$o, \$n, \$l]"' | {type: "user", message: {content: [{type: "tool_result", tool_use_id: "e\($m)"}]},
+      toolUseResult: {filePath: $f, oldString: $o, newString: $n, contentNotInModelContext: true, structuredPatch: [{lines: $l}]},
+      timestamp: "2026-10-05T10:\($m):00Z"}'
+  done
+} > "$d/33334444-aaaa.jsonl"
+printf '# Pending\n\n- 2026-10-01 A-1: second line\n\n## Log\n- 2026-10-05 LOG-1: logged\n' > "$P"
+scan=$(run history --scan)
+grep -q $'\t33334444\t\t\tgap\tsed -i' <<<"$scan" || fail "scan's gap: $scan"
+grep -q $'\tA-1\tA-1\tchange\t2026-10-01 A-1: first, by sed$' <<<"$scan" &&
+  grep -q $'\tA-1\tA-1\tchange\t2026-10-01 A-1: first, by edit$' <<<"$scan" || fail "scan's patch changes: $scan"
+[ "$(grep -c $'\tB-2\tB-2\tgone\t' <<<"$scan")" = 1 ] && ! grep -q $'\tA-1\tgone\t' <<<"$scan" && ! grep -q LOG-1 <<<"$scan" ||
+  fail "scan's patch removal: $scan"
+grep -q '^1 Bash write(s)' <<<"$(run history --seed)" || fail "seed's gap count"
+
+# an Edit whose patch doesn't fit the last version (an unseen write added F-6) makes it stale, so the next one, which
+# fits, counts by its patch too and doesn't lose F-6; removing one of A-1's two lines keeps A-1. Of three commands
+# naming the file only the sed writes it
+root=$(mkroot stale); P=$root/notes/pending.md
+d=$CLAUDE_CONFIG_DIR/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root"); mkdir -p "$d"
+edit() { jq -nc --arg f "$P" --arg m "$1" --arg o "$2" --arg n "$3" --argjson l "$4" '{type: "user", message: {content: [{type: "tool_result",
+  tool_use_id: "e\($m)"}]}, toolUseResult: {filePath: $f, oldString: $o, newString: $n, contentNotInModelContext: true,
+  structuredPatch: [{lines: $l}]}, timestamp: "2026-10-05T10:\($m):00Z"}'; }
+{ jq -nc --arg f "$P" --arg c $'# Pending\n\n- 2026-10-01 A-1: one\n- 2026-10-01 B-2: two\n- 2026-10-01 A-1: one more' '{type: "user",
+    message: {content: [{type: "tool_result", tool_use_id: "r1"}]}, toolUseResult: {file: {filePath: $f, content: $c, numLines: 5,
+    totalLines: 5, startLine: 1}}, timestamp: "2026-10-05T10:01:00Z"}'
+  edit 02 six six! '[" - 2026-10-01 A-1: one more", "-- 2026-10-01 F-6: six", "+- 2026-10-01 F-6: six!"]'
+  edit 03 $'- 2026-10-01 A-1: one\n' '' '[" ", "-- 2026-10-01 A-1: one", " - 2026-10-01 B-2: two"]'
+  jq -nc '{type: "assistant", message: {content: ([
+    "cat notes/pending.md > \"$out\"", "cp notes/pending.md \"$bak\"", "sed -e s/two/2/ -i notes/pending.md"] | to_entries
+    | map({type: "tool_use", id: "b\(.key)", name: "Bash", input: {command: .value}}))}, timestamp: "2026-10-05T10:04:00Z"}'
+} > "$d/55556666-aaaa.jsonl"
+printf '# Pending\n\n- 2026-10-01 B-2: 2\n- 2026-10-01 A-1: one more\n- 2026-10-01 F-6: six!\n' > "$P"
+scan=$(run history --scan)
+grep -q $'\tF-6\tF-6\tchange\t2026-10-01 F-6: six!$' <<<"$scan" && ! grep -q $'\tgone\t' <<<"$scan" || fail "stale scan: $scan"
+[ "$(grep -c $'\tgap\t' <<<"$scan")" = 1 ] && grep -q $'\tgap\tsed -e' <<<"$scan" || fail "scan's writes: $scan"
 echo ok

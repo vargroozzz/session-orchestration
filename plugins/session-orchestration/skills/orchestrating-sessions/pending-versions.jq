@@ -3,13 +3,26 @@
 # looked up (said before or after the call; the last 8000 characters). k "v": a whole version: a full Read or a Write of the file, an Edit's file before it and
 # after it, or a copy written elsewhere at the moment a Bash `mv` swaps it in. "b": one cut from the output of a Bash
 # command naming the file (cat, cat -n, an adapter's `pending`), maybe mixed with other output. "e": an Edit whose
-# file before it isn't in the transcript (old/new/all), applied to the last known version. A version starts with
-# $header. A path counts when it is $abs (the root's file), a command when it names $rel: a test fixture with the
+# file before it isn't in the transcript (old/new/all), applied to the last known version, with its patch's hunks
+# (each one's lines before and after it) to check that version against. "g": a Bash command that writes the file
+# (sed/perl -i, a redirect or mv/cp onto it, tee, a script's write): reported, as what it wrote isn't in the
+# transcript. A version starts with $header. A path counts when it is $abs (the root's file), a command when it names $rel: a test fixture with the
 # same header, or another project's file of that name, doesn't.
 def applied($o; $n; $all): if $all then split($o) | join($n)
   else split($o) as $p | if ($p | length) < 2 then null else $p[0] + $n + ($p[1:] | join($o)) end end;
 def whole: select(type == "string" and (split("\n")[0] == $header));
 def ours: type == "string" and . == $abs;
+# an Edit's structuredPatch hunks: each one's lines before the edit (" " and "-") and after it (" " and "+")
+def hunks($p): [$p[]? | [.lines[]? | select(.[:1] != "\\")] | {pre: [.[] | select(.[:1] == " " or .[:1] == "-") | .[1:]],
+  post: [.[] | select(.[:1] == " " or .[:1] == "+") | .[1:]]}];
+# a command that writes FILE: in place, a script's write, or a redirect, tee, mv or cp onto FILE's name or a variable
+# the command sets to it. ponytail: a write through a path built elsewhere isn't seen; an Edit whose patch doesn't fit
+# the last version is what marks it stale then
+($rel | split("/") | last | gsub("(?<c>[.^$*+?()\\[\\]{}|\\\\])"; "\\\(.c)")) as $name |
+def writes: [match("(\\w+)=[\"']?\\S*" + $name; "g").captures[0].string] as $v
+  | ("(\\S*" + $name + ([$v[] | "|\\$\\{?" + . + "\\b\\}?"] | add // "") + ")") as $to
+  | test("\\b(sed|perl)\\b[^;&|]*\\s(-[a-zA-Z]*i|--in-place)\\b|\\.write(_text)?\\(|>>?\\s*[\"']?" + $to
+    + "|\\btee\\s+(-a\\s+)?[\"']?" + $to + "|\\b(mv|cp)\\s[^;&|]*\\s[\"']?" + $to + "[\"']?\\s*($|[;&|)])");
 # cut from mixed output: from the header line on; numbered (cat -n) lines are unnumbered, up to the first unnumbered one
 def cut: split("\n") as $l
   | ([range(0; $l | length) | select($l[.] | sub("^ *[0-9]+\t"; "") == $header)] | first) as $h
@@ -22,9 +35,14 @@ foreach ((inputs | fromjson? // empty), null) as $l ({turn: "", n: 0, i: 0, cmds
   elif $l.type == "assistant" then
     [$l.message.content[]? | select(.type == "tool_use" and .name == "Bash") | {id, c: (.input.command // "")}] as $b
     | .turn = ((.turn + "\n" + ([$l.message.content[]? | select(.type == "text") | .text] | join("\n"))) | .[-8000:])
-    | .cmds += ([$b[] | select(.c | contains($rel) and (contains(".test.sh") | not)) | {key: .id, value: true}] | from_entries)
+    | [$b[] | select(.c | contains($rel) and (contains(".test.sh") | not))] as $named
+    | .cmds += ([$named[] | {key: .id, value: true}] | from_entries)
     | .tmp as $tmp
-    | .out = [$tmp | to_entries[] | . as $w | select(any($b[]; .c | contains("mv ") and contains($w.key) and contains($rel))) | {k: "v", v: $w.value}]
+    # per command: the copies it swaps in with mv (whole versions); one naming FILE that swaps none in, a write of its own
+    | [$b[] | .c as $c | {c: $c, named: ([$named[] | .c == $c] | any),
+        swap: [$tmp | keys[] | select(. as $p | $c | contains("mv ") and contains($p))]}] as $cs
+    | .out = [$cs[] | .swap[] | {k: "v", v: $tmp[.]}]
+      + [$cs[] | select(.named and (.swap | length) == 0 and (.c | writes)) | {k: "g", c: (.c | gsub("\\s+"; " ") | .[:200])}]
     | .tmp = ($tmp | with_entries(select(.key as $p | any($b[]; .c | contains("mv ") and contains($p)) | not)))
   elif $l.type == "user" and ($l.toolUseResult | type) != "object" then
     # a prompt (not a tool result) starts a turn
@@ -39,7 +57,8 @@ foreach ((inputs | fromjson? // empty), null) as $l ({turn: "", n: 0, i: 0, cmds
          if ($r.originalFile | type) == "string" and $r.originalFile != "" then
            {k: "v", v: $r.originalFile, o: true},
            ($r.originalFile | applied($r.oldString; $r.newString; $r.replaceAll == true) | select(. != null) | {k: "v", v: .})
-         else {k: "e", old: $r.oldString, new: $r.newString, all: ($r.replaceAll == true)} end
+         else {k: "e", old: $r.oldString, new: $r.newString, all: ($r.replaceAll == true),
+           hunks: hunks($r.structuredPatch)} end
        else empty end),
       (if ($r.type == "create" or $r.type == "update") and ($r.filePath | ours) and ($r.content | type) == "string"
        then $r.content | whole | {k: "v", v: .} else empty end),

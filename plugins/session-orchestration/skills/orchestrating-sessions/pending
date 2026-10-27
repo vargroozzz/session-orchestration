@@ -16,6 +16,7 @@
 #   pending history --find KEY   the history file (path from the root) of the entry naming KEY; open ones first.
 #   pending history --scan       every version of FILE in the project's transcripts, every account (lib.sh
 #                                list_accounts), diffed oldest first: TIME ID8 LABEL SLUG change|gone LINE|REASON.
+#                                A Bash write to FILE: TIME ID8 <empty> <empty> gap COMMAND (LABEL and SLUG empty).
 #   pending history --seed       the scan written out, once when adopting: a history for each open entry without
 #                                one, and each entry gone for good archived with the scan's dates and reason.
 #   pending notices              a line per detail file over 4 KB.
@@ -209,8 +210,10 @@ case ${1:-} in
         done
         [ ${#idx[@]} = 0 ] || index_add "${idx[@]}"
         while IFS=$'\t' read -r l sl line; do record "$l" "$sl" "$line"; pointer "$sl"; done < "$s.cur"
+        gaps=$(awk -F'\t' '$5 == "gap" {n++} END {print n+0}' "$s.events.$$")
         snapshot; rm -f "$s.cur" "$s.one" "$s.events.$$"
-        echo "seeded from transcripts: $opened open entries' histories, $closed resolved entries archived (${AI#"$ROOT"/})" ;;
+        echo "seeded from transcripts: $opened open entries' histories, $closed resolved entries archived (${AI#"$ROOT"/})"
+        [ "$gaps" = 0 ] || echo "$gaps Bash write(s) to $rel seen only through later versions: --scan lists them as gap" ;;
       ''|--*) echo "usage: session-status --pending-history LABEL [--last N] | --find KEY | --scan | --seed"; exit 2 ;;
       *)
         sl=$(sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+|-+$//g' <<<"$1" | cut -c1-60)
