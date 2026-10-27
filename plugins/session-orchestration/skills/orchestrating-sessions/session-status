@@ -548,11 +548,14 @@ marks_of() {  # FIRST FILE
 # listed on stdin (any session's: a successor that later ran a status command still supersedes). A short OLD counts
 # when exactly one transcript beside it starts with it.
 SUPRE='Supersedes: [0-9a-f]{8}[0-9a-f-]*|[Yy]ou replace (session )?[0-9a-f]{8}[0-9a-f-]*'
+resolve_old() {  # OLD DIR: OLD's full id
+  [ "${#1}" != 36 ] || { echo "$1"; return; }
+  set -- "$2/$1"*.jsonl; [ $# = 1 ] && [ -e "$1" ] && basename "$1" .jsonl
+}
 supersedes() {
   tr '\n' '\0' | xargs -0 grep -lE "$SUPRE" 2>/dev/null | while read -r f; do
     first_prompt "$f" | grep -oE "$SUPRE" | grep -oE '[0-9a-f-]+$' | while read -r o; do
-      [ "${#o}" = 36 ] || { set -- "$(dirname "$f")/$o"*.jsonl; [ $# = 1 ] && [ -e "$1" ] || continue; o=$(basename "$1" .jsonl); }
-      echo "$o $(basename "$f" .jsonl)"
+      o=$(resolve_old "$o" "$(dirname "$f")") && echo "$o $(basename "$f" .jsonl)"
     done
   done
 }
@@ -909,13 +912,13 @@ fi
 # key: never owners. A worker running it for its own task, or only reading the docs, stays a worker.
 find "$TRANSCRIPTS" -maxdepth 1 -name '*.jsonl' -mtime -30 2>/dev/null > "$TMP/files"
 names=$(adapter status-names 2>/dev/null) || names=
-tr '\n' '\0' < "$TMP/files" | xargs -0 grep -l -E "$(coord_re "$names")" > "$TMP/watchers"
-grep -vxF -f "$TMP/watchers" "$TMP/files" > "$TMP/workers"
+CRE=$(coord_re "$names")
 
 # Coordinators: live sessions of this account in $TMP/watchers (workers run the status command for their own task
 # too, so plain runs don't count here). Newest transcript first. Other accounts are left out: SendMessage doesn't
-# reach them.
+# reach them. One grep, not the scan cache below: a cold cache would cost a session's report its whole scan.
 if [ -n "$COORD" ]; then
+  tr '\n' '\0' < "$TMP/files" | xargs -0 grep -l -E "$CRE" > "$TMP/watchers"
   { IFS=$'\n' read -d '' -ra w < "$TMP/watchers"; [ ${#w[@]} = 0 ] || mtime_named "${w[@]}"; } | sort -rn | sed -E 's#.*/##; s#\.jsonl$##' |
     while read -r id; do
       [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] ||
@@ -924,36 +927,88 @@ if [ -n "$COORD" ]; then
   exit 0
 fi
 
+# What each transcript says, tagged lines kept per transcript in ~/.cache/session-status/$ENC.scan/SALT/ID while
+# its mtime, size and inode stay: a sweep re-reads only the transcripts written since the last one (30 days of them
+# are ~0.75 GB; four greps and a jq over all of them took ~40s a sweep). A change of key pattern, coordinator names,
+# the scanning code or this format (SCANV) starts a new cache.
+#   w             a coordinator's (CRE)
+#   fk ID KEY     the key its first prompt starts with (first_key)
+#   rv KEY ID     a "Session task: KEY review" marker; rr ID once: a reviewer, never an owner
+#   own KEY 1|0 MTIME ID   a key it names by first prompt (1) or marker (0); a reviewer has none
+#   sup OLD       a Supersedes: OLD in its first prompt (a short OLD is resolved per sweep, against the files then)
+#   men N KEY ID  KEY named N times in its own text and the prompts it received (not tool results: a listing or
+#                 grep hit isn't work)
 # ponytail: a continued session's first prompt is the compaction summary, so it relies on the marker.
-: > "$TMP/firstkey"; : > "$TMP/reviews"; : > "$TMP/reviewers"
-while read -r f; do
+SCANV=1
+scan_one() {  # MTIME FILE
+  local f=$2 id first fk marks rev k
   id=$(basename "$f" .jsonl)
+  ! grep -qE "$CRE" "$f" || echo w
   first=$(first_prompt "$f")
   fk=$(first_key "$first")
-  [ -z "$fk" ] || echo "$id $fk" >> "$TMP/firstkey"
+  [ -z "$fk" ] || echo "fk $id $fk"
   marks=$(marks_of "$first" "$f")
   rev=$(grep -E ' review[.,;:!)]?$' <<<"$marks" | grep -oE "$KEYRE")
   if [ -n "$rev" ]; then
-    for k in $rev; do echo "$k $id" >> "$TMP/reviews"; done; echo "$id" >> "$TMP/reviewers"; continue
+    for k in $rev; do echo "rv $k $id"; done; echo "rr $id"
+  else
+    { [ -z "$fk" ] || echo "$fk"; grep -oE "$KEYRE" <<<"$marks"; } | sort -u | while read -r k; do
+      echo "own $k $([ "$k" = "$fk" ] && echo 1 || echo 0) $1 $id"; done
   fi
-  { [ -z "$fk" ] || echo "$fk"; grep -oE "$KEYRE" <<<"$marks"; } | sort -u | while read -r k; do
-    echo "$k $([ "$k" = "$fk" ] && echo 1 || echo 0) $(mtime "$f") $id"; done
-done < "$TMP/workers" > "$TMP/owners.all"   # key, first prompt (1) or marker (0), transcript time, id
+  grep -oE "$SUPRE" <<<"$first" | grep -oE '[0-9a-f-]+$' | sed 's/^/sup /' || :
+  # A grep finding nothing fails the pipe (pipefail): a transcript with no key would never be cached.
+  { grep -E "$KEYRE" "$f" | grep -vF '"type":"tool_result"' || :; } |
+    jq -rR --arg kre "$KEYRE" 'fromjson? |
+      (if .type == "assistant" then .message.content[]? | select(.type == "text") | .text
+       elif .type == "user" and (.message.content | type) == "string" then .message.content else empty end)
+      | match($kre; "g").string' 2>/dev/null | sort | uniq -c | awk -v id="$id" '{print "men", $1, $2, id}'
+}
+# One cache per salt (this format, the code and patterns that make the tags, the transcripts folder), so sweeps of two
+# plugin versions or accounts never empty each other's. Others idle a day are dropped.
+salt=$(printf '%s\n' "$SCANV" "$KEYRE" "$CRE" "$SUPRE" "$TRANSCRIPTS" "$(declare -f scan_one first_prompt first_key marks_of)" |
+  cksum | cut -d' ' -f1)
+SCAN=~/.cache/session-status/$ENC.scan/$salt; mkdir -p "$SCAN"
+find "${SCAN%/*}" -mindepth 1 -maxdepth 1 -type d ! -name "$salt" -mtime +1 -exec rm -rf {} + 2>/dev/null || :
+{ IFS=$'\n' read -d '' -ra fs < "$TMP/files"; [ ${#fs[@]} = 0 ] || stat_sig "${fs[@]}"; } > "$TMP/sigs"
+# Stale ones (no cached sig line equal to the file's), rescanned 8 at a time; each written whole (tmp, then mv:
+# another sweep may be reading it).
+# ponytail: batches of 8 wait on their biggest transcript, and a live transcript is rescanned whole; a rolling pool
+# (xargs -P) or scanning only the bytes appended since the cached size, if a warm sweep gets slow again.
+n=0
+find "$SCAN" -type f ! -name '*.*' -exec awk 'FNR == 1' {} + > "$TMP/heads" 2>/dev/null
+awk -v h="$TMP/heads" 'FILENAME == h { ok[$0]; next } { split($0, s, " "); f = substr($0, length(s[1] s[2] s[3]) + 4)
+    id = f; sub(/.*\//, "", id); sub(/\.jsonl$/, "", id)
+    sig = "sig " s[1] " " s[2] " " s[3] " " id; if (!(sig in ok)) print s[1] "\t" sig "\t" f }' "$TMP/heads" "$TMP/sigs" |
+  { while IFS=$'\t' read -r mt sig f; do
+      id=${sig##* }
+      { echo "$sig"; scan_one "$mt" "$f"; } > "$SCAN/$id.$$" && mv "$SCAN/$id.$$" "$SCAN/$id" &
+      n=$((n + 1)); [ $((n % 8)) != 0 ] || wait
+    done; wait; }
+# An entry unwritten for 31 days is a transcript past the 30-day window (or gone); a temp file an hour old, a killed
+# sweep's. By age, not by this sweep's file list: that would drop entries a newer sweep just wrote.
+find "$SCAN" -type f \( -mtime +31 -o -name '*.*' -mmin +60 \) -delete 2>/dev/null || :
+# Split, in $TMP/files order: a coordinator's transcript gives only its supersedes; the workers' give the rest.
+: > "$TMP/watchers"; : > "$TMP/sup"; : > "$TMP/firstkey"; : > "$TMP/reviews"; : > "$TMP/reviewers"; : > "$TMP/owners.all"; : > "$TMP/men"
+sed -E "s#.*/##; s#\.jsonl\$##; s#^#$SCAN/#" "$TMP/files" | tr '\n' '\0' | xargs -0 cat 2>/dev/null |
+  awk -v t="$TRANSCRIPTS/" -v tmp="$TMP/" '
+    $1 == "sig" { id = $5; w = 0; next }
+    $1 == "w" { w = 1; print t id ".jsonl" > (tmp "watchers"); next }
+    $1 == "sup" { print $2, id > (tmp "sup"); next }
+    w { next }
+    $1 == "fk" { print $2, $3 > (tmp "firstkey") }
+    $1 == "rv" { print $2, $3 > (tmp "reviews") }
+    $1 == "rr" { print $2 > (tmp "reviewers") }
+    $1 == "own" { print $2, $3, $4, $5 > (tmp "owners.all") }   # key, first prompt (1) or marker (0), transcript time, id
+    $1 == "men" { print $2, $3, $4 > (tmp "men") }'
 # A superseded session never owns: not even when resumed later (its transcript newest).
-supersedes < "$TMP/files" > "$TMP/superseded"; cut -d' ' -f1 "$TMP/superseded" > "$TMP/superseded.ids"
+while read -r o id; do o=$(resolve_old "$o" "$TRANSCRIPTS") && echo "$o $id"; done < "$TMP/sup" > "$TMP/superseded"
+cut -d' ' -f1 "$TMP/superseded" > "$TMP/superseded.ids"
 sort -k1,1 -k2,2rn -k3,3rn -o "$TMP/owners.all" "$TMP/owners.all"
 awk -v ssf="$TMP/superseded.ids" 'BEGIN { while ((getline l < ssf) > 0) s[l] } !($4 in s) && !o[$1]++ {print $1, $4}' "$TMP/owners.all" > "$TMP/owners.exact"
 
-# Mentions in each worker's own text and received prompts: lines naming a key, tool results left out before
-# parsing (the bulk of a transcript), as `ID<TAB>JSON` for one jq.
-tr '\n' '\0' < "$TMP/workers" | xargs -0 grep -HE "$KEYRE" | grep -vF '"type":"tool_result"' |
-  awk '{ i = index($0, ".jsonl:"); id = substr($0, 1, i - 1); sub(/.*\//, "", id); print id "\t" substr($0, i + 7) }' |
-  jq -rR --arg kre "$KEYRE" '(index("\t")) as $i | .[:$i] as $id | .[$i + 1:] | fromjson? |
-    (if .type == "assistant" then .message.content[]? | select(.type == "text") | .text
-     elif .type == "user" and (.message.content | type) == "string" then .message.content else empty end)
-    | match($kre; "g").string | "\(.) \($id)"' 2>/dev/null | sort | uniq -c |
-  awk -v fkf="$TMP/firstkey" -v rvf="$TMP/reviewers" -v ssf="$TMP/superseded.ids" 'BEGIN { while ((getline l < fkf) > 0) { split(l, x, " "); fk[x[1]] = x[2] }
-    while ((getline l < rvf) > 0) rv[l]; while ((getline l < ssf) > 0) rv[l] } !($3 in rv) && (!($3 in fk) || fk[$3] == $2) {print $2, $1, $3}' |
+# Mentions (`men`): count, key, id.
+awk -v fkf="$TMP/firstkey" -v rvf="$TMP/reviewers" -v ssf="$TMP/superseded.ids" 'BEGIN { while ((getline l < fkf) > 0) { split(l, x, " "); fk[x[1]] = x[2] }
+    while ((getline l < rvf) > 0) rv[l]; while ((getline l < ssf) > 0) rv[l] } !($3 in rv) && (!($3 in fk) || fk[$3] == $2) {print $2, $1, $3}' "$TMP/men" |
   sort -k1,1 -k2,2rn > "$TMP/guess.all"   # key, mentions, id
 awk '!s[$1]++ && $2 >= 10 {print $1, $3, $2}' "$TMP/guess.all" > "$TMP/owners.guess"   # key, id, mentions
 

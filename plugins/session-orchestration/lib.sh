@@ -338,13 +338,16 @@ list_sessions() {
 activity_of() { tail -n 2000 "$1" | jq -rRn -f "$LIB_DIR/skills/orchestrating-sessions/session-activity.jq" 2>/dev/null; }
 last_text() { activity_of "$1" | cut -f3; }
 
-# mtime FILE…: each file's modification time (epoch s). mtime_named FILE…: "EPOCH PATH" per file.
+# mtime FILE…: each file's modification time (epoch s). mtime_named FILE…: "EPOCH PATH" per file. stat_sig FILE…:
+# "EPOCH SIZE INODE PATH" per file (a rewrite in the same second still changes its size or inode).
 if stat -c %Y / >/dev/null 2>&1; then
   mtime() { stat -c %Y -- "$@"; }
   mtime_named() { stat -c '%Y %n' -- "$@"; }
+  stat_sig() { stat -c '%Y %s %i %n' -- "$@"; }
 else
   mtime() { stat -f %m -- "$@"; }
   mtime_named() { stat -f '%m %N' -- "$@"; }
+  stat_sig() { stat -f '%m %z %i %N' -- "$@"; }
 fi
 
 # dayfmt YYYY-MM-DD FORMAT [±N]: that day (local midnight), N days later or earlier, in date's FORMAT; fails on a

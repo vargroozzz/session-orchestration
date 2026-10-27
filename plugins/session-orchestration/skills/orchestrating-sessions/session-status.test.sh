@@ -242,6 +242,15 @@ printf '%s\n' '{"type":"user","message":{"content":"Work on ABC-90"}}' \
   '{"type":"assistant","message":{"content":[{"type":"text","text":"Session task: ABC-90 review fixes"}]}}' > "$proj/$wid.jsonl"
 printf '%s\n' '{"type":"user","message":{"content":"hello"}}' '{"type":"user","message":{"content":"Session task: ABC-91. Take it"}}' > "$proj/$xid.jsonl"
 run ABC-90 | grep -q 'sess:44444444 closed' && run ABC-91 | grep -q 'sess:55555555 closed' || { echo "marker rules failed"; run ABC-90 ABC-91; exit 1; }
+# The scan cache: a run with no transcript changed rescans nothing; a marker appended to one gets rescanned; one
+# naming no key is cached too.
+nid=88888888-2222-3333-4444-555555555555; echo '{"type":"user","message":{"content":"Act as a coordinator"}}' > "$proj/$nid.jsonl"
+run >/dev/null; [ -s "$(echo "$tmp"/.cache/session-status/*.scan/*/"$nid")" ] || { echo "scan cache: a keyless transcript wasn't cached"; exit 1; }
+rm "$proj/$nid.jsonl"
+sc=$(echo "$tmp"/.cache/session-status/*.scan/*/"$xid"); i1=$(ls -i "$sc")
+run ABC-91 >/dev/null; [ "$(ls -i "$sc")" = "$i1" ] || { echo "scan cache: an unchanged transcript was rescanned"; exit 1; }
+echo '{"type":"user","message":{"content":"Session task: ABC-93. Also this"}}' >> "$proj/$xid.jsonl"
+run ABC-93 | grep -q 'sess:55555555 closed' && [ "$(ls -i "$sc")" != "$i1" ] || { echo "scan cache: an appended marker was missed"; run ABC-93; exit 1; }
 # The five wrong rows of 2026-10-21 (PROJ-4177, 4850, 4849, 4157, 5227 → ABC-101…105). A worker that ran the status
 # command for its own task still owns it (only --changes/--watch make a coordinator). A first prompt names a key
 # only at its start, and beats a newer misrouted session's marker. The guess counts only a session's own text and

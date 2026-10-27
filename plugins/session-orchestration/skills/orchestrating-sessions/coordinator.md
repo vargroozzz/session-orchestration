@@ -27,14 +27,17 @@ Every coordinator session, before anything else; the user shouldn't have to ask.
 with `Act as a coordinator`; the context-watch hook also recognises a session that opened the pane or ran a status watcher. The file names come from the
 project's `CLAUDE.md` section (the "Replies folder", "Project memory" and handoff-file lines).
 
-1. Call `open_pane` (The coordinator pane); if it says the folder isn't set up, do Bootstrap (below) first. Check
-   the window line, if the hook sends one (Your own context).
-2. Read these in **one parallel batch of Read calls**, each file whole: this file, the project's coordinator doc
+1. Once this file is read, start the status command with `run_in_background: true`, in the same batch as
+   `open_pane` (The coordinator pane): the sweep is the slowest step, so it runs while you read. If `open_pane`
+   says the folder isn't set up, do Bootstrap (below) first and run the status command again after. Check the
+   window line, if the hook sends one (Your own context).
+2. Read these in **one parallel batch of Read calls**, each file whole: the project's coordinator doc
    if its `CLAUDE.md` names one, the memory index and its coordinator topic file, the handoff file and
    `<replies>/coordinator-handover.md`. Don't `cat` them together: the Bash tool truncates long output, and one
    bad separator line aborts the bundle.
-3. Run the status command. Then prune the handoff file against it (Handoff file) and read the replies written
-   since the previous coordinator's last turn (`ls -t`).
+3. Read the status command's output once it finishes (its completion notice; don't poll it). Then prune the
+   handoff file against it (Handoff file) and read the replies written since the previous coordinator's last
+   turn (`ls -t`).
 4. For each feature open_pane's "Coordination config" line lists as on (no such line: run `session-status --init
    --check`), read the doc it names after `→ read` (whole) and do that doc's start step (the review inbox: watch it), plus whatever the project's coordinator doc
    adds to the start.
