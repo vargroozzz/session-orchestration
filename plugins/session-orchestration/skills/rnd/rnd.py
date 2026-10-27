@@ -27,6 +27,10 @@ usage: python3 -I rnd.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args]
   trial [days=28]                 the planner trial's arms side by side (tasks with a chunk session vs the rest):
                                   units, median USD and tokens per unit, peak, compactions, handoffs, /code-review
                                   findings and runs per unit, step-ins per unit
+  handoff [days=28]               one row per coordinator handoff entry (config pending.file, open and archived):
+                                  wait, blocker bucket, rewordings, rounds, reason, detail/history bytes, reads of
+                                  its files in the window (tokens, sessions); stderr: totals, wait per bucket, and
+                                  entries whose history a session read against the rest
   html IN.md OUT.html            Markdown report -> self-contained HTML
 
 Transcripts: <account>/projects/*/*.jsonl for every account dir ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*),
@@ -681,6 +685,116 @@ def replies(days=7):
     print(tot, file=sys.stderr)
 
 
+# What a handoff entry waits on, from its last wording; the first that matches. ponytail: keyword buckets, read the
+# top rows by wait to see what they miss.
+BUCKETS = [("user decision", r"\b(your call|decid|decision|approv|on you|asks? (you|the user)|yes/no|which (one|of))"),
+           ("human review", r"\breview"), ("release", r"\b(release|deploy|plugin-release|publish)"),
+           ("cleanup ask", r"\b(clean ?up|delete|prune|remove|archive)"), ("fault", r"\b(fail|broken|bug|error|crash|stuck)"),
+           ("outside person", r"\b(waits? (on|for)|waiting (on|for)|asked|reply from|answer from|ping)")]
+HLINE = re.compile(r"^- (\d{4}-\d\d-\d\d \d\d:\d\d) \(([^)]*)\) (.*)$")
+
+
+def handoff(days=28):
+    """Each handoff entry (pending.file of every coordinated root a transcript ran in) open at the window's end or
+    resolved in it, its rounds merged (open and archived files): its wait
+    (first wording to resolved, or to the window's end), blocker bucket, rewordings, rounds (resolved more than once:
+    recurring), reason unknown, detail and history sizes, and the transcript reads of its files (tokens ~ chars/4,
+    sessions). stderr: totals, wait by bucket, and entries whose history was read against the rest."""
+    window(days)
+    cwds, reads, files = set(), [], list(transcripts())
+    for f in files:  # a transcript's cwd is on its first lines
+        for _, o in lines(f):
+            if o.get("cwd"):
+                cwds.add(o["cwd"])
+                break
+    rootset = {}
+    for c in cwds:
+        d = c
+        while d not in ("/", ""):
+            cfg = os.path.join(d, ".claude", "coordination.local.json")
+            if os.path.isfile(cfg):
+                try:
+                    rel = (json.load(open(cfg)).get("pending") or {}).get("file")
+                except Exception:
+                    rel = None
+                if rel:
+                    rootset[d] = rel
+                break
+            d = os.path.dirname(d)
+    # reads of the entries' files: a Read of one, or a Bash command naming one (cat, sed, grep) or running
+    # `--pending-history LABEL`, with its output's size. A history read is noted as `history:SLUG`.
+    dirs = sorted({os.path.basename(rel[:-3]) + s + "/" for rel in rootset.values() for s in ("", "-archive")})
+    HIST = re.compile(r"--pending-history\s+(?!--)(['\"]?)(.+?)\1(?:\s+--last\b|\s*$|\s*[|;&])")
+    for f in files if dirs else []:
+        sid, pend = os.path.basename(f)[:8], {}
+        for line, o in lines(f):
+            if out_of(o.get("timestamp")) or not (pend or "--pending-history" in line or any(d in line for d in dirs)):
+                continue
+            for b in (o.get("message") or {}).get("content") or []:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "tool_use" and b.get("name") in ("Read", "Bash"):
+                    i = b.get("input") or {}
+                    p = str(i.get("file_path") or i.get("command") or "")
+                    if m := HIST.search(p):
+                        p = "history:" + re.sub(r"^-+|-+$", "", re.sub(r"[^A-Za-z0-9._-]+", "-", m.group(2)))[:60]
+                    if p.startswith("history:") or any(d in p for d in dirs):
+                        pend[b.get("id")] = p
+                elif b.get("type") == "tool_result" and b.get("tool_use_id") in pend:
+                    r = o.get("toolUseResult")
+                    r = r if isinstance(r, dict) else {}
+                    body = r["file"].get("content") if isinstance(r.get("file"), dict) else r.get("stdout")
+                    reads.append((sid, pend.pop(b["tool_use_id"]), len(str(body or "")) // 4))
+    print("root\tstate\tlabel\tadded\tresolved\twait_d\tbucket\trewordings\trounds\treason\tdetail_b\thistory_b\treads\tread_tok\treaders")
+    rows = []
+    for root, rel in sorted(rootset.items()):
+        D = os.path.join(root, rel[:-3])
+        A, DN = D + "-archive", os.path.basename(D)
+        # one entry per slug: its archived rounds and its open one, lines after the window's end left out
+        for slug in sorted({os.path.basename(h)[:-len(".history.md")] for h in glob.glob(f"{D}/*.history.md") + glob.glob(f"{A}/*.history.md")}):
+            hs = [h for h in (f"{A}/{slug}.history.md", f"{D}/{slug}.history.md") if os.path.exists(h)]
+            hl = sorted(m.groups() for h in hs for m in map(HLINE.match, open(h, errors="replace")) if m)
+            ep = lambda t: datetime.strptime(t, "%Y-%m-%d %H:%M").timestamp()  # history times are local
+            hl = [x for x in hl if ep(x[0]) <= END]
+            if not hl:
+                continue
+            res = [x for x in hl if x[2].startswith("resolved: ")]
+            state = "resolved" if hl[-1][2].startswith("resolved: ") else "open"
+            if state == "resolved" and ep(res[-1][0]) < CUT:
+                continue  # resolved before the window: last runs counted it
+            words = [x[2] for x in hl if not x[2].startswith("resolved: ")]
+            rounds = len(res) + (state == "open")
+            # the wait: each round's first wording to its resolve, the open one to END
+            wait, t0 = 0.0, None
+            for t, _, x in hl:
+                if t0 is None:
+                    t0 = ep(t)
+                if x.startswith("resolved: "):
+                    wait, t0 = wait + ep(t) - t0, None
+            wait = (wait + (END - t0 if t0 is not None else 0)) / 86400
+            bucket = next((n for n, rx in BUCKETS if words and re.search(rx, words[-1], re.I)), "other")
+            why = res[-1][2][len("resolved: "):] if state == "resolved" else ""
+            det = next((p for p in (f"{D}/{slug}.md", f"{A}/{slug}.md") if os.path.exists(p)), "")
+            at = [f"{DN}{s}/{slug}." for s in ("", "-archive")]  # open then, archived now: both
+            mine = [(s, t, ".history.md" in p or p == "history:" + slug) for s, p, t in reads if p == "history:" + slug or any(a in p for a in at)]
+            label = open(hs[-1], errors="replace").readline()[2:].rsplit(": history", 1)[0]
+            rows.append((state, bucket, wait, len(words) - rounds, rounds, why, any(x[2] for x in mine)))
+            print("\t".join(map(str, [os.path.basename(root), state, label, hl[0][0][:10], res[-1][0] if state == "resolved" else "",
+                                      f"{wait:.1f}", bucket, max(0, len(words) - rounds), rounds,
+                                      clip(why, 120), os.path.getsize(det) if det else 0, sum(map(os.path.getsize, hs)),
+                                      len(mine), sum(x[1] for x in mine), ",".join(sorted({x[0] for x in mine}))])))
+    med = lambda xs: f"{statistics.median(xs):.1f}" if xs else "-"
+    print({"entries": len(rows), "open": sum(r[0] == "open" for r in rows), "unknown_reason": sum(r[5] == "unknown" for r in rows),
+           "recurring": sum(r[4] > 1 for r in rows)}, file=sys.stderr)
+    for b in sorted({r[1] for r in rows}):
+        w = [r[2] for r in rows if r[1] == b]
+        print(f"bucket\t{b}\t{len(w)} entries\tmedian wait {med(w)} d\ttotal {sum(w):.1f} d", file=sys.stderr)
+    for read in (True, False):
+        g = [r for r in rows if r[6] == read]
+        print(f"history {'read' if read else 'unread'}\t{len(g)} entries\tmedian wait {med([r[2] for r in g])} d\t"
+              f"median rewordings {med([r[3] for r in g])}\trecurring {sum(r[4] > 1 for r in g)}", file=sys.stderr)
+
+
 def triggers(sid, days=7):
     window(days)
     fs = [f for r in roots() for f in glob.glob(f"{r}/*/{sid}*.jsonl")]
@@ -927,7 +1041,7 @@ def usage(days=30):
 
 
 CMDS = {"sessions": sessions, "events": events, "context": context, "units": units, "waits": waits, "bgtasks": bgtasks, "replies": replies,
-        "triggers": triggers, "usage": usage, "chunks": chunks, "trial": trial, "html": md2html}
+        "triggers": triggers, "usage": usage, "chunks": chunks, "trial": trial, "handoff": handoff, "html": md2html}
 
 if __name__ == "__main__":
     a = sys.argv[1:]

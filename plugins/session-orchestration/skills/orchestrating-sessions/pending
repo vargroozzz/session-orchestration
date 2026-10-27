@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# pending: the coordinator handoff file's per-entry history and archive. The file is config pending.file (relative
+# to the project root), FILE = DIR/NAME.md. Beside it: NAME/SLUG.md (an entry's detail, optional, kept small) and
+# NAME/SLUG.history.md (append-only: `- YYYY-MM-DD HH:MM (ID8) LINE` per wording, `… resolved: REASON` when it
+# leaves); resolved entries' two files in NAME-archive/, one line each in the index NAME-archive.md:
+#   - ADDED → YYYY-MM-DD HH:MM TEXT · reason: REASON → NAME-archive/SLUG.history.md
+# Entries: the `- ` lines up to the first heading or other text after them (the pane's rule). LABEL: the entry after
+# its date, up to the first ` (` or `:`; SLUG: LABEL with each run of anything but A-Za-z0-9._- as one `-`, at most
+# 60 characters (pending-diff.jq has the same rules).
+#   pending hook                 PostToolUse, every tool: when FILE changed since the last look (its mtime and
+#                                size), appends each new entry line to its history and archives each entry gone
+#                                from FILE with reason unknown. A stat and nothing more when it didn't change.
+#   pending done LABEL [--] REASON   archives one entry (exact LABEL, else a unique prefix): its files to the archive,
+#                                the index line, the line out of FILE, each a copy swapped in with mv, in that order.
+#   pending history LABEL [--last N]  an entry's history (open or archived), or its header and last N changes.
+#   pending history --find KEY   the history file (path from the root) of the entry naming KEY; open ones first.
+#   pending history --scan       every version of FILE in the project's transcripts, every account (lib.sh
+#                                list_accounts), diffed oldest first: TIME ID8 LABEL SLUG change|gone LINE|REASON.
+#   pending history --seed       the scan written out, once when adopting: a history for each open entry without
+#                                one, and each entry gone for good archived with the scan's dates and reason.
+#   pending notices              a line per detail file over 4 KB.
+#   pending yesterday EPOCH KEYRE  index lines resolved since EPOCH: KEY (else "LABEL")<TAB>EPOCH<TAB>TEXT.
+# Self-test: bash pending.test.sh
+here=$(cd "$(dirname "$0")" && pwd)
+C=${XDG_CACHE_HOME:-$HOME/.cache}/session-status
+sum() { printf %s "$1" | cksum | cut -d' ' -f1; }
+stamp() { case $(uname) in Darwin|*BSD) stat -f '%Fm %z' "$1" ;; *) stat -c '%y %s' "$1" ;; esac 2>/dev/null; }
+
+if [ "${1:-}" = hook ]; then
+  { read -r sid; read -r cwd; } < <(jq -r '.session_id // "", .cwd // ""' 2>/dev/null)
+  [ -n "${cwd:-}" ] && cd "$cwd" 2>/dev/null || exit 0
+  mkdir -p "$C"; w=$C/pending-where-$(sum "$PWD")
+  # Where this cwd's FILE is, looked up again after 10 minutes. ponytail: a config change shows within 10 minutes.
+  if [ -z "$(find "$w" -mmin -10 2>/dev/null)" ]; then
+    (. "$here/../../lib.sh" && f=$(config pending.file 2>/dev/null) && echo "${f:+$(find_root)/$f}") > "$w.$$" 2>/dev/null; mv "$w.$$" "$w"
+  fi
+  read -r P < "$w" 2>/dev/null; [ -n "${P:-}" ] && [ -f "$P" ] || exit 0
+  s=$C/pending-snap-$(sum "$P")
+  [ "$(stamp "$P")" = "$(cat "$s.stamp" 2>/dev/null)" ] && exit 0
+fi
+
+. "$here/../../lib.sh" || exit 1
+ROOT=$(find_root)
+if [ -z "${P:-}" ]; then
+  rel=$(config pending.file 2>/dev/null)
+  [ -n "$rel" ] || { echo "no handoff file: set pending.file in the coordination config (setting-up-coordination, Config)" >&2; exit 2; }
+  P=$ROOT/$rel
+  [ -f "$P" ] || { echo "pending.file $rel: no such file" >&2; exit 2; }
+  s=$C/pending-snap-$(sum "$P")
+fi
+rel=${P#"$ROOT"/}
+D=${P%.md}; A=$D-archive; AI=$A.md; DN=${D##*/}; AN=${A##*/}
+mkdir -p "$C"
+now() { date '+%Y-%m-%d %H:%M'; }
+who=${sid:-${CLAUDE_CODE_SESSION_ID:-}}; who=${who:0:8}; who=${who:-user}
+
+# entries FILE: LABEL<TAB>SLUG<TAB>LINE (LINE without its `- `) per entry.
+entries() {
+  awk '/^- / { e = 1; line = substr($0, 3); l = line; sub(/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] /, "", l)
+      i = index(l, " ("); j = index(l, ":"); k = (i && (!j || i < j)) ? i : j; if (k) l = substr(l, 1, k - 1)
+      s = l; gsub(/[^A-Za-z0-9._-]+/, "-", s); gsub(/^-+|-+$/, "", s); print l "\t" substr(s, 1, 60) "\t" line; next }
+    e && (/^#/ || /[^[:space:]]/) { exit }' "$1" 2>/dev/null
+}
+# The lock FILE's writers share (this hook in every session, done, seed). ponytail: one lock per FILE, stale after a minute.
+lock() {
+  local n=0
+  [ -z "$(find "$s.lock" -maxdepth 0 -mmin +1 2>/dev/null)" ] || rmdir "$s.lock" 2>/dev/null
+  until mkdir "$s.lock" 2>/dev/null; do n=$((n + 1)); [ "$n" -lt "${1:-50}" ] || return 1; sleep 0.2; done
+  trap 'rmdir "$s.lock" 2>/dev/null' EXIT
+}
+snapshot() { cp "$P" "$s.snap.$$" && mv "$s.snap.$$" "$s.snap"; stamp "$P" > "$s.stamp"; }
+# wordings FILE: the texts of a history's lines since its last `resolved:` (this round's wordings).
+wordings() { grep '^- ' "$1" 2>/dev/null | awk '/\) resolved: / { n = 0; next } { w[n++] = $0 } END { for (i = 0; i < n; i++) print w[i] }' |
+  sed -E 's/^- [0-9-]+ [0-9:]+ \([^)]*\) //'; }
+
+# record LABEL SLUG LINE [TIME [WHO]]: LINE onto SLUG's history unless this round has it already (two entries with
+# one label alternate without repeating; ponytail: so a return to an earlier wording isn't recorded either).
+record() {
+  local h=$D/$2.history.md
+  [ -f "$h" ] || { mkdir -p "$D"; printf '# %s: history\n\n' "$1" > "$h"; }
+  wordings "$h" | grep -qxF -- "$3" || printf -- '- %s (%s) %s\n' "${4:-$(now)}" "${5:-$who}" "$3" >> "$h"
+}
+# pointer SLUG: the detail file's last line names its history and size.
+pointer() {
+  local f=$D/$1.md h=$D/$1.history.md n kb
+  [ -f "$f" ] && [ -f "$h" ] || return 0
+  n=$(grep -c '^- ' "$h"); kb=$(( ($(wc -c < "$h") + 1023) / 1024 ))
+  # rewritten only when the line changes, so a session that read the file can still Edit it
+  [ "$(tail -1 "$f")" = "History: $DN/$1.history.md ($n changes, $kb KB)" ] && return 0
+  { grep -v '^History: ' "$f"; echo "History: $DN/$1.history.md ($n changes, $kb KB)"; } > "$f.$$" && mv "$f.$$" "$f"
+}
+# index_line ADDED RESOLVED TEXT REASON SLUG
+index_line() { printf -- '- %s → %s %s · reason: %s → %s/%s.history.md\n' "$1" "$2" "$3" "$4" "$AN" "$5"; }
+# index_add LINE…: the index with LINEs, sorted by resolved time, swapped in.
+index_add() {
+  { [ -f "$AI" ] && sed -n '1,/^$/p' "$AI" || printf '# %s archive (resolved handoff entries)\n\n' "$DN"
+    { [ -f "$AI" ] && grep '^- ' "$AI"; printf '%s\n' "$@"; } | awk -F' → ' '{ print substr($2, 1, 16) "\t" $0 }' |
+      sort -s -t$'\t' -k1,1 | cut -f2-; } > "$AI.$$" && mv "$AI.$$" "$AI"
+}
+# archive LABEL SLUG LINE REASON [TIME [WHO]]: the entry's history (made from LINE when it has none) and detail to
+# the archive (appended to an earlier round's), then its index line. FILE is the caller's.
+archive() {
+  local h=$D/$2.history.md f=$D/$2.md t=${5:-$(now)} added first text
+  record "$1" "$2" "$3" "$t" "${6:-$who}"
+  printf -- '- %s (%s) resolved: %s\n' "$t" "${6:-$who}" "$4" >> "$h"
+  added=$(grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}' <<<"$3"); first=$(grep -m1 '^- ' "$h" | cut -c3-12)
+  [ -n "$added" ] && { [ -z "$first" ] || [[ ! $first < $added ]]; } || added=$first
+  text=$(sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2} //' <<<"$3")
+  mkdir -p "$A"
+  if [ -f "$A/$2.history.md" ]; then grep '^- ' "$h" >> "$A/$2.history.md" && rm "$h"; else mv "$h" "$A/"; fi
+  if [ -f "$f" ]; then
+    { [ ! -f "$A/$2.md" ] || { cat "$A/$2.md"; printf '\n## Detail, resolved %s\n\n' "$t"; }
+      sed "s#^History: .*#History: $AN/$2.history.md#" "$f"; } > "$A/$2.md.$$" && mv "$A/$2.md.$$" "$A/$2.md" && rm "$f"
+  fi
+  index_add "$(index_line "$added" "$t" "$text" "$4" "$2")"
+}
+# FILE without LINE (exact text): its first copy among the entries, not one in a log below them; swapped in
+drop_lines() {
+  awk -v d="- $1" 'b != 2 && /^- / { b = 1; if ($0 == d && !x) { x = 1; next } }
+    b == 1 && !/^- / && (/^#/ || /[^[:space:]]/) { b = 2 } { print }' "$P" > "$P.$$" && mv "$P.$$" "$P"
+}
+
+# update: FILE against the last snapshot: new lines recorded, gone entries archived (reason unknown).
+update() {
+  local l sl line
+  entries "$P" > "$s.cur"
+  while IFS=$'\t' read -r l sl line; do record "$l" "$sl" "$line"; done < "$s.cur"
+  if [ -f "$s.snap" ]; then
+    entries "$s.snap" | awk -F'\t' 'NR == FNR { c[$2]; next } !($2 in c)' "$s.cur" - |
+      while IFS=$'\t' read -r l sl line; do
+        [ -f "$D/$sl.history.md" ] || [ ! -f "$A/$sl.history.md" ] || continue   # archived by done already
+        archive "$l" "$sl" "$line" unknown
+      done
+  fi
+  cut -f2 "$s.cur" | sort -u | while read -r sl; do pointer "$sl"; done
+  snapshot; rm -f "$s.cur"
+}
+
+case ${1:-} in
+  hook)
+    lock 1 || exit 0
+    m=$(stamp "$P"); update; [ "$(stamp "$P")" = "$m" ] || update   # changed while we read it: once more
+    exit 0 ;;
+  done)
+    shift; label=${1:-}; shift; [ "${1:-}" = -- ] && shift; reason=$(tr '\n\t' '  ' <<<"$*" | sed 's/ *$//')
+    [ -n "$label" ] && [ -n "$reason" ] || { echo "usage: session-status --pending-done LABEL [--] REASON"; exit 2; }
+    lock || { echo "$rel is locked by another writer; try again"; exit 1; }
+    update   # catch up first, so the history has the current wording
+    hits=$(entries "$P" | awk -F'\t' -v l="$label" '$1 == l'); [ -n "$hits" ] ||
+      hits=$(entries "$P" | awk -F'\t' -v l="$label" 'index($1, l) == 1 && substr($1, length(l) + 1, 1) !~ /[A-Za-z0-9]/')
+    sl=$(sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+|-+$//g' <<<"$label" | cut -c1-60)
+    [ -n "$hits" ] || [ -f "$D/$sl.history.md" ] || [ ! -f "$A/$sl.history.md" ] ||
+      { echo "$label is archived already (its line left $rel before): ${AI#"$ROOT"/}"; exit 2; }
+    n=$(cut -f2 <<<"$hits" | sort -u | grep -c .)
+    case $n in
+      0) echo "no entry labelled $label in $rel; its labels:"; entries "$P" | cut -f1 | sed 's/^/  /'; exit 2 ;;
+      1) ;;
+      *) echo "$label matches several entries in $rel; give one label exactly:"; cut -f1 <<<"$hits" | sed 's/^/  /'; exit 2 ;;
+    esac
+    IFS=$'\t' read -r l sl line <<<"$hits"
+    archive "$l" "$sl" "$line" "$reason"
+    drop_lines "$line"; snapshot
+    echo "archived $l → ${AI#"$ROOT"/} ($AN/$sl.history.md)" ;;
+  history)
+    shift
+    case ${1:-} in
+      --find)
+        [ -n "${2:-}" ] || { echo "usage: session-status --pending-history --find KEY"; exit 2; }
+        for f in "$D"/*.history.md "$A"/*.history.md; do
+          [ -f "$f" ] && head -1 "$f" | grep -qw -- "$2" && { echo "${f#"$ROOT"/}"; exit 0; }
+        done; exit 1 ;;
+      --scan|--seed)
+        hdr=$(head -1 "$P"); enc=$(sed 's/[^A-Za-z0-9]/-/g' <<<"$ROOT")
+        list_accounts | cut -f1 | while read -r a; do (cd "$a/projects" 2>/dev/null && pwd -P); done | sort -u |
+          while read -r pd; do ls -d "$pd/$enc" "$pd/$enc"-* 2>/dev/null; done |
+          while read -r d; do grep -l -F -e "$hdr" -e "$rel" "$d"/*.jsonl 2>/dev/null; done | sort -u |
+          while read -r f; do
+            jq -cnR --arg header "$hdr" --arg rel "$rel" --arg abs "$P" --arg sid "$(basename "$f" .jsonl)" -f "$here/pending-versions.jq" "$f" 2>/dev/null
+          done > "$s.scan.$$"
+        # the file as it is now closes the scan: an entry no transcript saw leave is gone by now
+        jq -cn --rawfile v "$P" --arg t "$(date -u +%Y-%m-%dT%H:%M:%S.999Z)" '{k: "v", v: $v, t: $t, i: 0, s: "now", turn: ""}' >> "$s.scan.$$"
+        jq -rs -f "$here/pending-diff.jq" "$s.scan.$$" > "$s.events.$$"; rm -f "$s.scan.$$"
+        if [ "$1" = --scan ]; then cat "$s.events.$$"; rm -f "$s.events.$$"; exit 0; fi
+        lock || { echo "$rel is locked by another writer; try again"; exit 1; }
+        entries "$P" > "$s.cur"; idx=(); opened=0 closed=0
+        # per slug, in the order first seen
+        for sl in $(cut -f4 "$s.events.$$" | awk '!s[$0]++'); do
+          awk -F'\t' -v s="$sl" '$4 == s' "$s.events.$$" > "$s.one"
+          l=$(cut -f3 "$s.one" | tail -1)
+          if cut -f2 "$s.cur" | grep -qxF "$sl"; then
+            # merged with what the hook recorded already, by time, a wording once per run of it
+            mkdir -p "$D"; h=$D/$sl.history.md
+            { printf '# %s: history\n\n' "$l"
+              { awk -F'\t' '{ printf "- %s (%s) %s%s\n", $1, $2, ($5 == "gone" ? "resolved: " : ""), $6 }' "$s.one"
+                grep '^- ' "$h" 2>/dev/null; } | sort -s -k2,3 |
+                awk '{ t = $0; sub(/^- [0-9-]+ [0-9:]+ \([^)]*\) /, "", t) } t != p { print } { p = t }'; } > "$h.$$" && mv "$h.$$" "$h"
+            opened=$((opened + 1))
+          else
+            [ ! -f "$A/$sl.history.md" ] || continue
+            mkdir -p "$A"; printf '# %s: history\n\n' "$l" > "$A/$sl.history.md"
+            awk -F'\t' '{ printf "- %s (%s) %s%s\n", $1, $2, ($5 == "gone" ? "resolved: " : ""), $6 }' "$s.one" >> "$A/$sl.history.md"
+            line=$(awk -F'\t' '$5 == "change" { l = $6 } END { print l }' "$s.one")
+            IFS=$'\t' read -r t _ _ _ _ why < <(awk -F'\t' '$5 == "gone"' "$s.one" | tail -1)
+            added=$(grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}' <<<"$line"); first=$(head -1 "$s.one" | cut -c1-10)
+            [ -n "$added" ] && [[ ! $first < $added ]] || added=$first
+            idx+=("$(index_line "$added" "$t" "$(sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2} //' <<<"$line")" "${why:-unknown}" "$sl")")
+            closed=$((closed + 1))
+          fi
+        done
+        [ ${#idx[@]} = 0 ] || index_add "${idx[@]}"
+        while IFS=$'\t' read -r l sl line; do record "$l" "$sl" "$line"; pointer "$sl"; done < "$s.cur"
+        snapshot; rm -f "$s.cur" "$s.one" "$s.events.$$"
+        echo "seeded from transcripts: $opened open entries' histories, $closed resolved entries archived (${AI#"$ROOT"/})" ;;
+      ''|--*) echo "usage: session-status --pending-history LABEL [--last N] | --find KEY | --scan | --seed"; exit 2 ;;
+      *)
+        sl=$(sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+|-+$//g' <<<"$1" | cut -c1-60)
+        f=$D/$sl.history.md; [ -f "$f" ] || f=$A/$sl.history.md
+        [ -f "$f" ] || { echo "no history for $1 (looked for $DN/$sl.history.md and $AN/$sl.history.md)"; exit 2; }
+        if [ "${2:-}" = --last ] && [[ ${3:-} =~ ^[0-9]+$ ]]; then head -1 "$f"; grep '^- ' "$f" | tail -n "$3"
+        else cat "$f"; fi ;;
+    esac ;;
+  notices)
+    for f in "$D"/*.md; do
+      case $f in *.history.md) continue ;; esac
+      [ -f "$f" ] && b=$(wc -c < "$f") && [ "$b" -gt 4096 ] &&
+        echo "pending detail ${f#"$ROOT"/} is $(( (b + 1023) / 1024 )) KB: trim it to what's current (its history keeps the rest)"
+    done; exit 0 ;;
+  yesterday)
+    from=${2:-0}; kre=${3:-'[A-Z][A-Z0-9]+-[0-9]+'}; since=$(epochfmt "$from" '%Y-%m-%d %H:%M')
+    [ -f "$AI" ] || exit 0
+    sed -nE 's/^- [0-9-]+ → ([0-9-]+ [0-9:]+) (.*) · reason: (.*) → .*$/\1\t\2\t\3/p' "$AI" |
+      while IFS=$'\t' read -r t text why; do
+        [[ $t < $since ]] && continue
+        case $(uname) in Darwin|*BSD) e=$(date -j -f '%Y-%m-%d %H:%M' "$t" +%s) ;; *) e=$(date -d "$t" +%s) ;; esac
+        l=$(entries <(printf -- '- %s\n' "$text") | cut -f1); k=$(grep -m1 -oE -- "$kre" <<<"$l" | head -1)
+        printf '%s\t%s\tresolved from pending: %s\n' "${k:-\"$l\"}" "$e" "$why"
+      done ;;
+  *) echo "usage: pending hook | done LABEL [--] REASON | history … | notices | yesterday EPOCH KEYRE"; exit 2 ;;
+esac

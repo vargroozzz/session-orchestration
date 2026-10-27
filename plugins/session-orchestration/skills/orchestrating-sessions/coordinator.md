@@ -191,10 +191,22 @@ coordinator can pick it up:
   **Decisions**. Name the session's id in the entry when there is one.
 - Add an entry among the others, above any heading after them (a log): the pane reads entries only
   up to the first heading, so one appended at the end of the file (`>>`) doesn't show.
-- Write an entry the moment only your conversation holds it. Delete it the moment it's resolved.
+- Write an entry the moment only your conversation holds it, as one short line: what waits, on whom.
+- Without config `pending.file`, delete an entry the moment it's resolved. With it (the file is
+  `DIR/NAME.md`), resolve it with `session-status --pending-done LABEL -- REASON` instead of deleting
+  the line: the entry moves to the archive (`NAME-archive.md`, one line each, with its dates and REASON)
+  with its files. LABEL is the entry's text after its date, up to the first ` (` or `:` (`PROJ-12 (abc):
+  …` → `PROJ-12`). Adding or rewording an entry stays a plain edit, but keep its LABEL: a new LABEL
+  is a new entry, and the old one is archived with reason `unknown`.
+- With `pending.file`, detail that doesn't fit the line goes in `NAME/SLUG.md` beside the file. SLUG
+  is LABEL with each run of characters other than `A-Za-z0-9._-` turned into `-` (`deploy window` →
+  `deploy-window`). Keep it under 4 KB, with only what's current (Notices says when it grows past). A
+  hook records every wording of every entry in `NAME/SLUG.history.md` as the file changes.
+  `--pending-history LABEL [--last N]` prints it. It's for R&D and for the rare entry whose past you
+  need: don't read history files by default.
 - At the start of a coordinator session, check each entry against the status command and the
-  replies folder, and delete those already resolved (PR merged, session replied, ticket moved). A
-  decision still waiting on the user stays.
+  replies folder, and resolve those already done (PR merged, session replied, ticket moved) as above.
+  A decision still waiting on the user stays.
 - **A PR waiting for a human reviewer is "waiting on review", not "on you".** It becomes the user's
   once a human approved it and the merge call is due. Before passing on an "on you" entry that is a
   day or more old, recheck it: the task may have moved since it was written.

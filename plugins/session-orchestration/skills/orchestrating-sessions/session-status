@@ -79,6 +79,8 @@
 #                       row (or fails 3 in a row), print it and exit; checks every SECS (default 1800). Run it in
 #                       the background, re-arm; no loop around it.
 #        session-status --pending       the adapter's `pending` text only
+#        session-status --pending-done LABEL [--] REASON   archive a handoff entry (config pending.file; `pending`)
+#        session-status --pending-history LABEL [--last N] | --find KEY | --scan | --seed   an entry's history
 #        session-status --urls          the adapter's `urls` text only
 #        session-status --root          the project root: where the adapter and .claude/coordinator-actions.json are
 #        session-status --agents        the sessions the last sweep saw: id, name, state, command prefix, started
@@ -427,6 +429,9 @@ ADAPTER=$(adapter_path "$ROOT")   # local, else the committed one once trusted (
 adapter() { [ -n "$ADAPTER" ] && "$ADAPTER" "$@"; }
 [ "${1:-}" = --root ] && { echo "$ROOT"; exit; }
 [ "${1:-}" = --pending ] && { adapter pending 2>/dev/null; exit; }
+# The handoff file's archive and per-entry history (config pending.file): next to this script, `pending`.
+case ${1:-} in --pending-done|--pending-history) a=${1#--pending-}; shift; exec bash "$(dirname "$SELF")/pending" "$a" "$@" ;; esac
+PENDING=$(config pending.file 2>/dev/null)
 [ "${1:-}" = --urls ] && { adapter urls 2>/dev/null; exit; }
 [ "${1:-}" = --agents ] && { cat ~/.cache/session-status/"$ENC".agents 2>/dev/null; exit; }
 [ "${1:-}" = --messages-file ] && { echo ~/.cache/session-status/"$ENC".messages/notices.jsonl; exit; }
@@ -465,10 +470,11 @@ else
   # Notices run alongside everything else: the sweep only, like the other footers. Each source (the messages module,
   # the adapter) writes $TMP/notices.SOURCE and its exit code.
   MSG=$(config messages 2>/dev/null); NSRC=
-  [ -n "$BY_KEY" ] || { [ "$MSG" = none ] || NSRC=messages; [ -z "$ADAPTER" ] || NSRC="$NSRC adapter"; }
+  [ -n "$BY_KEY" ] || { [ "$MSG" = none ] || NSRC=messages; [ -z "$ADAPTER" ] || NSRC="$NSRC adapter"; [ -z "$PENDING" ] || NSRC="$NSRC pending"; }
   if [ -n "$NSRC" ]; then
     { [ "$MSG" = none ] || { messages_job > "$TMP/notices.messages" 2>/dev/null; echo $? > "$TMP/notices.messages.rc"; } &
       [ -z "$ADAPTER" ] || { adapter notices > "$TMP/notices.adapter" 2>/dev/null; echo $? > "$TMP/notices.adapter.rc"; } &
+      [ -z "$PENDING" ] || { bash "$(dirname "$SELF")/pending" notices > "$TMP/notices.pending" 2>/dev/null; echo $? > "$TMP/notices.pending.rc"; } &
       wait; } & NPID=$!
   fi
   if [ -n "$ADAPTER" ]; then
@@ -675,6 +681,8 @@ if [ -n "$YDAY" ]; then
     END { for (g in n) { split(g, x, "\t"); subj = s[g]; sub("^" x[1] "[: ]*", "", subj)
       printf "%s\t%s\t%d commit%s %s %s%s — last: %s\n", x[1], t[g], n[g], (n[g] == 1 ? "" : "s"),
         (up[g] == n[g] ? "on" : "pushed to"), x[2], (up[g] && up[g] < n[g] ? " (" up[g] " not pushed)" : up[g] ? " (not pushed)" : ""), subj } }' >> "$TMP/yd.events"
+  # Handoff entries resolved since (pending.file's archive): under their key, else as a task of their own.
+  [ -z "$PENDING" ] || bash "$(dirname "$SELF")/pending" yesterday "$from" "$KEYRE" >> "$TMP/yd.events" 2>/dev/null
   # The adapter's rows and events, for the keys found here and its own.
   adapter yesterday "$from" $(cut -f1 "$TMP/yd.events" | grep -xE "$KEYRE" | sort -u) > "$TMP/yd.adapter" 2>/dev/null; arc=$?
   [ "$arc" = 0 ] || [ "$arc" = 1 ] || : > "$TMP/yd.adapter"
@@ -862,7 +870,8 @@ if [ -n "$HANDOVER" ]; then
     text=$(printf 'Session task: %s\nChunk: %s/%s\nSupersedes: %s\nContinue from the last "## c%s: handoff" in %s/%s-build.md, then follow %s/%s-c%s.md.\n%s' \
       "$key" "$key" "$n" "$id" "$n" "$rd" "$key" "$rd" "$key" "$n" "$next")
   else
-    text="Work on $key: continue from $rdir/$key.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole)."
+    hist=; [ -z "$PENDING" ] || hist=$(bash "$(dirname "$SELF")/pending" history --find "$key" 2>/dev/null)
+    text="Work on $key: continue from $rdir/$key.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole).${hist:+ The history of its handoff entry, if you need it: $hist (on demand, not up front).}"
   fi
   out=$(bash -c "$(bg_cmd "$pre")$pm -n \"\$0\" \"\$1\"" "$new" "$text" 2>&1)
   nid=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1); nid=${nid##* }

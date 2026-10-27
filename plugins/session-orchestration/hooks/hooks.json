@@ -116,6 +116,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Edit|MultiEdit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/skills/orchestrating-sessions/pending\" hook",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SessionStart": [

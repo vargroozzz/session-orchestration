@@ -88,6 +88,12 @@ schedules it.
    - Planner sizing, when the usage log has chunk lines: `chunks 7 > chunks.tsv`. Report the `ratio` per kind
      (median act/est), and propose a new size multiplier for a kind whose median strays past 1.0 ± 0.3. Add
      `trial > trial.tsv`: it prints the arms, and the run compares them week over week against last run's.
+   - Handoff entries, when the project sets `pending.file`: `handoff 28 > handoff.tsv 2> handoff.txt`. Give
+     the on-you wait per blocker bucket, entries with reason `unknown`, recurring entries (rounds > 1), and
+     detail and history bytes beside last run's. Read the top 5 rows by `wait_d` and the top 5 by `rewordings`
+     (their history files, by `session-status --pending-history LABEL --last 10`, not whole) and name the
+     issues that recur; one proposal at most. `history read` against `unread` in `handoff.txt` says whether
+     sessions that opened a history file did better: report it, and say when either side is under 5 entries.
 4. Run the project brief's own checks. If the project memory index has a graduation rule and the
    brief has no graduation check of its own, read every topic file, apply the rule to each entry, and
    list the ones to graduate (entry, target doc and section, why) and to drop, as one proposal outside

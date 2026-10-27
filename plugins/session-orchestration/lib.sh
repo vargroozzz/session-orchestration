@@ -143,6 +143,8 @@ detect_host() {
 #                       (skills/orchestrating-sessions/feedback.md)    default auto
 #   feedback.repo_dir   a clone of the plugin repo you can push to (~ expanded)     default empty
 #   telemetry           local | off: pane presses to the local usage log (usage below)     default off
+#   pending.file        the coordinator's handoff file, relative to the project root, *.md: its entries' history
+#                       and archive (skills/orchestrating-sessions/pending)              default empty (none)
 #   plan.enabled        true | false: the task planner splits big tasks into chunks         default true
 #   plan.max_parallel   integer >= 1: chunk sessions at once                                default 3
 #   plan.models.KIND    MODEL/EFFORT (effort low|medium|high|xhigh|max; never fable), KIND design | build | mechanical | review
@@ -160,10 +162,10 @@ model_ok() { [[ $1 =~ ^[a-z][a-z0-9.-]*$ && $1 != *fable* ]] && { [ $# = 1 ] || 
 config() {
   local key=${1:-} v ok=
   case $key in
-    tracker|host|key_pattern|approvals.delegate|features.accounts|features.review_inbox|terminal|messages|feedback.mode|feedback.repo_dir|telemetry) ;;
+    tracker|host|key_pattern|approvals.delegate|features.accounts|features.review_inbox|terminal|messages|feedback.mode|feedback.repo_dir|telemetry|pending.file) ;;
     plan.enabled|plan.max_parallel|plan.models.design|plan.models.build|plan.models.mechanical|plan.models.review|plan.models.release|plan.models.scan) ;;
     handoff.at.chunk|handoff.at.task|handoff.at.coordinator|handoff.hard_after|handoff.stop_room|compact.window) ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate features.accounts features.review_inbox terminal messages feedback.mode feedback.repo_dir telemetry plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window)" >&2; return 2 ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate features.accounts features.review_inbox terminal messages feedback.mode feedback.repo_dir telemetry pending.file plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
@@ -179,6 +181,7 @@ config() {
     messages) [ "$v" = none ] && ok=1 || { [[ $v =~ ^[A-Za-z0-9_-]+$ ]] && find_module messages "$v" >/dev/null && ok=1; } ;;
     feedback.mode) case $v in auto|pr|fork-pr|issue|local) ok=1 ;; esac ;;
     telemetry) case $v in local|off) ok=1 ;; esac ;;
+    pending.file) [[ $v == *.md && $v != /* && $v != *..* ]] && ok=1 ;;
     plan.max_parallel) [[ $v =~ ^[1-9][0-9]{0,2}$ ]] && ok=1 ;;
     plan.models.*) [[ $v == */* ]] && model_ok "${v%%/*}" "${v#*/}" && ok=1 ;;
     handoff.*|compact.window) [[ $v =~ ^(0|[1-9][0-9]{0,6})$ ]] && ok=1 ;;
@@ -189,7 +192,7 @@ config() {
   [ -z "$v" ] || echo "warning: config $key=$v is not valid${kind:+ (no $kind/$v.sh found)}: using the default" >&2
   case $key in
     tracker) echo none ;; host) detect_host ;; key_pattern) ;; approvals.delegate|features.*) echo false ;; terminal) echo plain ;; messages) echo none ;;
-    feedback.mode) echo auto ;; feedback.repo_dir) ;; telemetry) echo off ;;
+    feedback.mode) echo auto ;; feedback.repo_dir|pending.file) ;; telemetry) echo off ;;
     plan.enabled) echo true ;; plan.max_parallel) echo 3 ;;
     plan.models.design|plan.models.review) echo opus/xhigh ;; plan.models.build) echo opus/medium ;;
     plan.models.mechanical|plan.models.release) echo sonnet/medium ;; plan.models.scan) echo haiku/low ;;

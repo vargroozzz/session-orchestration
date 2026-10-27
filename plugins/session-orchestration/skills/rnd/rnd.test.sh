@@ -246,6 +246,30 @@ out=$(XDG_STATE_HOME=$tmp/state rnd chunks 7)
 grep -q $'^PROJ-3\t1\tscan/opus/low\t11\t10\t' <<<"$out" && grep -q $'^PROJ-3\t2\tscan/opus/low\t22\t30\t' <<<"$out" ||
   fail "chunks: each log line on the chunk whose --done printed it" "$out"
 
+# handoff: a coordinated root with one open entry (reworded once) and one resolved twice (recurring), whose history
+# one session read
+hr=$tmp/hroot; mkdir -p "$hr/.claude" "$hr/n/p" "$hr/n/p-archive" "$home/.claude/projects/-x-hroot"
+echo '{"pending": {"file": "n/p.md"}}' > "$hr/.claude/coordination.local.json"
+printf '# OPEN-1: history\n\n- 2026-10-10 09:00 (aaaaaaaa) 2026-10-10 OPEN-1: decide A or B\n- 2026-10-11 09:00 (aaaaaaaa) 2026-10-10 OPEN-1: decide A or B, your call\n' > "$hr/n/p/OPEN-1.history.md"
+printf 'Detail.\n' > "$hr/n/p/OPEN-1.md"
+printf '# GONE-2: history\n\n- 2026-10-01 10:00 (u) 2026-10-01 GONE-2: release 0.1\n- 2026-10-02 10:00 (u) resolved: released\n- 2026-10-05 10:00 (u) 2026-10-05 GONE-2: release 0.2\n- 2026-10-07 10:00 (u) resolved: unknown\n' > "$hr/n/p-archive/GONE-2.history.md"
+jq -nc --arg c "$hr" '{type: "user", cwd: $c, timestamp: "2026-10-12T09:00:00.000Z", message: {content: "go"}}' > "$home/.claude/projects/-x-hroot/cccccccc-1.jsonl"
+jq -nc --arg p "$hr/n/p/OPEN-1.history.md" '{type: "assistant", timestamp: "2026-10-12T09:00:01.000Z", message: {content: [{type: "tool_use", id: "h1", name: "Read", input: {file_path: $p}}]}}' >> "$home/.claude/projects/-x-hroot/cccccccc-1.jsonl"
+jq -nc '{type: "user", timestamp: "2026-10-12T09:00:02.000Z", toolUseResult: {file: {content: "0123456789abcdefghijklmnopqrstuvwxyz0123"}}, message: {content: [{type: "tool_result", tool_use_id: "h1"}]}}' >> "$home/.claude/projects/-x-hroot/cccccccc-1.jsonl"
+# resolved before the window: left out; resolved and back open: one row, two rounds, read by --pending-history
+printf '# OLD-3: history\n\n- 2026-09-01 10:00 (u) OLD-3: x\n- 2026-09-02 10:00 (u) resolved: done\n' > "$hr/n/p-archive/OLD-3.history.md"
+printf '# REC-4: history\n\n- 2026-10-07 10:00 (u) REC-4: on you\n- 2026-10-08 10:00 (u) resolved: done\n' > "$hr/n/p-archive/REC-4.history.md"
+printf '# REC-4: history\n\n- 2026-10-09 10:00 (u) REC-4: on you again\n- 2026-10-14 10:00 (u) REC-4: after the window\n' > "$hr/n/p/REC-4.history.md"
+jq -nc '{type: "assistant", timestamp: "2026-10-12T09:01:00.000Z", message: {content: [{type: "tool_use", id: "h2", name: "Bash", input: {command: "session-status --pending-history REC-4 --last 5"}}]}}' >> "$home/.claude/projects/-x-hroot/cccccccc-1.jsonl"
+jq -nc '{type: "user", timestamp: "2026-10-12T09:01:01.000Z", toolUseResult: {stdout: "01234567"}, message: {content: [{type: "tool_result", tool_use_id: "h2"}]}}' >> "$home/.claude/projects/-x-hroot/cccccccc-1.jsonl"
+out=$(TZ=UTC rnd handoff 7 2> "$tmp/handoff.err")
+! grep -q OLD-3 <<<"$out" && [ "$(grep -c REC-4 <<<"$out")" = 1 ] &&
+  grep -q $'^hroot\topen\tREC-4\t2026-10-07\t\t5.1\tuser decision\t0\t2\t\t0\t[0-9]*\t1\t2\tcccccccc$' <<<"$out" || fail "handoff window and rounds" "$out"
+grep -q $'^hroot\topen\tOPEN-1\t2026-10-10\t\t3.1\tuser decision\t1\t1\t\t8\t[0-9]*\t1\t10\tcccccccc$' <<<"$out" &&
+  grep -q $'^hroot\tresolved\tGONE-2\t2026-10-01\t2026-10-07 10:00\t3.0\trelease\t0\t2\tunknown\t0\t' <<<"$out" ||
+  fail "handoff rows" "$out"
+grep -q "'recurring': 2" "$tmp/handoff.err" && grep -q $'^history read\t2 entries' "$tmp/handoff.err" || fail "handoff totals" "$(cat "$tmp/handoff.err")"
+
 printf '#!/bin/sh\necho "$@" > %q\n' "$tmp/claude.args" > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"
 out=$(HOME=$tmp RND_LOG=$tmp/log "$here/rnd-weekly" "$tmp" --dry-run)
 grep -q 'claude --bg -n rnd-weekly-' <<<"$out" && [ ! -e "$tmp/claude.args" ] || fail "rnd-weekly --dry-run starts nothing" "$out"

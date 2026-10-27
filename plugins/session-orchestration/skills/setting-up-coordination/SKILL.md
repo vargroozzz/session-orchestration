@@ -100,6 +100,7 @@ Both are excluded from git, the repo file until shared mode commits it. `session
 | `features.review_inbox` | `true` \| `false`: PR findings go to the review inbox page (`features/review-inbox.md`); Bitbucket only, GitHub is a TODO | `false`; setup writes `true` when the project's docs name an inbox URL and the host is Bitbucket |
 | `feedback.mode` | `auto` \| `pr` \| `fork-pr` \| `issue` \| `local`: how plugin feedback cases are sent (`../orchestrating-sessions/feedback.md`) | `auto`: `pr` with `feedback.repo_dir` set, else `fork-pr` when `gh` is signed in, else `issue`; setup doesn't write it |
 | `feedback.repo_dir` | a clone of the plugin repo you can push to (`~` expanded) | unset; setup doesn't write it |
+| `pending.file` | the coordinator's handoff file, relative to the root (e.g. `docs/pending.md`): turns on its per-entry history hook and archive (`--pending-done`, `--pending-history`; status-reference.md) | unset; setup doesn't write it |
 | `telemetry` | `local` \| `off`: with `local`, each pane press appends a fixed name to `${XDG_STATE_HOME:-~/.local/state}/session-orchestration/usage.jsonl`, read only by `rnd.py usage`; nothing leaves the machine | `off`; setup doesn't write it (set it in the person-wide file to measure your own use) |
 | `plan.enabled` | `true` \| `false`: `session-status --plan` splits a design into chunks | `true`; setup doesn't write it |
 | `plan.max_parallel` | integer ≥ 1: chunks `session-status --plan` lets run at once | `3`; setup doesn't write it |
