@@ -9,7 +9,7 @@ What you get:
 - a playbook for the coordinator, with a status command (`session-status`) and a pane beside the chat: tasks,
   their sessions, PRs and pending decisions, and approvals as buttons;
 - hooks that keep background sessions from stalling on a prompt nobody can answer, and that let a PR merge or a
-  comment post through only with your approval (`gh`, plus Jira/Bitbucket Data Center CLIs);
+  comment post through only with your approval (`gh`, plus the Jira/Bitbucket Data Center and Forgejo CLIs);
 - optional: a review inbox for proposed PR comments, an `rnd` skill that measures how efficiently the sessions work.
 
 ## Requirements

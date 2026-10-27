@@ -91,13 +91,13 @@ Both are excluded from git, the repo file until shared mode commits it. `session
 | Key | Values | Default |
 |---|---|---|
 | `tracker` | `none` \| `github` \| `jira` | detected at setup: `jira` for Jira-style keys, `github` for a GitHub remote with `#123` refs, else `none` |
-| `host` | `github` \| `bitbucket` \| `none` | from the `origin` remote |
+| `host` | `github` \| `bitbucket` \| `forgejo` \| `none` | from the `origin` remote |
 | `key_pattern` | an extended regex matching a task key | not written by setup (your override); unset: the adapter's `key-pattern`, else `[A-Z][A-Z0-9]+-[0-9]+` |
 | `approvals.delegate` | `true` \| `false` | `false` |
 | `terminal` | a terminal module's name: `plain` (the pane copies commands), one the plugin ships (`terminals/<name>.md` beside its module), or your own (status-reference.md, Modules) | `plain`; setup proposes a shipped module when it runs in that terminal (in tmux: `plain`, with a note) |
 | `messages` | `none`, `msgraph` (Teams and Outlook; its config block and routing in `messages/msgraph.md`) or your own messages module (status-reference.md, Modules) | `none`; setup doesn't write it: set it by hand per the module's doc |
 | `features.accounts` | `true` \| `false`: ask every Claude account sharing this one's transcripts (`features/accounts.md`) | `false`; setup writes `true` when it finds a second account |
-| `features.review_inbox` | `true` \| `false`: PR findings go to the review inbox page (`features/review-inbox.md`); Bitbucket only, GitHub is a TODO | `false`; setup writes `true` when the project's docs name an inbox URL and the host is Bitbucket |
+| `features.review_inbox` | `true` \| `false`: PR findings go to the review inbox page (`features/review-inbox.md`); Bitbucket or Forgejo, GitHub is a TODO | `false`; setup writes `true` when the project's docs name an inbox URL and the host is Bitbucket or Forgejo |
 | `feedback.mode` | `auto` \| `pr` \| `fork-pr` \| `issue` \| `local`: how plugin feedback cases are sent (`../orchestrating-sessions/feedback.md`) | `auto`: `pr` with `feedback.repo_dir` set, else `fork-pr` when `gh` is signed in, else `issue`; setup doesn't write it |
 | `feedback.repo_dir` | a clone of the plugin repo you can push to (`~` expanded) | unset; setup doesn't write it |
 | `pending.file` | the coordinator's handoff file, relative to the root (e.g. `docs/pending.md`): turns on its per-entry history hook and archive (`--pending-done`, `--pending-history`; status-reference.md) | unset; setup doesn't write it |

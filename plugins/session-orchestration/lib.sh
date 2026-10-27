@@ -119,7 +119,7 @@ detect_host() {
   git -C "$d" rev-parse --git-dir >/dev/null 2>&1 ||
     { g=$(find "$d" -mindepth 2 -maxdepth 3 -name .git 2>/dev/null | sort | head -1); [ -z "$g" ] || d=${g%/.git}; }
   case $(git -C "$d" remote get-url origin 2>/dev/null) in
-    *github.com*) echo github ;; *bitbucket*) echo bitbucket ;;
+    *github.com*) echo github ;; *bitbucket*) echo bitbucket ;; *forgejo*) echo forgejo ;;
     *gitlab*) echo "warning: a GitLab remote: host=none until GitLab support (a TODO)" >&2; echo none ;;
     *) echo none ;;
   esac
@@ -127,14 +127,14 @@ detect_host() {
 
 # config KEY: the key's value, or its default. Keys and values:
 #   tracker             none | github | jira                          default none
-#   host                github | bitbucket | none                     default from the origin remote
+#   host                github | bitbucket | forgejo | none           default from the origin remote
 #   key_pattern         an ERE matching a task key                    default empty (session-status's own)
 #   approvals.delegate  true | false: a coordinator's message counts as the user's approval, except what the
 #                       project's CLAUDE.md reserves                    default false
 #   features.accounts   true | false: ask every Claude account sharing this transcript store (features/accounts.*)
 #                                                                       default false
 #   features.review_inbox  true | false: PR findings go to the review inbox page (features/review-inbox.md);
-#                       Bitbucket only (TODO: GitHub support)           default false
+#                       Bitbucket or Forgejo (TODO: GitHub support)     default false
 #   terminal            plain | ghostty | your own module's name (find_module terminals NAME): where the pane's
 #                       Attach in tab and Logs in split open             default plain
 #   messages            none | msgraph | your own module's name (find_module messages NAME): the chat and mail
@@ -170,12 +170,12 @@ config() {
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
     tracker) case $v in none|github|jira) ok=1 ;; esac ;;
-    host) case $v in github|bitbucket|none) ok=1 ;; esac ;;
+    host) case $v in github|bitbucket|forgejo|none) ok=1 ;; esac ;;
     key_pattern) { grep -qE -- "$v" </dev/null; [ $? -le 1 ]; } 2>/dev/null && ok=1 ;;
     approvals.delegate|features.accounts|plan.enabled) case $v in true|false) ok=1 ;; esac ;;
     features.review_inbox) case $v in false) ok=1 ;;
-      true) [ "$(config host 2>/dev/null)" = bitbucket ] && ok=1 ||
-              { echo "warning: features.review_inbox needs host=bitbucket (GitHub support is a TODO): off" >&2; echo false; return 0; } ;;
+      true) case $(config host 2>/dev/null) in bitbucket|forgejo) ok=1 ;; esac; [ -n "$ok" ] ||
+              { echo "warning: features.review_inbox needs host=bitbucket or forgejo (GitHub support is a TODO): off" >&2; echo false; return 0; } ;;
     esac ;;
     terminal) [[ $v =~ ^[A-Za-z0-9_-]+$ ]] && find_module terminals "$v" >/dev/null && ok=1 ;;
     messages) [ "$v" = none ] && ok=1 || { [[ $v =~ ^[A-Za-z0-9_-]+$ ]] && find_module messages "$v" >/dev/null && ok=1; } ;;

@@ -25,6 +25,10 @@ typed() { jq -nc --arg ts "$2" --arg t "$1" '{type: "user", origin: {kind: "huma
   typed "yes, merge app#15" "$now"
   typed "yes, post the ACME-9 note" "$now"
   typed "yes, request changes on ACME-10" "$now"
+  typed "yes, merge PROJ-11 (app#301)" "$now"
+  typed "yes, post the PROJ-12 comment" "$now"
+  typed "yes, approve PROJ-13" "$now"
+  typed "yes, request changes on PROJ-14" "$now"
 } > "$proj/$cid.jsonl"
 export CLAUDE_CODE_SESSION_ATTENDED=0 # unattended (a --bg session) unless a check says otherwise
 printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
@@ -51,6 +55,10 @@ w=$tmp/worker.jsonl
   relay "yes, merge app#15" "merge acme/app#15 (app-fix-login)"
   relay "yes, post the ACME-9 note" "post comment $tmp/body.txt on acme/app#16 (sha256 $sha) for ACME-9"
   relay "yes, request changes on ACME-10" "post request-changes review $tmp/body.txt on acme/app#18 (sha256 $sha) for ACME-10"
+  relay "yes, merge PROJ-11 (app#301)" "merge org/app#301 (PROJ-11)"
+  relay "yes, post the PROJ-12 comment" "post comment $tmp/body.txt on org/app#302 (sha256 $sha) for PROJ-12"
+  relay "yes, approve PROJ-13" "approve org/app#303 (PROJ-13)"
+  relay "yes, request changes on PROJ-14" "post request-changes review $tmp/body.txt on org/app#304 (sha256 $sha) for PROJ-14"
 } > "$w"
 
 run() { # $1 command → allow | deny | pass | blocked (exit 2)
@@ -90,6 +98,33 @@ check "$jd issue comment create PROJ-2 --body-file \"it's" deny "unparseable"
 cp "$tmp/body.txt" "$tmp/body.bak"; echo edited >> "$tmp/body.txt"
 check "$jd issue comment create PROJ-2 --body-file $tmp/body.txt" deny "edited body file"
 cp "$tmp/body.bak" "$tmp/body.txt"
+# Forgejo: forgejo-cli, --repo OWNER/REPO, a review's verdict in --status.
+fj='npx -y forgejo-cli@latest'
+check "$fj pr get 301 --repo org/app" pass "read-only forgejo call"
+check "$fj raw /repos/org/app/pulls/301" pass "forgejo raw GET"
+check "$fj raw /repos/org/app/pulls/301/merge --method POST" deny "forgejo raw write"
+check "$fj pr merge 309 --repo org/app" deny "forgejo merge, no relay"
+check "$fj pr 'merge' 309 --repo org/app" deny "forgejo merge, quoted subcommand"
+check "$fj pr comment \"create\" 309 --repo org/app --body-file $tmp/body.txt" deny "forgejo comment, quoted subcommand"
+check "$fj 'raw' /repos/org/app/pulls/301/merge '--method' POST" deny "forgejo raw write, quoted"
+check "forgejo-cli pr merge 309 --repo org/app" deny "forgejo merge by the bare binary, no relay"
+check "$fj pr merge 301 --repo app" deny "forgejo merge, --repo without owner"
+check "$fj pr merge 301 --repo org/app --strategy squash" allow "forgejo merge with a relay"
+check "$fj pr merge 301 --repo org/app" deny "forgejo merge, relay used once already"
+check "$fj pr comment create 302 --repo org/app --body 'Looks good to me.'" deny "forgejo comment, inline body"
+check "$fj pr comment create 302 --repo org/app --body-file $tmp/other.txt" deny "forgejo comment, other body file"
+check "$fj pr comment create 302 --repo org/app --body-file $tmp/body.txt --path a.ts --line 3" allow "forgejo inline comment with the sha256"
+check "$fj pr review 303 --repo org/app --status APPROVED" allow "forgejo bare approve"
+check "$fj pr review 304 --repo org/app --body-file $tmp/body.txt" deny "forgejo review, no verdict"
+check "$fj pr review 304 --repo org/app --status COMMENT --body-file $tmp/body.txt" deny "forgejo review kind differs from the relay"
+check "$fj pr review 304 --repo org/app --status REQUEST_CHANGES --body-file $tmp/body.txt --comments-file /tmp/c.json" deny "forgejo review with inline comments"
+check "$fj pr comment create 304 --repo org/app --body-file $tmp/body.txt" deny "a forgejo review's relay used for a plain comment"
+check "$fj pr review 304 --repo org/app --status NEEDS_WORK --body-file $tmp/body.txt" allow "forgejo request-changes review, relayed as one"
+check "$fj pr merge 309 --repo org/app && $bb pr merge 272 --repo app" deny "forgejo and bitbucket calls in one command"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "$fj pr merge 309 --repo org/app" ask "attended, unapproved forgejo merge"
+got=$(jq -nc --arg c "$fj pr merge 309 --repo org/app" --arg cwd "$root" --arg tp "$w" '{tool_input: {command: $c}, cwd: $cwd, transcript_path: $tp}' |
+  (cd "$root" && HOME=$home CLAUDE_CONFIG_DIR=$home/.claude PATH=$tmp/bin:$PATH bash "$here/approved-action.sh") | jq -r .hookSpecificOutput.permissionDecisionReason)
+grep -qF 'needs your approval: merge org/app#309' <<<"$got" || { echo "FAIL: forgejo deny doesn't name the action: $got"; exit 1; }
 # Attended (an interactive session): the missing approval asks instead of denying; anything else on the signal denies.
 # GitHub: OWNER/REPO#ID from -R/--repo or the PR's URL, never from a remote.
 git -C "$root" init -q && git -C "$root" remote add origin git@github.com:acme/app.git

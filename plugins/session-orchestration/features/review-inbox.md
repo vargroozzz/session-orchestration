@@ -1,7 +1,7 @@
 # Feature: review inbox
 
 On when `features.review_inbox` is `true` in `.claude/coordination/coordination.json` (a repo key) and the host is
-Bitbucket (GitHub support is a TODO: on GitHub it reads as off, with a warning). Setup turns it on when the
+Bitbucket or Forgejo (GitHub support is a TODO: on GitHub it reads as off, with a warning). Setup turns it on when the
 project's `CLAUDE.md`, `CLAUDE.local.md`, memory index or coordinator doc names a review inbox URL. The inbox
 itself (rows, reviewers, posting, notes) is in the orchestrating-sessions skill's `review-inbox.md`; this file is
 the coordinator's part.

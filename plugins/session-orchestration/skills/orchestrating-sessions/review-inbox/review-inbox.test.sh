@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Self-check for verify-row.sh and post-approved.sh: rows hashed the way inbox.html hashes them (the same
-# JavaScript, run in node), a stub bitbucketdc that records its arguments and stdin. Posts nothing anywhere.
+# JavaScript, run in node), a stub bitbucketdc / forgejo-cli that records its arguments and stdin. Posts nothing anywhere.
 # Run: bash review-inbox.test.sh  (prints "ok" or the failure).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -59,7 +59,7 @@ echo "npm warn exec The following package was not found and will be installed" >
 echo "{\"id\": \$((1000 + n)), \"text\": \"...\"}"
 EOF
 chmod +x "$tmp/bb"
-post() { BITBUCKETDC=$tmp/bb REVIEW_INBOX_LEDGER=$tmp/ledger AI_DISCLOSURE=$tmp/ai.on bash "$here/post-approved.sh" "$tmp/rows" | sort; }
+post() { REVIEW_INBOX_HOST=bitbucket BITBUCKETDC=$tmp/bb REVIEW_INBOX_LEDGER=$tmp/ledger AI_DISCLOSURE=$tmp/ai.on bash "$here/post-approved.sh" "$tmp/rows" | sort; }
 
 out=$(post)
 grep -qx 'posted ok1 100[0-9]' <<<"$out" || { echo "FAIL post ok1: $out"; exit 1; }
@@ -89,10 +89,28 @@ rm "$tmp/fail"; out=$(post)
 [ "$(cat "$tmp/n")" = 4 ] && grep -qx 'posted ok1 unknown (earlier run; mark it in the inbox, or check the PR if unknown)' <<<"$out" || { echo "FAIL retried after failure: $out"; exit 1; }
 # A second run while one holds the lock posts nothing.
 mkdir "$tmp/ledger.lock"; rm "$tmp/ledger"
-BITBUCKETDC=$tmp/bb REVIEW_INBOX_LEDGER=$tmp/ledger bash "$here/post-approved.sh" "$tmp/rows" 2>/dev/null && { echo "FAIL ran under a held lock"; exit 1; }
+REVIEW_INBOX_HOST=bitbucket BITBUCKETDC=$tmp/bb REVIEW_INBOX_LEDGER=$tmp/ledger bash "$here/post-approved.sh" "$tmp/rows" 2>/dev/null && { echo "FAIL ran under a held lock"; exit 1; }
 [ "$(cat "$tmp/n")" = 4 ] || { echo "FAIL posted under a held lock"; exit 1; }
 # With no REVIEW_INBOX_LEDGER, each account keeps its own ledger, in its CLAUDE_CONFIG_DIR.
 rmdir "$tmp/ledger.lock"; mkdir "$tmp/acct"
-CLAUDE_CONFIG_DIR=$tmp/acct BITBUCKETDC=$tmp/bb AI_DISCLOSURE=$tmp/ai.on bash "$here/post-approved.sh" "$tmp/rows" >/dev/null
+CLAUDE_CONFIG_DIR=$tmp/acct REVIEW_INBOX_HOST=bitbucket BITBUCKETDC=$tmp/bb AI_DISCLOSURE=$tmp/ai.on bash "$here/post-approved.sh" "$tmp/rows" >/dev/null
 grep -q '^ok1	' "$tmp/acct/review-inbox-posted.tsv" || { echo "FAIL ledger not in CLAUDE_CONFIG_DIR"; exit 1; }
+# On Forgejo: --repo PROJECT/REPO and no --project; a file-level row is skipped (Forgejo has none).
+rm "$tmp/ledger"; : > "$tmp/calls"; echo 0 > "$tmp/n"
+out=$(REVIEW_INBOX_HOST=forgejo FORGEJO=$tmp/bb REVIEW_INBOX_LEDGER=$tmp/ledger AI_DISCLOSURE=$tmp/ai.on bash "$here/post-approved.sh" "$tmp/rows" | sort)
+grep -qx "skipped filelevel: Forgejo has no file-level comment; put it on the file's first changed line" <<<"$out" || { echo "FAIL forgejo file-level: $out"; exit 1; }
+[ "$(grep -c '^posted' <<<"$out")" = 3 ] || { echo "FAIL forgejo want 3 posted: $out"; exit 1; }
+grep -qF 'pr|comment|create|7|--repo|TEST/test|--body-file|-|--path|src/a.ts|--line|3|--line-type|ADDED|--file-type|TO|' "$tmp/calls" || { echo "FAIL forgejo inline args"; cat "$tmp/calls"; exit 1; }
+grep -qxF 'pr|comment|create|7|--repo|TEST/test|--body-file|-|' "$tmp/calls" || { echo "FAIL forgejo general args"; cat "$tmp/calls"; exit 1; }
+grep -q -- '--project' "$tmp/calls" && { echo "FAIL forgejo got --project"; exit 1; }
+# The row's prUrl picks the host over the default; another host is skipped, not posted.
+rm -rf "$tmp/rows"; mkdir -p "$tmp/rows/findings"; : > "$tmp/calls"; echo 0 > "$tmp/n"
+row onfj '.prUrl = "https://forgejo.example.com/TEST/test/pulls/7" | .line = 9 | .lineType = "REMOVED" | del(.fileType)'
+row onbb '.prUrl = "https://bitbucket.example.com/projects/TEST/repos/test/pull-requests/7"'
+row nohost .
+out=$(REVIEW_INBOX_HOST=github FORGEJO=$tmp/bb BITBUCKETDC=$tmp/bb REVIEW_INBOX_LEDGER=$tmp/ledger3 bash "$here/post-approved.sh" "$tmp/rows" | sort)
+grep -qx 'skipped nohost: the review inbox posts to bitbucket or forgejo, not host=github' <<<"$out" &&
+  [ "$(grep -c '^posted' <<<"$out")" = 2 ] || { echo "FAIL per-row host: $out"; exit 1; }
+grep -qF 'pr|comment|create|7|--repo|TEST/test|--body-file|-|--path|src/a.ts|--line|9|--line-type|REMOVED|--file-type|FROM|' "$tmp/calls" &&
+  grep -qF 'pr|comment|create|7|--project|TEST|--repo|test|' "$tmp/calls" || { echo "FAIL per-row host args"; cat "$tmp/calls"; exit 1; }
 echo ok

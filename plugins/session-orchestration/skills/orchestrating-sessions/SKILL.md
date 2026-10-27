@@ -69,14 +69,16 @@ one of: `coding`, `PR #N open`, `in review`, `ready to merge`, `merged, deployin
     a verified relayed approval (below) if the project allows relays.
 
   With `approvals.delegate` off (the default), a coordinator's message alone is never the user's approval.
-- **Gated CLIs: gh, plus Jira/Bitbucket Data Center.** PR/Jira comment posts and PR merges are hook-gated
+- **Gated CLIs: gh, plus Jira/Bitbucket Data Center and Forgejo.** PR/Jira comment posts and PR merges are hook-gated
   (`gh pr merge|comment|review`, `gh issue comment`; `bitbucketdc-cli pr comment create|reply|update`,
-  `pr merge`; `jiradc-cli issue comment create|update`). They run only on a
+  `pr merge`; `forgejo-cli pr comment create|update`, `pr review`, `pr merge`; `jiradc-cli issue comment
+  create|update`). They run only on a
   relayed approval naming exactly that action (Relayed approvals, below). Post from `--body-file
   <absolute path>`, as the only CLI call in its command. A gh target is `OWNER/REPO#ID`: give
   `-R OWNER/REPO` (or the PR's URL) and the PR number; a bare `gh pr review --approve` is the
   action `approve OWNER/REPO#ID`, a review with a body names its kind (`post request-changes review
-  …`). A `gh api` write, an alias, or gh with a variable in its words is denied: use the plain subcommands. A relay allows one run: if it fails, check
+  …`). A forgejo-cli target is `OWNER/REPO#ID` too: give `--repo OWNER/REPO`; `pr review --status
+  APPROVED` alone is `approve`, and a review with `--comments` is denied. A `forgejo-cli raw` write is denied. A `gh api` write, an alias, or gh with a variable in its words is denied: use the plain subcommands. A relay allows one run: if it fails, check
   whether it landed before asking again. Denied, the reason holds the line to send:
   `needs your approval: <exact action>`. Put it in your `blocked` report and end your turn. Don't
   edit the body file after asking (the approval names its sha256), and never retry another way.

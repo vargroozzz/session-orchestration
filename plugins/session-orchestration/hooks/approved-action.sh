@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# PreToolUse on Bash: a PR or Jira comment post (bitbucketdc-cli pr comment create|reply|update, jiradc-cli issue
-# comment create|update), a PR merge (bitbucketdc-cli pr merge) and their GitHub twins (gh pr merge|comment|review,
-# gh issue comment) run only on a relayed approval that names it: a coordinator's "APPROVAL relayed from the user" block, received by this session, whose quote
+# PreToolUse on Bash: a PR or Jira comment post (bitbucketdc-cli pr comment create|reply|update, forgejo-cli pr
+# comment create|update, jiradc-cli issue comment create|update), a PR review (forgejo-cli pr review), a PR merge
+# (bitbucketdc-cli or forgejo-cli pr merge) and their GitHub twins (gh pr merge|comment|review, gh issue comment) run only on a relayed approval that names it: a coordinator's "APPROVAL relayed from the user" block, received by this session, whose quote
 # verify-approval.sh verifies and whose Action line names the target (REPO#ID for a PR, the issue key for Jira),
 # plus the body file's sha256 for a post (and, for a gh review, its kind), or "merge"/"approve" (and no sha256) for a
-# merge or a bodiless approval. A gh REPO is OWNER/REPO (HOST/OWNER/REPO off github.com), from -R/--repo or the PR's
+# merge or a bodiless approval. A forgejo-cli REPO is its --repo OWNER/REPO. A gh REPO is OWNER/REPO (HOST/OWNER/REPO off github.com), from -R/--repo or the PR's
 # URL (never guessed from a remote: gh picks its base repo by rules of its own). A relay whose Action names no tracker key (a project with
 # session-name keys) is verified with REPO's last part #ID as the key. Then: allow, once per relay
 # (~/.cache/session-status/approved/). The command must be that one CLI call alone. Anything else on
-# those commands: deny, with the exact action to report. A `gh api` call with a write method or fields, or gh
-# reached through a variable or $(…), is denied (asked, when attended): it can't be named as an action.
+# those commands: deny, with the exact action to report. A `gh api` call with a write method or fields, a
+# `forgejo-cli raw` call with a write method, or gh reached through a variable or $(…), is denied (asked, when
+# attended): it can't be named as an action.
 # A missing or unverified approval asks instead (the
 # normal permission dialog, same text) in an interactive session: CLAUDE_CODE_SESSION_ATTENDED=1, set in every
 # hook's env. A `--bg` session gets 0 even while `claude attach`ed (tested on 2.1.296: the binary forces 0 for
@@ -26,7 +27,7 @@
 # doesn't see. It posts only review-inbox rows the user approved on the page, each checked by verify-row.sh.
 input=$(cat)
 # (The raw JSON: a newline before gh is the two characters \n.)
-pre='bitbucketdc-cli|jiradc-cli|(^|[^A-Za-z0-9_.-]|\\[nrt])gh([^A-Za-z0-9_.-]|$)'
+pre='bitbucketdc-cli|forgejo-cli|jiradc-cli|(^|[^A-Za-z0-9_.-]|\\[nrt])gh([^A-Za-z0-9_.-]|$)'
 [[ $input =~ $pre ]] || exit 0
 
 done=
@@ -42,7 +43,7 @@ ask_for() {
 
 cmd=$(jq -r '.tool_input.command // ""' <<<"$input") || exit 1
 cwd=$(jq -r '.cwd // ""' <<<"$input") tp=$(jq -r '.transcript_path // ""' <<<"$input") || exit 1
-ops='bitbucketdc-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|comment[[:space:]]+(create|reply|update))([[:space:]]|$)|jiradc-cli[^[:space:]]*.*[[:space:]]issue[[:space:]]+comment[[:space:]]+(create|update)([[:space:]]|$)'
+ops='bitbucketdc-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|comment[[:space:]]+(create|reply|update))([[:space:]]|$)|forgejo-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|review|comment[[:space:]]+(create|update))([[:space:]]|$)|jiradc-cli[^[:space:]]*.*[[:space:]]issue[[:space:]]+comment[[:space:]]+(create|update)([[:space:]]|$)'
 ghw='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)'
 # gh, then pr/issue/api in the same command (flags may sit between): what a gated gh call looks like.
 ghops='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-][^|;&]*[[:space:]]|[[:space:]]+)(pr|issue|api)([[:space:]]|$)'
@@ -51,16 +52,21 @@ ghind='(=["'"'"']?|\$\(|`)[[:space:]]*((which|command[[:space:]]+-v|type[[:space
 # One line: continuations joined, other newlines made command separators.
 cont=$'\\\n' nl=$'\n'; cmd=${cmd//"$cont"/ }; cmd=${cmd//"$nl"/ ; }
 ghn=$(grep -oE "$ghw" <<<"$cmd" | wc -l | tr -d ' ')
-bbops=; grep -qE "$ops" <<<"$cmd" && bbops=1
+# Matched with quotes dropped too, so a quoted subcommand (pr 'merge') or flag is still seen.
+uq=${cmd//[\"\']/}
+bbops=; grep -qE "$ops" <<<"$uq" && bbops=1
+# forgejo-cli raw with a write method: the gh api twin.
+grep -qiE 'forgejo-cli[^[:space:]]*.*[[:space:]]raw[[:space:]].*--method[=[:space:]]+["'"'"']?(POST|PUT|PATCH|DELETE)' <<<"$uq" &&
+  attended "Blocked: a forgejo-cli raw call that writes can't be named as an approved action. Use forgejo-cli pr merge|review|comment, or hand the user the command with hand_command."
 [ -n "$bbops" ] || [ "$ghn" -gt 0 ] || pass
 grep -qE "$ghind" <<<"$cmd" &&
   attended "Blocked: gh reached through a variable or \$(…) can't be checked by the approval hook. Run it by its name (gh …), as one plain command."
 alone="Run that CLI call alone, as one plain command (the CLI, then its subcommand, then the arguments)."
 # Fails closed on anything it can't read as exactly one call: a second CLI call (chained, or glued to a token), a
 # subcommand behind global flags or a variable.
-bbn=$(grep -oE 'bitbucketdc-cli|jiradc-cli' <<<"$cmd" | wc -l | tr -d ' ')
+bbn=$(grep -oE 'bitbucketdc-cli|forgejo-cli|jiradc-cli' <<<"$cmd" | wc -l | tr -d ' ')
 [ -z "$bbops" ] || [ "$bbn" = 1 ] ||
-  decide deny "Blocked: a PR/Jira comment post or PR merge must be the only bitbucketdc-cli/jiradc-cli call in its command. $alone"
+  decide deny "Blocked: a PR/Jira comment post, review or PR merge must be the only bitbucketdc-cli/forgejo-cli/jiradc-cli call in its command. $alone"
 
 # Tokens, quotes honoured (xargs fails on an unbalanced quote: a heredoc's text, say).
 tokstr=$(printf '%s' "$cmd" | xargs printf '%s\n' 2>/dev/null) && [ -n "$tokstr" ] ||
@@ -70,13 +76,13 @@ while IFS= read -r t; do toks+=("$t"); done <<<"$tokstr"
 # Walk the tokens: each CLI call (up to |, ;, &&, ||) is read as SUB TARGET [flags]; a gh call (gh where a command
 # starts) as GROUP VERB TARGET with its flags anywhere.
 groups=' agent-task alias api attestation auth browse cache codespace completion config copilot extension gist gpg-key help issue label org pr preview project release repo ruleset run search secret ssh-key status variable version workflow '
-calls=0 ghcalls=0 apiw= kind= target= repo= bodyfile= body= help= host= mode= modes=0
+calls=0 ghcalls=0 apiw= kind= target= repo= bodyfile= body= help= host= mode= modes=0 fj= cm=
 i=0
 while [ "$i" -lt "${#toks[@]}" ]; do
   t=${toks[$i]}; i=$((i + 1)); prev=; [ "$i" -lt 2 ] || prev=${toks[$((i - 2))]}
   b=${t%;}; b=${b#\(}; b=${b#\$\(}; b=${b%\)}
   case "$t" in
-    *bitbucketdc-cli*|*jiradc-cli*) h= ;;
+    *bitbucketdc-cli*|*forgejo-cli*|*jiradc-cli*) h= ;;
     *) [ "${b##*/}" = gh ] || continue
        # Where a command starts: first, after a separator or a command prefix (env, VAR=x, sudo …).
        case "$prev" in ''|'|'|'||'|'&&'|';'|'&'|*';'|'('|'$('|env|command|exec|time|nohup|sudo|xargs|then|do|else|'!'|[A-Za-z_]*=*) ;; *)
@@ -94,10 +100,14 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     case "$cli:$sub" in
       *bitbucketdc-cli*:'pr merge'*) k=merge; s=2 ;;
       *bitbucketdc-cli*:'pr comment create'*|*bitbucketdc-cli*:'pr comment reply'*|*bitbucketdc-cli*:'pr comment update'*) k=prpost; s=3 ;;
+      *forgejo-cli*:'pr merge'*) k=merge; s=2 ;;
+      *forgejo-cli*:'pr review'*) k=review; s=2 ;;
+      *forgejo-cli*:'pr comment create'*|*forgejo-cli*:'pr comment update'*) k=prpost; s=3 ;;
       *jiradc-cli*:'issue comment create'*|*jiradc-cli*:'issue comment update'*) k=jirapost; s=3 ;;
       *) continue ;;
     esac
-    calls=$((calls + 1)); host= kind=$k target= repo= bodyfile= body=
+    calls=$((calls + 1)); host= kind=$k target= repo= bodyfile= body= mode= modes=0 cm= fj=
+    case "$cli" in *forgejo-cli*) fj=1 ;; esac
     set -- "${args[@]:$s}"
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -105,7 +115,12 @@ while [ "$i" -lt "${#toks[@]}" ]; do
         --repo) repo=${2:-}; shift ;; --repo=*) repo=${1#*=} ;;
         --body-file|--comment-file) bodyfile=${2:-}; shift ;; --body-file=*|--comment-file=*) bodyfile=${1#*=} ;;
         --body|--comment) body=1; shift ;; --body=*|--comment=*) body=1 ;;
-        --project|--strategy|--parent-id|--path|--line|--line-type|--file-type) shift ;;
+        # forgejo-cli pr review's verdict; NEEDS_WORK is its alias for REQUEST_CHANGES.
+        --status|--status=*) v=${2:-}; if [ "$1" = --status ]; then shift; else v=${1#*=}; fi
+          case $(tr a-z A-Z <<<"$v") in APPROVED) mode=approve ;; REQUEST_CHANGES|NEEDS_WORK) mode=request-changes ;; COMMENT) mode=comment ;; *) mode= ;; esac
+          [ -z "$mode" ] || modes=$((modes + 1)) ;;
+        --comments|--comments-file) cm=1; shift ;; --comments=*|--comments-file=*) cm=1 ;;
+        --project|--strategy|--parent-id|--path|--line|--line-type|--file-type|--comment-id) shift ;;
         -*) ;;
         *) [ -n "$target" ] || target=$1 ;;
       esac
@@ -158,7 +173,7 @@ if [ "$calls" = 0 ]; then
   decide deny "Blocked: the approval hook can't read this as one PR/Jira comment post or PR merge. $alone"
 fi
 [ "$calls" = 1 ] && [ $((bbn + ghn)) = 1 ] ||
-  decide deny "Blocked: a PR/issue comment post, review or merge must be the only bitbucketdc-cli/jiradc-cli/gh call in its command. $alone"
+  decide deny "Blocked: a PR/issue comment post, review or merge must be the only bitbucketdc-cli/forgejo-cli/jiradc-cli/gh call in its command. $alone"
 [ -z "$help" ] || pass
 [ -n "$target" ] || decide deny "Blocked: no PR id or issue key in this command."
 short=
@@ -178,18 +193,21 @@ if [ -n "$host" ]; then
     decide deny "Blocked: name the repository as -R OWNER/REPO (or give the PR's URL), so the approval can name OWNER/REPO#ID; gh's default repo isn't read here."
   [[ $target =~ ^[0-9]+$ ]] || decide deny "Blocked: the PR or issue id must be a number (or its URL), not a branch or nothing."
   what="$repo#$target" short="${repo##*/}#$target"
-  if [ "$kind" = review ]; then
-    [ "$modes" = 1 ] || decide deny "Blocked: give the review exactly one of --approve, --request-changes or --comment."
-    # A review that approves with no body is a bare approval.
-    [ "$mode$body$bodyfile" != approve ] || kind=approve
-  fi
 else
   case $kind in
-    merge|prpost) [[ $target =~ ^[0-9]+$ ]] || decide deny "Blocked: the PR id must be a number."
+    merge|prpost|review) [[ $target =~ ^[0-9]+$ ]] || decide deny "Blocked: the PR id must be a number."
                   [ -n "$repo" ] || decide deny "Blocked: name the repository with --repo, so the approval can name REPO#ID."
-                  what="$repo#$target" ;;
+                  [ -z "$fj" ] || [[ $repo == */* ]] || decide deny "Blocked: name the repository as --repo OWNER/REPO, so the approval can name OWNER/REPO#ID."
+                  what="$repo#$target"; [ -z "$fj" ] || short="${repo##*/}#$target" ;;
     jirapost) what=$target ;;
   esac
+fi
+if [ "$kind" = review ]; then
+  [ "$modes" = 1 ] || decide deny "Blocked: give the review exactly one verdict (gh: one of --approve, --request-changes or --comment; forgejo-cli: --status APPROVED, REQUEST_CHANGES or COMMENT)."
+  # Inline comments are text the body file's sha256 doesn't cover.
+  [ -z "$cm" ] || decide deny "Blocked: a review's inline comments (--comments, --comments-file) can't be named by one sha256. Post each with forgejo-cli pr comment create --path --line --body-file <absolute path>, one approval each."
+  # A review that approves with no body is a bare approval.
+  [ "$mode$body$bodyfile" != approve ] || kind=approve
 fi
 
 if [ "$kind" = merge ] || [ "$kind" = approve ]; then
@@ -227,7 +245,7 @@ while IFS= read -r r; do
   else
     grep -qF "$sha" <<<"$act" || continue
     # A gh comment's relay isn't a review's, and a review's names its kind.
-    [ "$host:$kind" != gh:prpost ] || ! grep -qiw review <<<"$act" || continue
+    [ "$kind" != prpost ] || [ -z "$host$fj" ] || ! grep -qiw review <<<"$act" || continue
     [ "$kind" != review ] || { grep -qiE "(^|[^a-z-])$mode([^a-z-]|$)" <<<"$act" && grep -qiw review <<<"$act"; } || continue
   fi
   key=$target; [ "$kind" = jirapost ] || key=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$act" | head -1)

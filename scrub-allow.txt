@@ -1,6 +1,7 @@
 # Known deny-list hits (scrub-check.sh): path<TAB>the whole line. The review inbox posts to Bitbucket Data Center
 # through that CLI's published npm name by default; override it with BITBUCKETDC. The stranger test holds its own
 # deny pattern.
-plugins/session-orchestration/skills/orchestrating-sessions/review-inbox/post-approved.sh	# Env: BITBUCKETDC (the CLI command; default npx -y @first/bitbucketdc-cli@latest), REVIEW_INBOX_LEDGER
-plugins/session-orchestration/skills/orchestrating-sessions/review-inbox/post-approved.sh	read -ra cli <<<"${BITBUCKETDC:-npx -y @first/bitbucketdc-cli@latest}"
+plugins/session-orchestration/skills/orchestrating-sessions/review-inbox/post-approved.sh	# FORGEJO (the CLI command; default npx -y @first/bitbucketdc-cli@latest / @first/forgejo-cli@latest), REVIEW_INBOX_LEDGER
+plugins/session-orchestration/skills/orchestrating-sessions/review-inbox/post-approved.sh	read -ra bbcli <<<"${BITBUCKETDC:-npx -y @first/bitbucketdc-cli@latest}"
+plugins/session-orchestration/skills/orchestrating-sessions/review-inbox/post-approved.sh	read -ra fjcli <<<"${FORGEJO:-npx -y @first/forgejo-cli@latest}"
 plugins/session-orchestration/stranger.test.sh	deny='eduard|btigroup|sdm-|@first/|~/bin|(^|[^[:alnum:]_])(vpn|greg|ghostty)([^[:alnum:]_]|$)'

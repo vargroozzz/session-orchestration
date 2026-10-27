@@ -701,6 +701,17 @@ echo 'Review inbox: https://claude.ai/artifact/abc' >> "$a/CLAUDE.local.md"; rm 
 grep -F 'review inbox found: off, it needs host=bitbucket' <<<"$(init "$a")" >/dev/null || { echo "init inbox on github: $(init "$a")"; exit 1; }
 jq '.features.review_inbox = false' "$b/.claude/coordination/coordination.json" > "$b/x" && mv "$b/x" "$b/.claude/coordination/coordination.json"
 grep -F 'review inbox found, review_inbox off' <<<"$(init "$b" --check)" >/dev/null || { echo "check inbox off: $(init "$b" --check)"; exit 1; }
+fj=$(mkdir -p "$tmp/init/fj" && cd "$tmp/init/fj" && pwd -P); git -C "$fj" init -q && git -C "$fj" remote add origin ssh://git@forgejo.example.com:7999/x/y.git
+echo 'Review inbox: https://claude.ai/artifact/abc' > "$fj/CLAUDE.md"
+init "$fj" --write >/dev/null && [ "$(jq -c '[.host, .features]' "$fj/.claude/coordination/coordination.json")" = '["forgejo",{"review_inbox":true}]' ] &&
+  [ "$(cfg "$fj" features.review_inbox)" = true ] && ! grep -q 'review inbox found' <<<"$(init "$fj" --check)" ||
+  { echo "init forgejo inbox: $(jq -c . "$fj/.claude/coordination/coordination.json") / $(init "$fj" --check)"; exit 1; }
+jq '.features.review_inbox = false' "$fj/.claude/coordination/coordination.json" > "$fj/x" && mv "$fj/x" "$fj/.claude/coordination/coordination.json"
+grep -F 'review inbox found, review_inbox off' <<<"$(init "$fj" --check)" >/dev/null || { echo "check forgejo inbox off: $(init "$fj" --check)"; exit 1; }
+git -C "$b" remote set-url origin ssh://git@forgejo.example.com:7999/x/y.git
+grep -F 'host=bitbucket, but the origin remote is on forgejo (moved?)' <<<"$(init "$b" --check)" >/dev/null || { echo "check host moved: $(init "$b" --check)"; exit 1; }
+! grep -q 'origin remote is on' <<<"$(init "$fj" --check)" || { echo "check host moved, false alarm: $(init "$fj" --check)"; exit 1; }
+git -C "$b" remote set-url origin ssh://git@bitbucket.example.com/x/y.git
 echo '{"tracker":"jira","features":true}' > "$b/.claude/coordination/coordination.json"
 [ "$(cfg "$b" tracker 2>/dev/null)" = jira ] || { echo "config: non-object features dropped the repo file"; exit 1; }
 # terminal: Ghostty found by TERM_PROGRAM is proposed, named by --check until recorded, then active with its doc; tmux

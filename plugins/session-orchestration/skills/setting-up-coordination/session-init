@@ -147,7 +147,9 @@ if [ "$mode" = check ]; then
                 echo "active: tracker=$t host=$h delegate=$d terminal=$te messages=$m features=${f:-none}${docs:+ → read $docs}"
                 [ -n "$term_set" ] || [ "$term_found" = plain ] || echo "detected $term_found: run setup to record it (session-status --init --write adds terminal=$term_found)"
                 [ "$a" = true ] || [ "$accounts_n" -lt 2 ] || echo "second account found, accounts off: set features.accounts to true in .claude/coordination.local.json (session-status --init --write adds it when unset)"
-                [ "$r" = true ] || [ -z "$inbox" ] || [ "$h" != bitbucket ] || echo "review inbox found, review_inbox off: set features.review_inbox to true in .claude/coordination/coordination.json (session-status --init --write adds it when unset)"
+                dh=$(detect_host . 2>/dev/null); [ "$dh" = none ] || [ "$dh" = "$h" ] ||
+                  echo "host=$h, but the origin remote is on $dh (moved?): set host to $dh in .claude/coordination/coordination.json"
+                [ "$r" = true ] || [ -z "$inbox" ] || [[ ! $h =~ ^(bitbucket|forgejo)$ ]] || echo "review inbox found, review_inbox off: set features.review_inbox to true in .claude/coordination/coordination.json (session-status --init --write adds it when unset)"
                 [ -z "$deleg_line" ] || [ -n "$deleg_set" ] || echo "delegation found in CLAUDE.md: run setup to move it (session-status --init --write --delegate)"
                 exit 0 ;;
     parent) echo "covered by a parent: $parent ($(slug "$(basename "$parent")")-coordinator) covers this folder"; exit 3 ;;
@@ -175,7 +177,7 @@ fi
 first=${repos[0]:-}
 url=; [ -n "$first" ] && url=$(git -C "$first" remote get-url origin 2>/dev/null)
 case $url in
-  *github.com*) host=github ;; *bitbucket*) host=bitbucket ;; *gitlab*) host=gitlab ;; *) host=none ;;
+  *github.com*) host=github ;; *bitbucket*) host=bitbucket ;; *forgejo*) host=forgejo ;; *gitlab*) host=gitlab ;; *) host=none ;;
 esac
 cfg_host=$host cfg_note=   # the config's host: GitLab isn't one yet (TODO: GitLab support)
 [ "$host" = gitlab ] && cfg_host=none cfg_note=" (host=none: GitLab support is a TODO)"
@@ -186,6 +188,7 @@ gh=; [ "$host" = github ] && command -v gh >/dev/null && gh=1
 case $host in
   github) merge_cmd="gh pr merge" post_cmd="gh pr review" ;;
   bitbucket) merge_cmd="bitbucketdc-cli pr merge" post_cmd="bitbucketdc-cli pr comment create" ;;
+  forgejo) merge_cmd="forgejo-cli pr merge" post_cmd="forgejo-cli pr comment create" ;;
   gitlab) merge_cmd="glab mr merge" post_cmd="glab mr note" ;;
   *) merge_cmd= post_cmd= ;;
 esac
@@ -274,9 +277,9 @@ repo_tracked=; git -C "$(dirname "$cfg_repo")" ls-files --error-unmatch coordina
 repo_visible=; [ -e "$cfg_repo" ] && ! (cd "$root" && git check-ignore -q "$cfg_repo" 2>/dev/null) && repo_visible=1
 # key_pattern isn't written: the adapter answers it for session keys, and a tracker key's prefix would narrow the
 # default PROJ-123 pattern. It's the user's override only.
-# The features: the review inbox where the project names one (Bitbucket only), accounts with a second one.
+# The features: the review inbox where the project names one (Bitbucket or Forgejo), accounts with a second one.
 review_inbox=false
-[ -z "$inbox" ] || { [ "$cfg_host" = bitbucket ] && review_inbox=true || cfg_note="$cfg_note (review inbox found: off, it needs host=bitbucket; GitHub support is a TODO)"; }
+[ -z "$inbox" ] || { case $cfg_host in bitbucket|forgejo) review_inbox=true ;; *) cfg_note="$cfg_note (review inbox found: off, it needs host=bitbucket or forgejo; GitHub support is a TODO)" ;; esac; }
 accounts=false; [ "$accounts_n" -lt 2 ] || accounts=true
 cfg_repo_json=$(jq -cn --arg t "$tracker" --arg h "$cfg_host" --argjson r "$review_inbox" '{tracker: $t, host: $h, features: {review_inbox: $r}}')
 # approvals.delegate: true with --delegate (over a value set too, below); false when unset, unless CLAUDE.md still

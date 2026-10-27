@@ -4,19 +4,25 @@
 # Usage: bash post-approved.sh <dir>   (an ArtifactData out_dir; reads <dir>/findings/*.json, or <dir>/*.json)
 # Per row: verify-row.sh must print "verified", else it's skipped with the reason. Then
 #   bitbucketdc pr comment create <pr> --project --repo --body-file -  (+ --path/--line/--line-type/--file-type
-#   when file and line are set; --path alone for a file-level one),
+#   when file and line are set; --path alone for a file-level one), or on Forgejo
+#   forgejo-cli pr comment create <pr> --repo <project>/<repo> --body-file -  (same line flags; Forgejo has no
+#   file-level comment, so such a row is skipped),
 # with the AI disclosure marker first when ~/.claude/ai-disclosure.on exists (its text, or "[AI-generated]").
 # Output, one line per row: "posted <docId> <commentId>", "skipped <docId>: <reason>" or "failed <docId>: <error>".
 # Mark each posted row in the inbox afterwards (review-inbox.md). Until then the ledger stops a re-run from
 # posting it twice.
-# Env: BITBUCKETDC (the CLI command; default npx -y @first/bitbucketdc-cli@latest), REVIEW_INBOX_LEDGER
+# The host is the row's: its prUrl names forgejo or bitbucket, else REVIEW_INBOX_HOST, else the project's config host.
+# Env: REVIEW_INBOX_HOST (bitbucket | forgejo; default the project's config host, from the cwd), BITBUCKETDC /
+# FORGEJO (the CLI command; default npx -y @first/bitbucketdc-cli@latest / @first/forgejo-cli@latest), REVIEW_INBOX_LEDGER
 # (default review-inbox-posted.tsv in the account's ${CLAUDE_CONFIG_DIR:-~/.claude}: row ids are unique only
 # within one account's inbox), AI_DISCLOSURE (default ~/.claude/ai-disclosure.on).
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 dir=${1:-}; [ -d "$dir" ] || { echo "usage: post-approved.sh <dir>" >&2; exit 2; }
 [ -d "$dir/findings" ] && dir=$dir/findings
-read -ra cli <<<"${BITBUCKETDC:-npx -y @first/bitbucketdc-cli@latest}"
+dhost=${REVIEW_INBOX_HOST:-$(. "$here/../../../lib.sh" && config host 2>/dev/null)}
+read -ra bbcli <<<"${BITBUCKETDC:-npx -y @first/bitbucketdc-cli@latest}"
+read -ra fjcli <<<"${FORGEJO:-npx -y @first/forgejo-cli@latest}"
 ledger=${REVIEW_INBOX_LEDGER:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/review-inbox-posted.tsv}
 switch=${AI_DISCLOSURE:-$HOME/.claude/ai-disclosure.on}
 touch "$ledger"
@@ -37,13 +43,24 @@ for f in "$dir"/*.json; do
     marker=$(head -c 200 "$switch" | tr -d '\n'); marker=${marker:-[AI-generated]}
     case "$body" in *"$marker"*) ;; *) body="$marker"$'\n\n'"$body" ;; esac
   fi
-  args=(pr comment create "$(jq -r '.pr | floor' "$f")" --project "$(jq -r .project "$f")" --repo "$(jq -r .repo "$f")" --body-file -)
+  case $(jq -r '.prUrl // ""' "$f") in *forgejo*) host=forgejo ;; *bitbucket*) host=bitbucket ;; *) host=$dhost ;; esac
+  case $host in
+    bitbucket) cli=("${bbcli[@]}") ;; forgejo) cli=("${fjcli[@]}") ;;
+    *) echo "skipped $id: the review inbox posts to bitbucket or forgejo, not host=${host:-(none)}"; continue ;;
+  esac
   file=$(jq -r '.file // ""' "$f"); line=$(jq -r '.line // "" | if type == "number" then floor else . end' "$f")
+  if [ "$host" = forgejo ]; then
+    [ -z "$file" ] || [ -n "$line" ] ||
+      { echo "skipped $id: Forgejo has no file-level comment; put it on the file's first changed line"; continue; }
+    args=(pr comment create "$(jq -r '.pr | floor' "$f")" --repo "$(jq -r '.project + "/" + .repo' "$f")" --body-file -)
+  else
+    args=(pr comment create "$(jq -r '.pr | floor' "$f")" --project "$(jq -r .project "$f")" --repo "$(jq -r .repo "$f")" --body-file -)
+  fi
   if [ -n "$file" ]; then
     args+=(--path "$file")
-    [ -n "$line" ] && args+=(--line "$line" --line-type "$(jq -r '.lineType // "ADDED"' "$f")" --file-type "$(jq -r '.fileType // "TO"' "$f")")
+    [ -n "$line" ] && args+=(--line "$line" --line-type "$(jq -r '.lineType // "ADDED"' "$f")" --file-type "$(jq -r '.fileType // (if .lineType == "REMOVED" then "FROM" else "TO" end)' "$f")")
   fi
-  # Ledgered before the outcome is known: a CLI that fails after Bitbucket took the comment must not lead to a
+  # Ledgered before the outcome is known: a CLI that fails after the host took the comment must not lead to a
   # second post. A failure leaves it "unknown"; to retry, check the PR has no such comment and delete its line.
   printf '%s\t%s\t%s\n' "$id" "$(jq -r .decisionHash "$f")" unknown >> "$ledger"
   if ! out=$(printf '%s' "$body" | "${cli[@]}" "${args[@]}" 2>"$err"); then echo "failed $id: $(tail -n 3 "$err" | tr '\n' ' ')"; continue; fi

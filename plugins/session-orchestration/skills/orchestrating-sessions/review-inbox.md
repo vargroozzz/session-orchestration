@@ -22,10 +22,10 @@ One document per proposed comment in the collection `findings`, id `<project>-<r
 
 | Field | Written by | Meaning |
 |---|---|---|
-| `project`, `repo`, `pr` (number), `prUrl`, `prTitle`, `ticket` | reviewer | The PR (`project` is the Bitbucket project key) |
+| `project`, `repo`, `pr` (number), `prUrl`, `prTitle`, `ticket` | reviewer | The PR (`project` is the Bitbucket project key, the org on Forgejo) |
 | `report` | reviewer | The replies-folder file with the whole review |
 | `n` | reviewer | The finding's number in that report |
-| `file`, `line`, `lineType` (`ADDED`/`CONTEXT`/`REMOVED`), `fileType` (`TO`/`FROM`) | reviewer | Where it goes. No `file`: a general comment. `file` without `line`: a file-level one |
+| `file`, `line`, `lineType` (`ADDED`/`CONTEXT`/`REMOVED`), `fileType` (`TO`/`FROM`) | reviewer | Where it goes. No `file`: a general comment. `file` without `line`: a file-level one (Bitbucket only: Forgejo has none, so put it on the file's first changed line) |
 | `severity` | reviewer | `blocking`, `should` or `nit` |
 | `why` | reviewer | The defect and its consequence, 1–3 lines |
 | `draft` | reviewer | The ready-to-post text (a ```suggestion block in it if any) |
@@ -34,7 +34,7 @@ One document per proposed comment in the collection `findings`, id `<project>-<r
 | `decidedBy`, `deciderIsOwner`, `decidedAt` | page | The viewer's id, whether they own the inbox, when |
 | `decisionHash` | page | sha256 over the decision and what it covers (see `verify-row.sh`) |
 | `sentAt` | page | When the page told Claude about the decision |
-| `commentId`, `postedAt` | poster | The posted Bitbucket comment |
+| `commentId`, `postedAt` | poster | The posted comment |
 | `answer`, `answeredNote` | note session | The reply to a note, and the note it answers |
 
 **Only the page writes `status`, `final`, `note` and the decision fields**, from the user's click.
@@ -79,13 +79,13 @@ A fresh session, started for the job (`claude --bg 'Post the approved review-inb
    (a lock next to the ledger).
 3. For each `posted` line, `ArtifactData` `update` that row with `commentId` and `postedAt`,
    `if_version` from step 1. A `failed` row stays in the ledger as `unknown`, since the CLI may have
-   failed after Bitbucket took the comment: report it. To retry, the PR must have no such comment;
+   failed after the host took the comment: report it. To retry, the PR must have no such comment;
    then delete that row's ledger line. If the update fails on the version (the user pressed Undo
    meanwhile), re-read the row and still write `commentId`: the comment is out.
 4. Report: posted N, skipped/failed with the reasons, as the status report.
 
 Never post a row the script skipped, and never post by hand what the script would refuse. A direct
-`bitbucketdc-cli pr comment create` stays gated by the plugin's `approved-action.sh` hook, which
+`bitbucketdc-cli` or `forgejo-cli pr comment create` stays gated by the plugin's `approved-action.sh` hook, which
 wants a relayed approval: the script is the inbox's only way to post.
 
 **Known gap.** Auto mode may deny the post in a background session (it publishes under the user's

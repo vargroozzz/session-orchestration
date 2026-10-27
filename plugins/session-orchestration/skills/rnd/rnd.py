@@ -282,7 +282,7 @@ def context(days=7, split="", project=""):
 
 
 # Right after the CLI's name (`…-cli[@version]`, `gh` or `glab`), so a heredoc or grep that only mentions one doesn't
-# count. The PR number may follow a `-R OWNER/REPO`. Posts: Bitbucket's `pr comment create`, gh's `pr comment` or
+# count. The PR number may follow a `-R OWNER/REPO`. Posts: Bitbucket's and Forgejo's `pr comment create`, gh's `pr comment` or
 # `pr review`, glab's `mr note`.
 CLI = r"(?:-cli(?:@\S+)?|\bgh|\bglab)\s+"
 REPO = r"(?:(?:-R|--repo)[ =]\S+\s+)?"
