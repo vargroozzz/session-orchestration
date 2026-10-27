@@ -10,14 +10,15 @@
 # NOTICE_DIR/notices.jsonl gets one object per line printed: line, chat, chatId, id, from, time, text, mine (the
 # line's tags that are in NOTICE_MINE), why (the triage's reason).
 
-# msgraph_conf JQ: the person file's msgraph block through JQ (raw output).
-msgraph_conf() { coord_json | jq -r ".msgraph // {} | $1"; }
+# msgraph_conf JQ: the person file's msgraph block (read once per run into $T/conf) through JQ (raw output).
+msgraph_conf() { jq -r "$1" "$T/conf"; }
 
 messages_notices() {
   local T people cli bin; T=$(mktemp -d)
   # A RETURN trap outlives the function: it clears itself, or it fires again in the caller with T unset.
   trap 'rm -rf "$T"; trap - RETURN' RETURN
   local D=$NOTICE_DIR; mkdir -p "$D"
+  coord_json | jq -c '.msgraph // {}' > "$T/conf"
   cli=$(msgraph_conf '.cli // "msgraph"')
   # One npx resolution per run, not one per call. ponytail: assumes the package's binary is named msgraph.
   case $cli in
@@ -124,7 +125,7 @@ messages_notices() {
   fi
   local team; team=$(msgraph_conf '.team // ""')
   jq -rn --slurpfile p "$people" --slurpfile c "$T/chats" --slurpfile s "$T/mentions" --slurpfile w <(cat "$T"/w-* 2>/dev/null) \
-     --slurpfile b <(cat "$bodies"/* 2>/dev/null) --slurpfile mail "$T/mail" --argjson conf "$(coord_json | jq -c '.msgraph // {}')" \
+     --slurpfile b <(cat "$bodies"/* 2>/dev/null) --slurpfile mail "$T/mail" --argjson conf "$(cat "$T/conf")" \
      --argjson now "$(date +%s)" --arg tagre "$tagre" --arg prre "$prre" --arg team "$team" -c -f /dev/stdin > "$T/items" <<'JQ' || { echo "teams: the notices query failed"; return 1; }
 def ts: (. // "1970-01-01T00:00:00Z") | sub("\\.[0-9]+"; "") | try fromdate catch 0;
 def plain: (. // "") | gsub("<[^>]*>"; " ") | gsub("&nbsp;"; " ") | gsub("&amp;"; "&") | gsub("&lt;"; "<") | gsub("&gt;"; ">")
@@ -248,8 +249,11 @@ JQ
   # the lines as they are (fail open) and they're judged again next run.
   local tri=$D/triage v end me who
   mkdir -p "$tri"; find "$tri" -type f -mtime +7 -delete 2>/dev/null
-  jq -c 'select(.rule == "A" or .rule == "C" or .rule == "M")' "$T/sidecar" | while IFS= read -r item; do
-    [ -s "$tri/$(jq -r .id <<<"$item")" ] || echo "$item"; done > "$T/judge"
+  # The verdicts in, by id: one jq for all of them, not a fork per item.
+  find "$tri" -type f -size +0 -exec jq -c '{(input_filename | split("/") | last): .}' {} + 2>/dev/null |
+    jq -s 'add // {}' > "$T/verdicts"
+  jq -c --slurpfile V "$T/verdicts" 'select((.rule == "A" or .rule == "C" or .rule == "M") and ($V[0][.id] | not))' \
+    "$T/sidecar" > "$T/judge"
   if [ -s "$T/judge" ]; then
     me=$(msgraph_conf '.me // ""'); [ -n "$me" ] || me=$(jq -r '.name // "the user" | split(" ")[0]' "$people")
     who=$(msgraph_conf '.name // ""'); who=${who:+$who (\"$me\")}; who=${who:-$me}
@@ -309,18 +313,14 @@ P
       done
     done
   fi
-  while IFS= read -r item; do
-    v=$tri/$(jq -r .id <<<"$item")
-    if [ -s "$v" ]; then
-      jq -e .action "$v" >/dev/null || continue
-      # A question to the whole team that someone else has answered in the chat no longer needs you.
-      jq -e --slurpfile v "$v" '$v[0].to == "team" and .answered == true' <<<"$item" >/dev/null && continue
-      item=$(jq -c --slurpfile v "$v" '.line += " — \($v[0].why)" | .why = $v[0].why | .triageTicket = $v[0].ticket' <<<"$item")
-    else   # not judged (the call failed): rule C falls back to keys and replies to you, mail to a person's
-      jq -e '(.rule == "C" or .rule == "M") and (.fallback | not)' <<<"$item" >/dev/null && continue
-    fi
-    echo "$item"
-  done < "$T/sidecar" > "$T/kept"
+  find "$tri" -type f -size +0 -exec jq -c '{(input_filename | split("/") | last): .}' {} + 2>/dev/null |
+    jq -s 'add // {}' > "$T/verdicts"
+  # A question to the whole team that someone else has answered in the chat no longer needs you. Not judged (the
+  # call failed): rule C falls back to keys and replies to you, mail to a person's.
+  jq -c --slurpfile V "$T/verdicts" '$V[0][.id] as $v
+    | if $v then select($v.action and ($v.to == "team" and .answered == true | not))
+        | .line += " — \($v.why)" | .why = $v.why | .triageTicket = $v.ticket
+      else select((.rule == "C" or .rule == "M") and (.fallback | not) | not) end' "$T/sidecar" > "$T/kept"
   jq -r .line "$T/kept"
   # The full message behind each line, for the coordinator to forward (msgraph.md).
   mv "$T/kept" "$D/notices.jsonl"
