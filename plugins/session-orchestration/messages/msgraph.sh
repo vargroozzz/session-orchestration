@@ -280,10 +280,13 @@ $me's open tickets:
 P
       grep -E "^$NOTICE_KEYRE " "$NOTICE_ROWS" 2>/dev/null | awk -F' [|] ' '{print substr($1, 1, 24) "- " $NF}'
     } > "$T/phead"
-    # Up to 8 messages per call, the calls in parallel: Haiku takes ~70s for 35 at once.
+    # Up to 8 messages per call, 3 calls at a time (all at once slowed each past the limit): Haiku takes ~70s for 35
+    # at once. A chunk not started within the 40s waits for the next sweep, unsent; verdicts in are kept either way.
     split -l 8 "$T/judge" "$T/chunk."
-    local pids="" c
-    for c in "$T"/chunk.*; do
+    local pids="" c p n end=$((SECONDS + 40))
+    for c in "$T"/chunk.??; do
+      while n=0; for p in $pids; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; [ "$n" -ge 3 ] && [ "$SECONDS" -lt "$end" ]; do sleep 1; done
+      [ "$SECONDS" -lt "$end" ] || break
       { cat "$T/phead"
         jq -rs 'to_entries[] | "\n## Message \(.key + 1), in \(.value.chat), \(.value.time)\((.value.before // []) | if length > 0 then "\nBefore it:\n" + (map("  " + .) | join("\n")) else "" end)\nThe message: \(.value.from): \(.value.text)"' "$c"
       } > "$c.prompt"
@@ -291,11 +294,11 @@ P
       ( cd "$T" && exec claude -p --model haiku --tools "" --setting-sources "" --strict-mcp-config --disable-slash-commands \
           --no-session-persistence < "$c.prompt" > "$c.out" 2>/dev/null ) & pids="$pids $!"
     done
-    end=$((SECONDS + 40))   # kill -0 with several pids fails once any is gone: ask for each
+    # kill -0 with several pids fails once any is gone: ask for each
     while [ "$SECONDS" -lt "$end" ] && for c in $pids; do kill -0 "$c" 2>/dev/null && break; false; done; do sleep 1; done
     kill $pids 2>/dev/null; wait $pids 2>/dev/null
     for c in "$T"/chunk.??; do
-      grep -v '^```' "$c.out" | jq -c '.[] | select((.n | type) == "number" and (.action | type) == "boolean")
+      grep -v '^```' "$c.out" 2>/dev/null | jq -c '.[] | select((.n | type) == "number" and (.action | type) == "boolean")
         | .why = ((.why // "") | tostring | gsub("\\s+"; " ") | .[0:120])' 2>/dev/null |
       while IFS= read -r v; do
         item=$(sed -n "$(jq .n <<<"$v")p" "$c"); [ -n "$item" ] || continue
