@@ -796,7 +796,7 @@ fi
 
 # --handover ID [--] 'WHAT NEXT': a task session too big to resume (--send-when-idle's exit 4) hands its task to a
 # fresh one. ID's task key is the one its own first prompt or `Session task:` markers name (exactly one; a reviewer
-# has none), its state is in the replies folder (the project CLAUDE.md's "Replies folder … `PATH`") as KEY.md.
+# has none; a task with no key at all uses its session name as KEY when NAME.md is there), its state is in the replies folder (the project CLAUDE.md's "Replies folder … `PATH`") as KEY.md.
 # Refused while it is mid-turn or waits on a prompt (a stop would drop that turn), with no KEY.md, or when it is
 # superseded already (a retry would start a second successor). Then: stopped (checked), and `claude --bg -n NAME`
 # in the project root, same account (plus --permission-mode default where that account defaults to plan), with a
@@ -826,13 +826,17 @@ if [ -n "$HANDOVER" ]; then
   read_row id name st pre started cwd kind status pid
   f=$(transcript_of "$id"); [ -n "$f" ] || { echo "no transcript for \"$name\" (${id:0:8}): not handed over"; exit 2; }
   first=$(first_prompt "$f")
+  rdir=$(sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1); rdir=${rdir%/}
+  [ -n "$rdir" ] || { echo "$ROOT/CLAUDE.md names no replies folder: nothing to hand over from"; exit 2; }
+  case $rdir in /*) rd=$rdir ;; *) rd=$ROOT/$rdir ;; esac
   if c=$(chunk_of "$first"); then
     key=${c% *}; n=${c#* }
   else
     n=; marks=$(marks_of "$first" "$f")
     ! grep -qE ' review([.,;:!)]|$)' <<<"$marks" || { echo "\"$name\" (${id:0:8}) is a review session: not handed over"; exit 2; }
     keys=$( { first_key "$first"; grep -oE "$KEYRE" <<<"$marks"; } | sort -u)
-    [ -n "$keys" ] || { echo "\"$name\" (${id:0:8}) names no task key (first prompt or Session task: marker): not handed over"; exit 2; }
+    [ -n "$keys" ] || [ ! -f "$rd/$name.md" ] || case $name in */*|.*|*' '*) ;; *) keys=$name ;; esac   # keyless task: its NAME.md
+    [ -n "$keys" ] || { echo "\"$name\" (${id:0:8}) names no task key (first prompt or Session task: marker) and $rdir has no $name.md: not handed over"; exit 2; }
     [ "$(grep -c . <<<"$keys")" = 1 ] || { echo "\"$name\" (${id:0:8}) names several task keys ($(paste -sd' ' - <<<"$keys")): hand over by hand"; exit 2; }
     key=$keys
   fi
@@ -845,9 +849,6 @@ if [ -n "$HANDOVER" ]; then
     [ "$status" = waiting ] && { echo "\"$name\" is waiting on a prompt: not handed over; answer it first ($pre attach ${id:0:8})"; exit 3; }
     [ "$kind" = background ] || { echo "\"$name\" is interactive: close it in its terminal, then hand over"; exit 3; }
   fi
-  rdir=$(sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1); rdir=${rdir%/}
-  [ -n "$rdir" ] || { echo "$ROOT/CLAUDE.md names no replies folder: nothing to hand over from"; exit 2; }
-  case $rdir in /*) rd=$rdir ;; *) rd=$ROOT/$rdir ;; esac
   [ -n "$n" ] || [ -f "$rd/$key.md" ] || { echo "no $rdir/$key.md: ask \"$name\" for a status report first, or write one"; exit 2; }
   if [ -n "$n" ]; then
     b=$rd/$key-build.md own="\`## c$n: handoff ${id:0:8}\`"
@@ -871,7 +872,7 @@ if [ -n "$HANDOVER" ]; then
   if [ -n "$pid" ]; then stop_session "$pre" "$id" || { echo "couldn't stop \"$name\" (${id:0:8}): nothing started"; exit 1; }; fi
   base=$name; [[ $name =~ ^(.+)-prev-[0-9]+$ ]] && base=${BASH_REMATCH[1]}   # renamed already by its own handoff
   case $(tr '[:lower:]' '[:upper:]' <<<"$base") in
-    "$key"|"$key"[!0-9]*) new=$base ;;
+    "$(tr '[:lower:]' '[:upper:]' <<<"$key")"|"$key"[!0-9]*) new=$base ;;
     *) slug=$(tr '[:upper:]' '[:lower:]' <<<"$base" | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-40 | sed -E 's/-+$//'); new=$key${slug:+-$slug} ;;
   esac
   [ -z "$n" ] || new=$key-c$n

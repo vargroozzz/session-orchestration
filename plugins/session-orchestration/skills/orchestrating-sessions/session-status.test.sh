@@ -412,6 +412,16 @@ out=$(run --handover "$hid" 'Do X.') && rc=0 || rc=$?
 [ "$rc" = 2 ] && grep -q 'superseded by aaaaaaaa already' <<<"$out" && ! calls | grep -q 'stop\|--bg' || { echo "handover retry not refused: $out"; exit 1; }
 echo '{"type":"assistant","input":{"command":"session-status ABC-40"}}' >> "$proj/$nid.jsonl"
 run | grep -q '· superseded by aaaaaaaa' || { echo "successor running a status command lost the superseded mark"; run; exit 1; }
+# A task with no key: refused without replies/NAME.md, else NAME stands for the key and the successor keeps the name.
+qid=77777777-2222-3333-4444-555555555555
+echo '{"type":"user","message":{"content":"Tidy the plugin docs"}}' > "$proj/$qid.jsonl"
+setacct cfg "$(sess "$qid" "plugin-docs" idle 1)"; calls >/dev/null
+out=$(run --handover "$qid" 'Do X.') && rc=0 || rc=$?
+[ "$rc" = 2 ] && grep -q 'names no task key .* replies has no plugin-docs.md' <<<"$out" || { echo "keyless handover not refused: $out"; exit 1; }
+echo report > "$root/replies/plugin-docs.md"
+out=$(run --handover "$qid" 'Do X.') && rc=0 || rc=$?
+[ "$rc" = 0 ] && calls | grep -q -- '--bg -n plugin-docs Work on plugin-docs: continue from replies/plugin-docs.md. Do X.' ||
+  { echo "keyless handover failed: $out"; calls; exit 1; }
 # The old session ran a status command itself (a worker checking its PR): its key still comes from its first
 # prompt. A name starting with the key in another case is kept; an account defaulting to plan gets
 # --permission-mode default.
