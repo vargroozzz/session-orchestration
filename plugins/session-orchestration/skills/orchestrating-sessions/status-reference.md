@@ -151,7 +151,7 @@ called with the cwd at the root:
 
 | Call | Prints |
 |------|--------|
-| `tasks [ARG…]` | `KEY<TAB>STATUS<TAB>TITLE<TAB>EXTRA` per task, in display order. EXTRA (PRs, conflicts, hints) is printed as is before the worktree column, so it ends with its own separator (`\| `). The pane reads the words in the table below from it. On failure: exit non-zero, message on stdout (none: `adapter tasks failed (exit N)` and the last stderr line). Exit 2 with nothing on stderr means not answered (a syntax error exits 2 too, but says so on stderr): rows come from session names and worktree branches, as with no adapter, so an adapter answering only `pending`, `urls` or `key-pattern` needs no `tasks`. After such a sweep, the keys sessions and worktrees point at are asked about: those `done` reports go to Leftovers, the rest are looked up with `tasks KEY…`, whose rows on exit 0 replace the bare ones. A `fix: LABEL → COMMAND` line, on success or failure, is printed after the rows and becomes a pane action (Project actions) |
+| `tasks [ARG…]` | `KEY<TAB>STATUS<TAB>TITLE<TAB>EXTRA` per task, in display order. EXTRA (PRs, conflicts, hints) is printed as is before the worktree column, so it ends with its own separator (`\| `). The pane reads the words in the table below from it. On failure: exit non-zero, message on stdout; the board prints without tracker columns under `adapter tasks failed (exit N): MESSAGE` (none: the last stderr line), and `--changes` exits 1 with it instead. Exit 2 with nothing on stderr means not answered (a syntax error exits 2 too, but says so on stderr): rows come from session names and worktree branches, as with no adapter, so an adapter answering only `pending`, `urls` or `key-pattern` needs no `tasks`. After such a sweep, the keys sessions and worktrees point at are asked about: those `done` reports go to Leftovers, the rest are looked up with `tasks KEY…`, whose rows on exit 0 replace the bare ones. A `fix: LABEL → COMMAND` line, on success or failure, is printed after the rows and becomes a pane action (Project actions) |
 | `done KEY…` | `KEY[<TAB>LABEL]` for the finished ones; drives Leftovers and Resolved |
 | `key-pattern` | One ERE for a task key. Default `[A-Z][A-Z0-9]+-[0-9]+` |
 | `status-names` | Regex of the project's own status-command names (its wrapper), counted like `session-status` |
@@ -180,7 +180,7 @@ Words and phrases set off by spaces; anything else shows only in a task's detail
 | `CONFLICT` | Merge conflict | Needs action, **Resolve conflicts** |
 | `CI-FAILED` | The PR's latest build failed | Needs action, **Fix CI** |
 | `↩MM-DD NAME→STATUS` | The tracker sent the task back | Needs action (Ask the session why) |
-| `(PRs as of HH:MM)` | The PR words are from that time (a lookup failed) | Shown as stale |
+| `(PRs as of HH:MM)` | The PR words are from that time (a lookup failed) | Shown as stale; `--changes` ignores it appearing or clearing |
 
 The phrases `approved by NAME` and `changes requested by NAME` read without a legend and take any GitHub login
 (from the release after plain review words); `+NAME` and `!NAME` need a letter first, so `+1` is no reviewer.

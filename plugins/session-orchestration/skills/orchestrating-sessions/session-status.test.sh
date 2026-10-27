@@ -37,7 +37,7 @@ EOF2
 mkdir -p "$root/.claude"; cat > "$root/.claude/session-status-adapter" <<EOF
 #!/bin/sh
 case \$1 in
-  tasks) [ -f $tmp/fail ] && { echo boom; exit 1; }; printf 'ABC-12\t-\t\t\n'; [ ! -f $tmp/fix ] || echo 'fix: Sign in → gh auth login' ;;
+  tasks) [ -f $tmp/fail ] && { echo boom; exit 1; }; printf 'ABC-12\t-\t\t%s\n' "\$([ -f $tmp/stale ] && echo '(PRs as of 04:13) ')"; [ ! -f $tmp/fix ] || echo 'fix: Sign in → gh auth login' ;;
   notices) cat $tmp/notices; exit \$(cat $tmp/rc) ;;
   *) exit 2 ;;
 esac
@@ -85,8 +85,10 @@ printf '#!/bin/sh\ncase $1 in pending) echo "- carry ABC-12" ;; *) exit 2 ;; esa
   [ "$(run --pending)" = "- carry ABC-12" ] && [ "$(run some-arg)" = "Arguments other than task keys need an adapter that answers tasks ($root/.claude/session-status-adapter)" ] ||
   { echo "pending-only adapter failed: $(run)"; exit 1; }
 printf '#!/bin/sh\n[ "$1" = tasks ] && exit 3; exit 2\n' > "$root/.claude/session-status-adapter"
-out=$(run) && { echo "silent tasks failure exited 0"; exit 1; }
-[ "$out" = "adapter tasks failed (exit 3)" ] || { echo "silent tasks failure: $out"; exit 1; }
+out=$(run) && [ "$(head -1 <<<"$out")" = "adapter tasks failed (exit 3); the board below has no tracker columns" ] &&
+  grep -q '^ABC-12 ' <<<"$out" || { echo "silent tasks failure: $out"; exit 1; }
+out=$(SESSION_STATUS_STRICT=1 run) && { echo "strict silent tasks failure exited 0"; exit 1; }
+[ "$out" = "adapter tasks failed (exit 3)" ] || { echo "strict silent tasks failure: $out"; exit 1; }
 # Not answering the sweep (its fix line kept), the keys found are looked up and its row is used; a key `done`
 # reports isn't a row (Leftovers has it).
 cat > "$root/.claude/session-status-adapter" <<'EOF'
@@ -106,8 +108,9 @@ run | grep -q '^ABC-12 ' && { echo "a done key is still a row: $(run)"; exit 1; 
 rm "$root/.claude/merged"
 # Exit 2 that says why on stderr (a syntax error) is a failure, not "not answered"; a quiet exit 2 keeps its fix line.
 printf '#!/bin/sh\necho "oops: bad" >&2; exit 2\n' > "$root/.claude/session-status-adapter"
-out=$(run) && { echo "noisy exit 2 exited 0"; exit 1; }
+out=$(SESSION_STATUS_STRICT=1 run) && { echo "noisy exit 2 exited 0"; exit 1; }
 [ "$out" = "$(printf 'adapter tasks failed (exit 2)\n  oops: bad')" ] || { echo "noisy exit 2: $out"; exit 1; }
+out=$(run); [ "$(head -1 <<<"$out")" = "adapter tasks failed (exit 2): oops: bad; the board below has no tracker columns" ] || { echo "noisy exit 2 board: $out"; exit 1; }
 printf '#!/bin/sh\necho "fix: Sign in → gh auth login"; exit 2\n' > "$root/.claude/session-status-adapter"
 [ "$(run ABC-12 | tail -1)" = "fix: Sign in → gh auth login" ] || { echo "exit 2 fix line: $(run ABC-12)"; exit 1; }
 mv "$tmp/adapter.keep" "$root/.claude/session-status-adapter"
@@ -149,7 +152,13 @@ rm "$root/wt/dirty3"
 cp "$tmp/.cache/session-status/"*.last "$tmp/before"; touch "$tmp/fail"
 out=$(run --changes) && { echo "failure not reported"; exit 1; }
 [ "$out" = boom ] && cmp -s "$tmp/before" "$tmp/.cache/session-status/"*.last || { echo "failure branch failed"; exit 1; }
+# The plain board still shows, under a one-line warning, and exits 0.
+out=$(run) && [ "$(head -1 <<<"$out")" = "adapter tasks failed (exit 1): boom; the board below has no tracker columns" ] &&
+  grep -q '^ABC-12 .*sess:"fix it"' <<<"$out" || { echo "failed adapter hid the board: $out"; exit 1; }
 rm "$tmp/fail"
+# A stale-PR marker appearing or clearing alone doesn't wake --changes.
+run --changes >/dev/null; touch "$tmp/stale"; [ "$(run --changes)" = "no changes" ] && rm "$tmp/stale" &&
+  [ "$(run --changes)" = "no changes" ] || { echo "stale marker woke --changes"; exit 1; }
 # A working <-> idle flip doesn't wake: working -> blocked (its turn is over) and back.
 echo working > "$tmp/state"; run --changes >/dev/null; echo blocked > "$tmp/state"
 [ "$(run --changes)" = "no changes" ] && echo working > "$tmp/state" && [ "$(run --changes)" = "no changes" ] || { echo "idle flip woke --changes"; exit 1; }

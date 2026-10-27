@@ -7,8 +7,9 @@
 # once trusted: lib.sh adapter_path) answers (one call per run, cwd = project root):
 #   tasks [ARG…]   KEY<TAB>STATUS<TAB>TITLE<TAB>EXTRA per task, in display order. EXTRA is printed verbatim
 #                  between STATUS and the worktree column (end it with its own separator, e.g. "| ").
-#                  On failure: exit non-zero with the message on stdout; it is printed as is (none: `adapter tasks
-#                  failed (exit N)` and stderr's last line). Exit 2 with nothing on stderr = not answered: the
+#                  On failure: exit non-zero with the message on stdout; the board prints without tracker columns
+#                  under `adapter tasks failed (exit N): MESSAGE` (none: stderr's last line); --changes exits 1 with
+#                  the message instead. Exit 2 with nothing on stderr = not answered: the
 #                  no-adapter rows below (an adapter with only `pending`, `urls` or `key-pattern` needs no `tasks`).
 #                  After a sweep exits 2, the pointed-at keys that `done` doesn't report are looked up
 #                  (`tasks KEY…`); its rows replace the bare ones, and the finished keys go to Leftovers.
@@ -378,7 +379,8 @@ if [ "${1:-}" = --watch ]; then
 fi
 
 # --changes: print only lines that differ from the previous --changes run (for --watch). Idle/busy and
-# "closed Nh" ages are stripped first, since they change on every run, and so is a `(maybe …)` guess (not an
+# "closed Nh" ages are stripped first, since they change on every run, and so are a `(PRs as of HH:MM)` marker (the
+# adapter adds and drops it as lookups fail and recover) and a `(maybe …)` guess (not an
 # owner). One state file per arg list.
 # ponytail: a manual --changes run with the watcher's args consumes the change the watcher would report.
 if [ "${1:-}" = --changes ]; then
@@ -390,7 +392,7 @@ if [ "${1:-}" = --changes ]; then
   # Resolved needs nothing, so its section isn't compared (kept aside in $last.resolved): an item moving there
   # from Leftovers wakes no one, nor does it going away.
   : > "$last.resolved"
-  new=$(SESSION_STATUS_NO_FEEDBACK=1 "$SELF" "$@" | sed -E '/^  \* /!s/" (idle|busy)/"/; /^  \* /!s/ closed [0-9]+h/ closed/; /^  \* /!s/ \(maybe [0-9a-f]+: [0-9]+ mentions\)//' |
+  new=$(SESSION_STATUS_NO_FEEDBACK=1 SESSION_STATUS_STRICT=1 "$SELF" "$@" | sed -E '/^  \* /!s/ \(PRs as of [0-9]{1,2}:[0-9]{2}\)//; /^  \* /!s/" (idle|busy)/"/; /^  \* /!s/ closed [0-9]+h/ closed/; /^  \* /!s/ \(maybe [0-9a-f]+: [0-9]+ mentions\)//' |
     awk -v r="$RESOLVED:" -v out="$last.resolved" '/^fix:/ {next} $0 == "Other sessions:" || $0 == "Stale prompts:" {drop = 1; next} drop && /^  / {next} {drop = 0} $0 == r {skip = 1; next} skip && /^  / {print > out; next} {skip = 0; print}') ||
     { echo "$new"; exit 1; }
   if [ -f "$last" ]; then
@@ -482,9 +484,14 @@ else
     # Exit 2 with a quiet stderr = not answered: the no-adapter rows. Bash's own exit 2 (a syntax error) says why.
     if [ $rc = 0 ]; then TASKS=1; cat "$TMP/tasks.err" >&2
     elif [ $rc != 2 ] || [ -s "$TMP/tasks.err" ]; then
-      if [ -n "$tasks" ]; then echo "$tasks"
-      else echo "adapter tasks failed (exit $rc)"; tail -1 "$TMP/tasks.err" | sed 's/^/  /'; fi
-      exit 1
+      why=$(grep -v '^fix:' <<<"$tasks" | grep .) || why=$(tail -1 "$TMP/tasks.err")   # a fix: line still prints last
+      # --changes fails instead (SESSION_STATUS_STRICT): a board without tracker columns would read as every row changed.
+      if [ -n "${SESSION_STATUS_STRICT:-}" ]; then
+        if [ -n "$tasks" ]; then echo "$tasks"; else echo "adapter tasks failed (exit $rc)"; [ -z "$why" ] || echo "  $why"; fi
+        exit 1
+      fi
+      # The board still shows, without tracker columns, under a one-line warning.
+      echo "adapter tasks failed (exit $rc)${why:+: $(head -1 <<<"$why")}; the board below has no tracker columns"
     fi
   fi
   [ -n "$TASKS" ] || [ $# = 0 ] || [ -n "$BY_KEY" ] ||
