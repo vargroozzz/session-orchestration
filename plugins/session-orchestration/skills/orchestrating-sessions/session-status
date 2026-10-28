@@ -437,8 +437,14 @@ PENDING=$(config pending.file 2>/dev/null)
 [ "${1:-}" = --urls ] && { adapter urls 2>/dev/null; exit; }
 [ "${1:-}" = --agents ] && { cat ~/.cache/session-status/"$ENC".agents 2>/dev/null; exit; }
 [ "${1:-}" = --messages-file ] && { echo ~/.cache/session-status/"$ENC".messages/notices.jsonl; exit; }
-# killtree PID: PID and everything below it (a notices source's CLI or triage two levels down), leaves first.
-killtree() { local c; for c in $(pgrep -P "$1"); do killtree "$c"; done; kill "$1" 2>/dev/null; }
+# killtree PID: PID and everything below it (a notices source's CLI or triage two levels down), leaves first. One ps
+# snapshot and no bash subshell: once a reader closed stdout (`| head`), bash 3.2's $(…) hands back the unsent output,
+# which a $(pgrep -P) recursion took for pids, forever.
+killtree() {
+  ps -A -o pid= -o ppid= | awk -v r="$1" '{ c[$2] = c[$2] " " $1 } END { q[n = 1] = r
+    for (i = 1; i <= n; i++) { k = split(c[q[i]], x, " "); for (j = 1; j <= k; j++) q[++n] = x[j] }
+    for (i = n; i >= 1; i--) print q[i] }' | xargs kill 2>/dev/null
+}
 TMP=$(mktemp -d); NPID=; trap '[ -z "$NPID" ] || killtree "$NPID"; rm -rf "$TMP"' EXIT
 
 KEYRE=$(key_re "$ADAPTER")

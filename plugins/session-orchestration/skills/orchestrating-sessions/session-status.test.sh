@@ -48,6 +48,18 @@ run --changes >/dev/null; echo "DM from Ann: hi" > "$tmp/notices"
   echo "no login" > "$tmp/notices" && echo 1 > "$tmp/rc" && [ "$(run --changes)" = "now:   * (failed) no login" ] && [ "$(run | grep -c 'Ann: hi')" = 1 ] &&
   : > "$tmp/notices" && echo 0 > "$tmp/rc" && [ "$(run --changes)" = "no changes" ] &&
   echo junk > "$tmp/notices" && echo 2 > "$tmp/rc" && [ "$(run | grep -c Notices)" = 0 ] || { echo "notices failed"; exit 1; }
+# A reader that stops early (`| head -1`) ends the run: the EXIT trap's killtree (a notices source ran) once read the
+# unsent output as child pids and recursed for days. Only bash 3.2 (macOS's /bin/bash) shows it, so the run uses
+# /bin/bash; the alarm (142) turns the hang into a failure. Then killtree still kills a live tree, leaves first.
+rc=0; (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin:$PATH \
+  perl -e 'alarm 20; exec @ARGV' /bin/bash "$here/session-status") 2>/dev/null | head -1 >/dev/null || rc=${PIPESTATUS[0]}
+[ "$rc" != 142 ] || { echo "a closed reader hangs the exit"; exit 1; }
+eval "$(sed -n '/^killtree() {/,/^}/p' "$here/session-status")"
+bash -c 'sleep 300 & bash -c "sleep 300 & wait" & wait' & tree=$!
+python3 -I -c 'import time; time.sleep(0.5)'; below=$(pgrep -P "$tree" | xargs -n1 pgrep -P || true)   # the inner bash's sleep
+killtree "$tree"; wait "$tree" 2>/dev/null || true
+[ -n "$below" ] && ! kill -0 "$tree" 2>/dev/null && ! ps -p "$(echo $below | tr ' ' ,)" >/dev/null ||
+  { echo "killtree left part of a live tree"; exit 1; }
 # The plugin-feedback footer: on a coordinator's board once a day, never a worker's, the --changes child's or the pane's.
 mkdir -p "$tmp/state/session-orchestration/feedback/bugfixes"
 printf '# t\n- seen: 2026-01-01\n- status: open\n' > "$tmp/state/session-orchestration/feedback/bugfixes/t.md"
