@@ -389,16 +389,16 @@ def lex(s, q=""):
 
 
 def only_cat(u):
-    """Every command in lexed text U is cat, with no VAR=x before it (the hook's safe(U, 1))."""
+    """Every command in lexed text U is cat, and nothing sets a variable (the hook's safe(U, 1))."""
     for seg in re.split(r"[;|&()`\n]|\$\(", u):
-        t, v = "", False
+        t = ""
         for x in seg.split():
             if x in PRE:
                 continue
             if re.match(r"[A-Za-z_]\w*=", x):
-                v = True; continue
+                return False
             t = x; break
-        if t and (v or t != "cat"):
+        if t and t != "cat":
             return False
     return True
 

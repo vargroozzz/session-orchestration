@@ -19,8 +19,10 @@
 # gh counts as a call where a command starts; its words must be plain (no variable, $(…), alias or xargs), or it is
 # denied (asked, when attended). A post or merge it can't find as a call (inside bash -c, a heredoc a shell reads) is
 # denied too: post from a file. A command that only mentions one (a grep pattern, a commit message, a prompt, a
-# heredoc written to a file) passes when every command in it is on an allowlist of ones that never run their text
+# heredoc cat writes to a file) passes when every command in it is on an allowlist of ones that never run their text
 # (SAFE); read-only calls (gh pr view, gh api GET, an inline graphql query) pass too.
+# ponytail: a text check, not a sandbox: a file one call writes (a script, a git hook) can run its text in a later
+# call this hook never links to it. Gate at execution (a wrapper for gh and the CLIs on PATH) if that matters.
 # ponytail: gh subcommands outside pr/issue/api (release, repo, workflow) aren't gated; add them when a project
 # reserves them. A name split by quotes (g''h) isn't seen.
 # TODO: GitLab. glab mr merge|note|approve and glab issue note pass ungated; gate them like gh (glab has no body-file
@@ -47,11 +49,12 @@ cmd=$(jq -r '.tool_input.command // ""' <<<"$input") || exit 1
 cwd=$(jq -r '.cwd // ""' <<<"$input") tp=$(jq -r '.transcript_path // ""' <<<"$input") || exit 1
 # Text given to a command is text, not calls, only when every command in sight is one that never runs what it's
 # given and the call writes no file (no > but to /dev/null or &N; a file written could be run by what comes next:
-# a git hook, a config) and sets no variable for a command (GIT_EDITOR=bash git commit). An allowlist, so anything
-# else (a shell, awk, a variable, a path or `.` as the command, read, set, sudo) fails closed. git counts only as
-# git [-C DIR] [--no-pager] add|commit|status|log|diff|show|push|branch|fetch (-c, aliases and other subcommands can
-# run text); npx only for the three CLIs; rg and sort not with --pre or --comp(ress-program). Shared by both passes.
-SAFE=' cat echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false sort uniq cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli '
+# a git hook, a config) and sets no variable (GIT_EDITOR=bash git commit, X=bash; …, printf -v). An allowlist, so
+# anything else (a shell, awk, a variable, a path or `.` as the command, read, set, sudo, sort, uniq, tee) fails
+# closed. git counts only as git [-C DIR] [--no-pager] add|commit|status|log|diff|show|branch|push|fetch, not with
+# --output, and push/fetch not with --r…, --e…, --u… (-c, aliases, other subcommands can run text); npx only for the
+# three CLIs (any npm scope); rg not with --pre; no option word with an escape in it. Shared by both passes.
+SAFE=' cat echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli '
 # lex(S): S with quoting resolved: quote marks dropped, and each separator, < and ( inside quotes made `_`, so what
 # is left splits into commands as the shell would (unclosed quote: the rest counts as quoted). A # at a word start
 # becomes its own command `#`, which safe() refuses: where a comment starts (x\ #y, ${x/ #/}) is the shell's call,
@@ -68,20 +71,25 @@ function lex(s,   o, c, j, n, iq) { o = ""; iq = ""; n = length(s)
     if (iq == "\"" && (c == "`" || c == "$" && substr(s, j + 1, 1) == "(")) { o = o c; continue }
     o = o (c ~ /[;|&()<>`$\n]/ ? "_" : c) }
   LQ = iq; return o }
-function safe(u, cat,   n, seg, x, m, w, y, t, v) {
-  if (!cat) { v = u; gsub(/[0-9]*>>?[ \t]*(&[0-9-]+|\/dev\/null)/, "", v); if (v ~ />/) return 0 }
+function safe(u, cat,   n, seg, x, m, w, y, t) {
+  # a space before each separator, so a redirect target is a whole word: >&2hook writes the file 2hook
+  if (!cat) { gsub(/[;|&)]/, " &", u); gsub(/&?[0-9]*>>?[ \t]*(&[0-9]+|&-|\/dev\/null)([ \t]|$)/, " ", u); if (u ~ />/) return 0 }
   n = split(u, seg, /[;|&()`\n]|\$\(/)
-  for (x = 1; x <= n; x++) { m = split(seg[x], w, /[ \t]+/); t = ""; v = 0
+  for (x = 1; x <= n; x++) { m = split(seg[x], w, /[ \t]+/); t = ""
+    # an escape in an option (--outpu\t, --pr\e) hides it from the checks below
+    if (seg[x] ~ /(^|[ \t])-[^ \t]*_/) return 0
     for (y = 1; y <= m; y++) { if (w[y] == "" || index(PRE, " " w[y] " ")) continue
-      if (w[y] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { v = 1; continue }
+      if (w[y] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return 0
       t = w[y]; break }
     if (t == "") continue
-    if (v || cat && t != "cat") return 0
+    if (cat && t != "cat") return 0
     if (t == "npx") { for (y++; w[y] == "-y" || w[y] == "--yes"; y++); t = w[y]; sub(/@[^@\/]*$/, "", t); sub(/^@[^\/]*\//, "", t)
       if (t !~ /^(bitbucketdc|forgejo|jiradc)-cli$/) return 0 }
-    if ((t == "rg" || t == "sort") && seg[x] ~ /--(pre|comp)/) return 0
+    if (t == "rg" && seg[x] ~ /--pre/ || t == "printf" && seg[x] ~ /(^|[ \t])-v/) return 0
     if (t == "git") { for (y++; w[y] == "-C" || w[y] == "--no-pager"; y += w[y] == "-C" ? 2 : 1);
-      if (!index(" add commit status log diff show push branch fetch ", " " w[y] " ")) return 0 }
+      if (!index(" add commit status log diff show branch push fetch ", " " w[y] " ") || seg[x] ~ /--output/) return 0
+      # git takes any unique prefix: --rec(eive-pack), --exe(c), --upl(oad-pack) run a command
+      if ((w[y] == "push" || w[y] == "fetch") && seg[x] ~ /(^|[ \t])--[reu]/) return 0 }
     if (!index(SAFE, " " t " ")) return 0 }
   return 1 }'
 awkv=(-v "SAFE=$SAFE" -v "PRE= env command time nohup rtk proxy then do else ! { } if elif while until done fi esac " -v "Q='")
@@ -113,7 +121,7 @@ ghops='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-][^|;&]*[[:space:]]|[[:space:]]+)((pr
 ghind='(=["'"'"']?|\$\(|`)[[:space:]]*((which|command[[:space:]]+-v|type[[:space:]]+-p)[[:space:]]+)?([^[:space:]]*/)?gh([^A-Za-z0-9_.-]|$)'
 # One line: continuations joined, other newlines made command separators.
 # (awk, not ${cmd//"$nl"/ ; }: bash 3.2's replace-all is quadratic, minutes on a 50 KB heredoc.)
-cmd=$(printf '%s\n' "$cmd" | awk 'NR > 1 { printf "%s", (c ? " " : " ; ") } { c = sub(/\\$/, ""); printf "%s", $0 }')
+cmd=$(printf '%s\n' "$cmd" | awk 'NR > 1 { printf "%s", (c ? " " : " ; ") } { c = sub(/\\$/, ""); printf "%s", $0 }') || exit 1
 # What the CLI mentions are counted in: the command without its quoted runs of words (a grep pattern, a commit
 # message, a prompt), which are arguments, not calls. A quoted single word stays (gh "pr" merge), and so do a value
 # (X='npx cli', run as $X later) and a "…" holding $( or `, which the shell runs. Unless every command is safe(),
