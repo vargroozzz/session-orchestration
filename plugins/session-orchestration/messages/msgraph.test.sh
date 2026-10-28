@@ -75,6 +75,8 @@ grep -q '"line":"teams ?   Team · Tim: deploy done' "$tmp/cache/dropped.jsonl" 
 [ "$(cd "$tmp/proj" && set -u && HOME=$tmp PATH=$tmp/bin:$PATH NOTICE_DIR=$tmp/cache NOTICE_KEYRE='(PROJ-[0-9]+)' NOTICE_ROWS=$tmp/rows NOTICE_MINE=$tmp/mine &&
   job() { messages_notices >/dev/null; } && job && echo returned)" = returned ] || { echo "the RETURN trap fired in the caller"; exit 1; }
 # Again: the verdicts and the PR's keys come from the cache, no triage call.
+# A half-written verdict file beside them is skipped, not the ones read after it.
+printf %s '{"action":tr' > "$tmp/cache/triage/0-half"
 [ "$(run)" = "$want" ] && [ "$(grep -c . "$F/calls")" = 1 ] || { echo "second run differs or called the triage"; exit 1; }
 # A failed Graph call: exit 1 and one reason line.
 rm "$tmp/cache/people.json"; printf '#!/bin/sh\necho %s >&2; exit 1\n' "'{\"error\":{\"type\":\"auth_error\"}}'" > "$tmp/bin/graph"

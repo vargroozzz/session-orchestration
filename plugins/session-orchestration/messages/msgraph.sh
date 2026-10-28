@@ -249,9 +249,12 @@ JQ
   # the lines as they are (fail open) and they're judged again next run.
   local tri=$D/triage v end me who
   mkdir -p "$tri"; find "$tri" -type f -mtime +7 -delete 2>/dev/null
-  # The verdicts in, by id: one jq for all of them, not a fork per item.
-  find "$tri" -type f -size +0 -exec jq -c '{(input_filename | split("/") | last): .}' {} + 2>/dev/null |
-    jq -s 'add // {}' > "$T/verdicts"
+  # The verdicts in, by id, into $T/verdicts: one awk and one jq for all of them, not a fork per item. A file per
+  # line, read on its own (awk, not one jq stream), so a bad or half-written one is skipped, not the rest with it.
+  verdicts() { find "$tri" -type f -size +0 -exec awk '{ n = FILENAME; sub(/.*\//, "", n); print n "\t" $0 }' {} + |
+    jq -Rn '[inputs | index("\t") as $i | (try (.[$i + 1:] | fromjson) catch null) as $v
+      | select($v | type == "object") | {(.[:$i]): $v}] | add // {}' > "$T/verdicts"; }
+  verdicts
   jq -c --slurpfile V "$T/verdicts" 'select((.rule == "A" or .rule == "C" or .rule == "M") and ($V[0][.id] | not))' \
     "$T/sidecar" > "$T/judge"
   if [ -s "$T/judge" ]; then
@@ -285,12 +288,13 @@ P
       grep -E "^$NOTICE_KEYRE " "$NOTICE_ROWS" 2>/dev/null | awk -F' [|] ' '{print substr($1, 1, 24) "- " $NF}'
     } > "$T/phead"
     # Up to 8 messages per call, 3 calls at a time (all at once slowed each past the limit): Haiku takes ~70s for 35
-    # at once. A chunk not started within the 40s waits for the next sweep, unsent; verdicts in are kept either way.
+    # at once. A chunk not started while 25s of the 40s are left (one call's usual time) waits for the next sweep,
+    # unsent; verdicts in are kept either way.
     split -l 8 "$T/judge" "$T/chunk."
-    local pids="" c p n end=$((SECONDS + 40))
+    local pids="" c p n id end=$((SECONDS + 40))
     for c in "$T"/chunk.??; do
-      while n=0; for p in $pids; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; [ "$n" -ge 3 ] && [ "$SECONDS" -lt "$end" ]; do sleep 1; done
-      [ "$SECONDS" -lt "$end" ] || break
+      while n=0; for p in $pids; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; [ "$n" -ge 3 ] && [ "$SECONDS" -lt $((end - 25)) ]; do sleep 1; done
+      [ "$SECONDS" -lt $((end - 25)) ] || break
       { cat "$T/phead"
         jq -rs 'to_entries[] | "\n## Message \(.key + 1), in \(.value.chat), \(.value.time)\((.value.before // []) | if length > 0 then "\nBefore it:\n" + (map("  " + .) | join("\n")) else "" end)\nThe message: \(.value.from): \(.value.text)"' "$c"
       } > "$c.prompt"
@@ -306,15 +310,15 @@ P
         | .why = ((.why // "") | tostring | gsub("\\s+"; " ") | .[0:120])' 2>/dev/null |
       while IFS= read -r v; do
         item=$(sed -n "$(jq .n <<<"$v")p" "$c"); [ -n "$item" ] || continue
-        jq -c '{action, to, ticket, why}' <<<"$v" > "$tri/$(jq -r .id <<<"$item")"
+        id=$(jq -r .id <<<"$item")   # written whole (mv): another sweep may be reading
+        jq -c '{action, to, ticket, why}' <<<"$v" > "$T/v.tmp" && mv "$T/v.tmp" "$tri/$id"
         # ponytail: grows forever; trim it if it ever gets big
         jq -e .action <<<"$v" >/dev/null ||
           jq -c --argjson v "$v" '{time, chat, from, text, line, why: $v.why}' <<<"$item" >> "$D/dropped.jsonl"
       done
     done
   fi
-  find "$tri" -type f -size +0 -exec jq -c '{(input_filename | split("/") | last): .}' {} + 2>/dev/null |
-    jq -s 'add // {}' > "$T/verdicts"
+  verdicts
   # A question to the whole team that someone else has answered in the chat no longer needs you. Not judged (the
   # call failed): rule C falls back to keys and replies to you, mail to a person's.
   jq -c --slurpfile V "$T/verdicts" '$V[0][.id] as $v

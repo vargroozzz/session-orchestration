@@ -19,7 +19,8 @@
 # gh counts as a call where a command starts; its words must be plain (no variable, $(…), alias or xargs), or it is
 # denied (asked, when attended). A post or merge it can't find as a call (inside bash -c, a heredoc a shell reads) is
 # denied too: post from a file. A command that only mentions one (a grep pattern, a commit message, a prompt, a
-# heredoc written to a file) passes; read-only calls (gh pr view, gh api GET, a graphql query) pass too.
+# heredoc written to a file) passes when every command in it is on an allowlist of ones that never run their text
+# (SAFE); read-only calls (gh pr view, gh api GET, an inline graphql query) pass too.
 # ponytail: gh subcommands outside pr/issue/api (release, repo, workflow) aren't gated; add them when a project
 # reserves them. A name split by quotes (g''h) isn't seen.
 # TODO: GitLab. glab mr merge|note|approve and glab issue note pass ungated; gate them like gh (glab has no body-file
@@ -44,16 +45,44 @@ ask_for() {
 
 cmd=$(jq -r '.tool_input.command // ""' <<<"$input") || exit 1
 cwd=$(jq -r '.cwd // ""' <<<"$input") tp=$(jq -r '.transcript_path // ""' <<<"$input") || exit 1
-# A shell or interpreter that runs text it is given: a quoted string or heredoc body next to one may be a call.
-runner='(^|[^A-Za-z0-9_.-])(bash|sh|zsh|dash|ksh|fish|eval|source|alias|trap|ssh|su|xargs|parallel|watch|script|tmux|screen|expect|osascript|node|perl|ruby|python[0-9.]*)([^A-Za-z0-9_.-]|$)|-exec|env[[:space:]]+-S'
-# A heredoc body that its line only writes (cat > f <<EOF) is text, not commands: dropped. A line naming a runner
-# (bash <<EOF, cat <<EOF | sh) keeps it.
-# ponytail: the runner must sit on the heredoc's own line; one a line later (cat <<EOF \ | bash) isn't seen.
-cmd=$(printf '%s\n' "$cmd" | awk -v run="$runner" '
-  skip { t = $0; if (dash) sub(/^\t+/, "", t); if (t == term) skip = 0; next }
-  { print }
-  match($0, /(^|[^<])<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/) && $0 !~ run {
-    h = substr($0, RSTART, RLENGTH); sub(/^[^<]*<</, "", h); dash = h ~ /^-/; gsub(/[- \t"\047]/, "", h); term = h; skip = 1 }')
+# Text given to a command is text, not calls, only when every command in sight is one that never runs what it's
+# given: an allowlist, so anything else (a shell, awk, a variable or `.` as the command, read, set, sudo) fails
+# closed. git counts unless it sets config (-c can define a shell alias). Shared by both passes below.
+SAFE=' cat tee echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false sort uniq cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli '
+# lex(S): S with quoting resolved: quote marks dropped, and each separator, < and ( inside quotes made `_`, so what
+# is left splits into commands as the shell would (unclosed quote: the rest counts as quoted). safe(U): every
+# command in lexed text U starts with a SAFE word (after VAR=x and prefixes like env, then, while).
+awklib='
+function lex(s,   o, c, j, n, iq) { o = ""; iq = ""; n = length(s)
+  for (j = 1; j <= n; j++) { c = substr(s, j, 1)
+    if (iq == "" && c == "\\" || iq == "\"" && c == "\\") { o = o "_"; j++; continue }
+    if (iq == "") { if (c == "\"" || c == Q) iq = c; else o = o c; continue }
+    if (c == iq) { iq = ""; continue }
+    # "…$(cmd)" and "…`cmd`" run cmd: kept, so safe() sees it
+    if (iq == "\"" && (c == "`" || c == "$" && substr(s, j + 1, 1) == "(")) { o = o c; continue }
+    o = o (c ~ /[;|&()<>`$\n]/ ? "_" : c) }
+  LQ = iq; return o }
+function safe(u,   n, seg, x, m, w, y, t) { n = split(u, seg, /[;|&()`\n]|\$\(/)
+  for (x = 1; x <= n; x++) { m = split(seg[x], w, /[ \t]+/); t = ""
+    for (y = 1; y <= m; y++) { if (w[y] == "" || w[y] ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || index(PRE, " " w[y] " ")) continue; t = w[y]; break }
+    if (t == "") continue
+    if (t == "npx") { for (y++; y <= m && w[y] ~ /^-/; y++); t = w[y]; sub(/@[^@\/]*$/, "", t) }   # npx -y @s/cli@1: cli
+    sub(/^.*\//, "", t)
+    if (!index(SAFE, " " t " ") || t == "git" && seg[x] ~ /[ \t](-c|--config-env)([ \t=]|$)/) return 0 }
+  return 1 }'
+awkv=(-v "SAFE=$SAFE" -v "PRE= env command time nohup rtk proxy then do else ! { } if elif while until done fi esac " -v "Q='")
+# A heredoc body (cat > f <<EOF … EOF) is text, not commands: dropped when its line is safe() and its terminator
+# is there. Else kept, unlexed. A << inside quotes, or in (( )) arithmetic, isn't a heredoc.
+cmd=$(printf '%s\n' "$cmd" | awk "${awkv[@]}" "$awklib"'
+  { L[NR] = $0 } END { i = 1; LQ = ""; q = ""
+    while (i <= NR) { line = L[i++]; print line
+      u = lex(q line); q = LQ   # a quote still open goes on to the next line
+      if (q != "" || u ~ /\(\(/ || !match(u, /<<-?[ \t]*[A-Za-z_][A-Za-z0-9_]*/) || gsub(/<</, "&", u) > 1) continue
+      h = substr(u, RSTART + 2, RLENGTH - 2); dash = h ~ /^-/; gsub(/[- \t]/, "", h)
+      for (k = i; k <= NR; k++) { t = L[k]; if (dash) sub(/^\t+/, "", t); if (t == h) break }
+      if (k > NR) continue
+      if (safe(u)) { i = k + 1; continue }
+      for (; i <= k; i++) print L[i] } }')
 ops='bitbucketdc-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|comment[[:space:]]+(create|reply|update))([[:space:]]|$)|forgejo-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|review|comment[[:space:]]+(create|update))([[:space:]]|$)|jiradc-cli[^[:space:]]*.*[[:space:]]issue[[:space:]]+comment[[:space:]]+(create|update)([[:space:]]|$)'
 ghw='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)'
 # gh, then pr/issue and a merge, comment or review, or api, in the same command (flags may sit between): what a gated
@@ -66,9 +95,10 @@ ghind='(=["'"'"']?|\$\(|`)[[:space:]]*((which|command[[:space:]]+-v|type[[:space
 cmd=$(printf '%s\n' "$cmd" | awk 'NR > 1 { printf "%s", (c ? " " : " ; ") } { c = sub(/\\$/, ""); printf "%s", $0 }')
 # What the CLI mentions are counted in: the command without its quoted runs of words (a grep pattern, a commit
 # message, a prompt), which are arguments, not calls. A quoted single word stays (gh "pr" merge), and so do a value
-# (X='npx cli', run as $X later) and a "…" holding $( or `, which the shell runs. Next to a runner, the whole command
-# counts.
-scan=$(printf '%s' "$cmd" | awk -v q="'" '{ s = s (NR > 1 ? "\n" : "") $0 } END {
+# (X='npx cli', run as $X later) and a "…" holding $( or `, which the shell runs. Unless every command is safe(),
+# the whole command counts.
+scan=$(printf '%s' "$cmd" | awk "${awkv[@]}" -v q="'" "$awklib"'{ s = s (NR > 1 ? "\n" : "") $0 } END {
+  if (!safe(lex(s))) { printf "%s", s; exit }
   while (match(s, "[\\\\\"" q "]")) {
     out = out substr(s, 1, RSTART - 1); c = substr(s, RSTART, 1); s = substr(s, RSTART + 1)
     if (c == "\\") { out = out c substr(s, 1, 1); s = substr(s, 2); continue }
@@ -79,7 +109,6 @@ scan=$(printf '%s' "$cmd" | awk -v q="'" '{ s = s (NR > 1 ? "\n" : "") $0 } END 
     if (b !~ /[ \t]/ || out ~ /=$/ || (c == "\"" && (index(b, "$(") || index(b, "`")))) out = out c b c
   }
   printf "%s", out s }')
-grep -qE "$runner" <<<"$scan" && scan=$cmd
 ghn=$(grep -oE "$ghw" <<<"$scan" | wc -l | tr -d ' ')
 # Matched with quotes dropped too, so a quoted subcommand (pr 'merge') or flag is still seen.
 # (tr, not ${scan//[\"\']/}: bash 3.2's is quadratic, 11 s on a 5 KB heredoc.)
@@ -182,7 +211,7 @@ while [ "$i" -lt "${#toks[@]}" ]; do
   done
   # Its words must be plain: a variable or $(…) there, or an unknown group (an alias), can't be read.
   case "${pos[*]:-}" in *'$'*|*'`'*) attended "Blocked: gh with a variable or \$(…) in its words can't be checked by the approval hook. $alone" ;; esac
-  [[ "${pos[0]:-} ${pos[1]:-}" != *[[:space:]]*[[:space:]]* ]] ||
+  { [[ ${pos[0]:-} != *[[:space:]]* ]] && { [[ ${pos[0]:-} != pr && ${pos[0]:-} != issue ]] || [[ ${pos[1]:-} != *[[:space:]]* ]]; }; } ||
     attended "Blocked: gh with a quoted run of words as its command (gh pr 'merge 5') can't be checked by the approval hook. $alone"
   [ -z "${pos[0]:-}" ] || [[ $groups == *" ${pos[0]} "* ]] ||
     attended "Blocked: \"gh ${pos[0]}\" isn't a gh command the approval hook knows (an alias?). Run the gh command it stands for, as one plain command."
@@ -190,8 +219,10 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     'pr merge') k=merge ;;
     'pr comment'|'issue comment') k=prpost ;;
     'pr review') k=review ;;
-    # gh api sends fields as a POST unless -X says otherwise. A graphql query with no mutation only reads.
-    'api graphql') [ -z "$meth" ] && ! grep -qiw mutation <<<"$cmd" || apiw=1; continue ;;
+    # gh api sends fields as a POST unless -X says otherwise. A graphql query given inline (no @file, --input or
+    # variable) with no mutation, quotes ignored, only reads.
+    'api graphql') [ -z "$meth" ] && ! tr -d "\"'\\\\" <<<"$cmd" | grep -qi mutation &&
+        ! grep -qE -- '--input|@|\$' <<<"$cmd" || apiw=1; continue ;;
     api*) m=$(tr a-z A-Z <<<"$meth"); [ "${m:-${fields:+POST}}" = "" ] || [ "$m" = GET ] || apiw=1; continue ;;
     *) continue ;;
   esac

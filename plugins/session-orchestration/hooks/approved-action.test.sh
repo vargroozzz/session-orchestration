@@ -204,6 +204,29 @@ EOF" deny "heredoc into bash"
 check "echo \"\$(gh pr merge 99 -R acme/app)\"" deny "gh in \$(…) inside double quotes"
 check "sh -c \"gh pr merge 99 -R acme/app\"" deny "gh inside sh -c, double quotes"
 check "gh pr 'merge 99' -R acme/app" deny "gh verb and target in one quoted word"
+check "gh 'pr merge' 99 -R acme/app" deny "gh group and verb in one quoted word"
+check "gh api 'search/issues?q=is:open author:me'" pass "gh api read with a space in its path"
+# Text reaches a call through anything off the allowlist: fails closed.
+check "echo \"use <<EOF\"
+gh pr merge 99 -R acme/app" deny "<<EOF inside quotes is no heredoc"
+check "echo \$((1<<x))
+gh pr merge 99 -R acme/app" deny "<< in arithmetic is no heredoc"
+check "cat <<EOF
+gh pr merge 99 -R acme/app" deny "heredoc with no terminator"
+check "awk 'BEGIN{system(\"gh pr merge 99 -R acme/app\")}'" deny "awk system()"
+check "tcsh -c 'gh pr merge 99 -R acme/app'" deny "tcsh -c"
+check "set -- 'gh pr merge 99 -R acme/app'; \$1" deny "set --, then \$1"
+check "read -r c <<<\"gh pr merge 99 -R acme/app\"; \$c" deny "read, then \$c"
+check "git -c alias.x='!gh pr merge 99 -R acme/app' x" deny "git alias via -c"
+check ". /dev/stdin <<'EOF'
+gh pr merge 99 -R acme/app
+EOF" deny "heredoc into . /dev/stdin"
+check "\$SHELL <<'EOF'
+gh pr merge 99 -R acme/app
+EOF" deny "heredoc into \$SHELL"
+check "git commit -q -m 'fix: gh pr merge 5 -R acme/app works'" pass "a commit message naming a merge"
+check "gh api graphql -F query=@$tmp/m.graphql" deny "gh api graphql from a file"
+check "gh api graphql -f query='muta''tion { mergePullRequest }'" deny "gh api graphql mutation split by quotes"
 # A long heredoc stays fast (bash 3.2's ${x//pat/rep} took minutes on this, and the hook's timeout blocks).
 big="python3 - <<'EOF'"$'\n'$(printf 'x = "a b gh pr view" # it'"'"'s\n%.0s' $(seq 2000))$'\nEOF'
 s=$SECONDS; check "$big" pass "a 50 KB heredoc"

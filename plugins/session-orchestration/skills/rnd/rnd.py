@@ -359,17 +359,67 @@ def unit_hits(f, rx):
     return hits, bool(re.search("review", name + first, re.I))
 
 
+# The approved-action hook's rule (hooks/approved-action.sh, SAFE, lex, safe), so units counts what the hook gates:
+# commands that never run text they're given; a heredoc body is dropped only when its line has nothing else.
+SAFE = set("cat tee echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false sort "
+           "uniq cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli".split())
+PRE = set("env command time nohup rtk proxy then do else ! { } if elif while until done fi esac".split())
+
+
+def lex(s, q=""):
+    """S with quoting resolved, as the hook's lex: (text, quote still open)."""
+    o, j = [], 0
+    while j < len(s):
+        c = s[j]
+        if c == "\\" and q in ("", '"'):
+            o.append("_"); j += 2; continue
+        if not q:
+            if c in "\"'":
+                q = c
+            else:
+                o.append(c)
+        elif c == q:
+            q = ""
+        elif q == '"' and (c == "`" or s[j:j + 2] == "$("):
+            o.append(c)
+        else:
+            o.append("_" if c in ";|&()<>`$\n" else c)
+        j += 1
+    return "".join(o), q
+
+
+def safe(u):
+    for seg in re.split(r"[;|&()`\n]|\$\(", u):
+        w = [x for x in seg.split() if not (re.match(r"[A-Za-z_]\w*=", x) or x in PRE)]
+        if not w:
+            continue
+        t = w[0]
+        if t == "npx":
+            t = next((x for x in w[1:] if not x.startswith("-")), "")
+            t = re.sub(r"@[^@/]*$", "", t)
+        t = t.rsplit("/", 1)[-1]
+        if t not in SAFE or t == "git" and re.search(r"\s(-c|--config-env)(\s|=|$)", seg):
+            return False
+    return True
+
+
 def heredoc_text_dropped(cmd):
-    """CMD without the heredoc bodies its lines only write (cat > f <<EOF); a body a shell reads (bash <<EOF) stays."""
-    out, rows, i = [], cmd.split("\n"), 0
+    """CMD without the heredoc bodies a safe line only writes (cat > f <<EOF … EOF); any other body stays."""
+    out, rows, i, q = [], cmd.split("\n"), 0, ""
     while i < len(rows):
         out.append(rows[i])
-        m = re.search(r"(?<!<)<<-?\s*['\"]?(\w+)", rows[i])
+        u, q = lex(rows[i], q)
         i += 1
-        if m and not re.search(r"(?:^|[^\w.-])(?:bash|sh|zsh|eval)(?:[^\w.-]|$)", rows[i - 1]):
-            while i < len(rows) and rows[i].lstrip("\t") != m.group(1):
-                i += 1
-            i += 1
+        m = re.search(r"<<(-?)\s*([A-Za-z_]\w*)", u)
+        if q or "((" in u or not m or u.count("<<") > 1:
+            continue
+        end = next((k for k in range(i, len(rows)) if (rows[k].lstrip("\t") if m.group(1) else rows[k]) == m.group(2)), None)
+        if end is None:
+            continue
+        if safe(u):
+            i = end + 1
+        else:
+            out.extend(rows[i:end + 1]); i = end + 1
     return "\n".join(out)
 
 

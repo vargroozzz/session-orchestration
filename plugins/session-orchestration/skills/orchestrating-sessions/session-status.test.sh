@@ -422,6 +422,13 @@ echo report > "$root/replies/plugin-docs.md"
 out=$(run --handover "$qid" 'Do X.') && rc=0 || rc=$?
 [ "$rc" = 0 ] && calls | grep -q -- '--bg -n plugin-docs Work on plugin-docs: continue from replies/plugin-docs.md. Do X.' ||
   { echo "keyless handover failed: $out"; calls; exit 1; }
+# Renamed by its own handoff (NAME-prev-K): still NAME.md, and the successor is NAME.
+pid2=66666666-2222-3333-4444-555555555555
+echo '{"type":"user","message":{"content":"Tidy the plugin docs"}}' > "$proj/$pid2.jsonl"
+setacct cfg "$(sess "$pid2" "plugin-docs-prev-1" idle 1)"; calls >/dev/null
+out=$(run --handover "$pid2" 'Do Y.') && rc=0 || rc=$?
+[ "$rc" = 0 ] && calls | grep -q -- '--bg -n plugin-docs Work on plugin-docs: continue from replies/plugin-docs.md. Do Y.' ||
+  { echo "keyless -prev-1 handover failed: $out"; calls; exit 1; }
 # The old session ran a status command itself (a worker checking its PR): its key still comes from its first
 # prompt. A name starting with the key in another case is kept; an account defaulting to plan gets
 # --permission-mode default.

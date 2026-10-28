@@ -492,6 +492,8 @@ else
       fi
       # The board still shows, without tracker columns, under a one-line warning.
       echo "adapter tasks failed (exit $rc)${why:+: $(head -1 <<<"$why")}; the board below has no tracker columns"
+      [ $# = 0 ] || [ -n "$BY_KEY" ] || exit 1
+      ADAPTER=   # no more calls to a failing adapter this run (each could wait out its timeout)
     fi
   fi
   [ -n "$TASKS" ] || [ $# = 0 ] || [ -n "$BY_KEY" ] ||
@@ -835,8 +837,9 @@ if [ -n "$HANDOVER" ]; then
     n=; marks=$(marks_of "$first" "$f")
     ! grep -qE ' review([.,;:!)]|$)' <<<"$marks" || { echo "\"$name\" (${id:0:8}) is a review session: not handed over"; exit 2; }
     keys=$( { first_key "$first"; grep -oE "$KEYRE" <<<"$marks"; } | sort -u)
-    [ -n "$keys" ] || [ ! -f "$rd/$name.md" ] || case $name in */*|.*|*' '*) ;; *) keys=$name ;; esac   # keyless task: its NAME.md
-    [ -n "$keys" ] || { echo "\"$name\" (${id:0:8}) names no task key (first prompt or Session task: marker) and $rdir has no $name.md: not handed over"; exit 2; }
+    bn=$name; [[ $name =~ ^(.+)-prev-[0-9]+$ ]] && bn=${BASH_REMATCH[1]}   # renamed already by its own handoff
+    [ -n "$keys" ] || [ ! -f "$rd/$bn.md" ] || case $bn in */*|.*|*' '*) ;; *) keys=$bn ;; esac   # keyless task: its NAME.md
+    [ -n "$keys" ] || { echo "\"$name\" (${id:0:8}) names no task key (first prompt or Session task: marker) and $rdir has no $bn.md: not handed over"; exit 2; }
     [ "$(grep -c . <<<"$keys")" = 1 ] || { echo "\"$name\" (${id:0:8}) names several task keys ($(paste -sd' ' - <<<"$keys")): hand over by hand"; exit 2; }
     key=$keys
   fi
