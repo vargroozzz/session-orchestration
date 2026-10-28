@@ -149,10 +149,10 @@ grep -q 'merge=3 .*post=2 per_post=2.5' <<<"$out" || fail "units: totals, per po
 # The hook's heredoc rule: a body is dropped only after a safe line that ends there.
 python3 -I -B - "$here" <<'PY' || fail "units: heredoc_text_dropped follows the hook" ""
 import sys; sys.path.insert(0, sys.argv[1]); from rnd import heredoc_text_dropped as d
-assert d("cat > f <<'X'\nmerge\nX\ngit -C /x commit -m m") == "cat > f <<'X'\ngit -C /x commit -m m"
+assert d("cat > f <<'X'\nmerge\nX\ncat f") == "cat > f <<'X'\ncat f"
 for c in ("cat <<<X\nmerge\nX", "cat <<X |\nmerge\nX\nbash", "npx -p x sh <<X\nmerge\nX", "{ cat <<X\nmerge\nX\n} | bash",
-          "git rebase -x sh <<X\nmerge\nX", "/t/cat <<X\nmerge\nX", "npx -y @s/forgejo-cli <<X\nmerge\nX",
-          "cat > f <<X # c\nmerge\nX", "cat > f <<X\nmerge\nX\nrg --pre sh . f"):
+          "/t/cat <<X\nmerge\nX", "cat > f <<X # c\nmerge\nX", "cat > f <<X\nmerge\nX\nrg --pre sh . f",
+          "cat > .git/hooks/pre-commit <<X\nmerge\nX\ngit commit -m m", "A=1 cat <<X\nmerge\nX"):
     assert "merge" in d(c), c
 PY
 [ "$(rnd units 7 --project nomatch 2>&1 >/dev/null)" = 'usd=0 review_usd=0.0 merge=0 done=0 post=0' ] || fail "units: --project filters" "$(rnd units 7 --project nomatch 2>&1)"

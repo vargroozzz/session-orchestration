@@ -46,16 +46,17 @@ ask_for() {
 cmd=$(jq -r '.tool_input.command // ""' <<<"$input") || exit 1
 cwd=$(jq -r '.cwd // ""' <<<"$input") tp=$(jq -r '.transcript_path // ""' <<<"$input") || exit 1
 # Text given to a command is text, not calls, only when every command in sight is one that never runs what it's
-# given: an allowlist, so anything else (a shell, awk, a variable, a path or `.` as the command, read, set, sudo)
-# fails closed. git counts only as git [-C DIR] add|commit|status|log|diff|show (-c, aliases and other subcommands
-# can run text); npx only as `npx [-y] CLI[@version]` for the three CLIs (no scope: any publisher can take one);
-# rg and sort not with --pre or --compress-program. Shared by both passes below.
-SAFE=' cat tee echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false sort uniq cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli '
+# given and the call writes no file (no > but to /dev/null or &N; a file written could be run by what comes next:
+# a git hook, a config) and sets no variable for a command (GIT_EDITOR=bash git commit). An allowlist, so anything
+# else (a shell, awk, a variable, a path or `.` as the command, read, set, sudo) fails closed. git counts only as
+# git [-C DIR] [--no-pager] add|commit|status|log|diff|show|push|branch|fetch (-c, aliases and other subcommands can
+# run text); npx only for the three CLIs; rg and sort not with --pre or --comp(ress-program). Shared by both passes.
+SAFE=' cat echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false sort uniq cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli '
 # lex(S): S with quoting resolved: quote marks dropped, and each separator, < and ( inside quotes made `_`, so what
 # is left splits into commands as the shell would (unclosed quote: the rest counts as quoted). A # at a word start
 # becomes its own command `#`, which safe() refuses: where a comment starts (x\ #y, ${x/ #/}) is the shell's call,
-# so a command with one is read whole. safe(U): every command in lexed text U starts with a SAFE word (after VAR=x
-# and prefixes like env, then, while).
+# so a command with one is read whole. safe(U[, CAT]): every command in lexed text U starts with a SAFE word (after
+# prefixes like env, then, while), as above; with CAT, every command is cat, and it may write files.
 awklib='
 function lex(s,   o, c, j, n, iq) { o = ""; iq = ""; n = length(s)
   for (j = 1; j <= n; j++) { c = substr(s, j, 1)
@@ -67,19 +68,25 @@ function lex(s,   o, c, j, n, iq) { o = ""; iq = ""; n = length(s)
     if (iq == "\"" && (c == "`" || c == "$" && substr(s, j + 1, 1) == "(")) { o = o c; continue }
     o = o (c ~ /[;|&()<>`$\n]/ ? "_" : c) }
   LQ = iq; return o }
-function safe(u,   n, seg, x, m, w, y, t) { n = split(u, seg, /[;|&()`\n]|\$\(/)
-  for (x = 1; x <= n; x++) { m = split(seg[x], w, /[ \t]+/); t = ""
-    for (y = 1; y <= m; y++) { if (w[y] == "" || w[y] ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || index(PRE, " " w[y] " ")) continue; t = w[y]; break }
+function safe(u, cat,   n, seg, x, m, w, y, t, v) {
+  if (!cat) { v = u; gsub(/[0-9]*>>?[ \t]*(&[0-9-]+|\/dev\/null)/, "", v); if (v ~ />/) return 0 }
+  n = split(u, seg, /[;|&()`\n]|\$\(/)
+  for (x = 1; x <= n; x++) { m = split(seg[x], w, /[ \t]+/); t = ""; v = 0
+    for (y = 1; y <= m; y++) { if (w[y] == "" || index(PRE, " " w[y] " ")) continue
+      if (w[y] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { v = 1; continue }
+      t = w[y]; break }
     if (t == "") continue
-    if (t == "npx") { for (y++; w[y] == "-y" || w[y] == "--yes"; y++); t = w[y]; sub(/@[^@\/]*$/, "", t)
+    if (v || cat && t != "cat") return 0
+    if (t == "npx") { for (y++; w[y] == "-y" || w[y] == "--yes"; y++); t = w[y]; sub(/@[^@\/]*$/, "", t); sub(/^@[^\/]*\//, "", t)
       if (t !~ /^(bitbucketdc|forgejo|jiradc)-cli$/) return 0 }
-    if ((t == "rg" || t == "sort") && seg[x] ~ /--(pre|compress-program)/) return 0
-    if (t == "git") { for (y++; w[y] == "-C"; y += 2); if (!index(" add commit status log diff show ", " " w[y] " ")) return 0 }
+    if ((t == "rg" || t == "sort") && seg[x] ~ /--(pre|comp)/) return 0
+    if (t == "git") { for (y++; w[y] == "-C" || w[y] == "--no-pager"; y += w[y] == "-C" ? 2 : 1);
+      if (!index(" add commit status log diff show push branch fetch ", " " w[y] " ")) return 0 }
     if (!index(SAFE, " " t " ")) return 0 }
   return 1 }'
 awkv=(-v "SAFE=$SAFE" -v "PRE= env command time nohup rtk proxy then do else ! { } if elif while until done fi esac " -v "Q='")
-# Heredoc bodies (cat > f <<EOF … EOF) are text, not commands: dropped when the whole command without them is
-# safe(); else the command is printed whole, its bodies unlexed, and the first line says 1 (opaque: the scan below
+# Heredoc bodies (cat > f <<EOF … EOF) are text, not commands: dropped when nothing but cat runs in the command
+# without them; else the command is printed whole, its bodies unlexed, and the first line says 1 (opaque: the scan below
 # reads it all). A << inside quotes, in (( )) arithmetic, in a <<< here-string or on a line going on with \, or with
 # no terminator, isn't taken as a heredoc.
 cmd=$(printf '%s\n' "$cmd" | awk "${awkv[@]}" "$awklib"'
@@ -94,8 +101,8 @@ cmd=$(printf '%s\n' "$cmd" | awk "${awkv[@]}" "$awklib"'
       for (; i <= k; i++) { O[++n] = L[i]; B[n] = 1 }
       cut = 1 }
     d = ""; if (cut) for (x = 1; x <= n; x++) if (!B[x]) d = d O[x] "\n"
-    op = cut && !safe(lex(d)); print op
-    for (x = 1; x <= n; x++) if (op || !B[x]) print O[x] }')
+    op = cut && !safe(lex(d), 1); print op
+    for (x = 1; x <= n; x++) if (op || !B[x]) print O[x] }') || exit 1
 opaque=${cmd:0:1} cmd=${cmd:2}
 ops='bitbucketdc-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|comment[[:space:]]+(create|reply|update))([[:space:]]|$)|forgejo-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|review|comment[[:space:]]+(create|update))([[:space:]]|$)|jiradc-cli[^[:space:]]*.*[[:space:]]issue[[:space:]]+comment[[:space:]]+(create|update)([[:space:]]|$)'
 ghw='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)'
@@ -122,7 +129,7 @@ scan=$(printf '%s' "$cmd" | awk "${awkv[@]}" -v q="'" -v opaque="$opaque" "$awkl
     b = substr(s, 1, e - 1); s = substr(s, e + 1)
     if (b !~ /[ \t]/ || out ~ /=$/ || (c == "\"" && (index(b, "$(") || index(b, "`")))) out = out c b c
   }
-  printf "%s", out s }')
+  printf "%s", out s }') || exit 1
 ghn=$(grep -oE "$ghw" <<<"$scan" | wc -l | tr -d ' ')
 # Matched with quotes dropped too, so a quoted subcommand (pr 'merge') or flag is still seen.
 # (tr, not ${scan//[\"\']/}: bash 3.2's is quadratic, 11 s on a 5 KB heredoc.)

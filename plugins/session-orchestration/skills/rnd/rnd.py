@@ -359,10 +359,8 @@ def unit_hits(f, rx):
     return hits, bool(re.search("review", name + first, re.I))
 
 
-# The approved-action hook's rule (hooks/approved-action.sh, SAFE, lex, safe), so units counts what the hook gates:
-# commands that never run text they're given; heredoc bodies are dropped only when the command without them is safe.
-SAFE = set("cat tee echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false sort "
-           "uniq cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli".split())
+# The approved-action hook's heredoc rule (hooks/approved-action.sh, lex, safe with CAT), so units counts what the
+# hook gates: heredoc bodies are dropped only when nothing but cat runs in the command without them.
 PRE = set("env command time nohup rtk proxy then do else ! { } if elif while until done fi esac".split())
 
 
@@ -390,33 +388,23 @@ def lex(s, q=""):
     return "".join(o), q
 
 
-def safe(u):
+def only_cat(u):
+    """Every command in lexed text U is cat, with no VAR=x before it (the hook's safe(U, 1))."""
     for seg in re.split(r"[;|&()`\n]|\$\(", u):
-        w = seg.split()
-        y = next((k for k, x in enumerate(w) if not (re.match(r"[A-Za-z_]\w*=", x) or x in PRE)), len(w))
-        if y == len(w):
-            continue
-        t = w[y]
-        if t == "npx":
-            y = next((k for k in range(y + 1, len(w)) if w[k] not in ("-y", "--yes")), len(w))
-            t = re.sub(r"@[^@/]*$", "", w[y] if y < len(w) else "")
-            if not re.fullmatch(r"(bitbucketdc|forgejo|jiradc)-cli", t):
-                return False
-        if t in ("rg", "sort") and re.search(r"--(pre|compress-program)", seg):
-            return False
-        if t == "git":
-            y += 1
-            while w[y:y + 1] == ["-C"]:
-                y += 2
-            if w[y:y + 1] not in (["add"], ["commit"], ["status"], ["log"], ["diff"], ["show"]):
-                return False
-        if t not in SAFE:
+        t, v = "", False
+        for x in seg.split():
+            if x in PRE:
+                continue
+            if re.match(r"[A-Za-z_]\w*=", x):
+                v = True; continue
+            t = x; break
+        if t and (v or t != "cat"):
             return False
     return True
 
 
 def heredoc_text_dropped(cmd):
-    """CMD without its heredoc bodies when the rest is safe (cat > f <<EOF … EOF), else CMD."""
+    """CMD without its heredoc bodies when only cat runs in the rest (cat > f <<EOF … EOF), else CMD."""
     out, body, rows, i, q, cut = [], [], cmd.split("\n"), 0, "", False
     while i < len(rows):
         line = rows[i]
@@ -431,7 +419,7 @@ def heredoc_text_dropped(cmd):
             continue
         out.extend(rows[i:end + 1]); body.extend([True] * (end + 1 - i)); i = end + 1; cut = True
     kept = [x for x, b in zip(out, body) if not b]
-    return "\n".join(kept if cut and safe(lex("\n".join(kept))[0]) else out)
+    return "\n".join(kept if cut and only_cat(lex("\n".join(kept))[0]) else out)
 
 
 SUP = re.compile(r"(?:Supersedes: |[Yy]ou replace (?:session )?)([0-9a-f]{8})")

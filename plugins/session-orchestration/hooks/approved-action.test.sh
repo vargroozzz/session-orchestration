@@ -276,7 +276,17 @@ check "cat > f <<EOF
 gh pr merge 99 -R acme/app
 EOF
 rg --pre bash . f" deny "rg --pre runs a command"
-check "npx -y @someone/forgejo-cli 'gh pr merge 99 -R acme/app'" deny "npx of a scoped package named like a CLI"
+check "npx -y @acme/forgejo-cli@latest pr view 5 | grep 'gh pr merge 5 -R a/b'" pass "a scoped CLI piped into grep"
+# A call that writes a file or sets a variable for a command is read whole: the file or variable can run the text.
+check "cat > .husky/pre-commit <<'EOF'
+gh pr merge 99 -R acme/app
+EOF
+git commit -m x" deny "heredoc into a git hook, then commit"
+check "echo 'gh pr merge 99 -R acme/app' > .husky/pre-commit && git commit -m x" deny "echo into a git hook, then commit"
+check "GIT_EDITOR=bash git commit -e -m 'gh pr merge 99 -R acme/app'" deny "a variable set for git"
+check "echo 'gh pr merge 99 -R acme/app' | sort -S 1 --compress-prog=bash" deny "sort --compress-prog abbreviated"
+check "git commit -m 'docs: gh pr merge 5 -R a/b' 2>/dev/null && git push" pass "commit naming a merge, then push"
+check "git --no-pager log --grep 'gh pr merge 5 -R a/b'" pass "git --no-pager log"
 # A long heredoc stays fast (bash 3.2's ${x//pat/rep} took minutes on this, and the hook's timeout blocks).
 big="python3 - <<'EOF'"$'\n'$(printf 'x = "a b gh pr view" # it'"'"'s\n%.0s' $(seq 2000))$'\nEOF'
 s=$SECONDS; check "$big" pass "a 50 KB heredoc"
