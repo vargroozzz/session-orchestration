@@ -490,10 +490,13 @@ else
         if [ -n "$tasks" ]; then echo "$tasks"; else echo "adapter tasks failed (exit $rc)"; [ -z "$why" ] || echo "  $why"; fi
         exit 1
       fi
-      # The board still shows, without tracker columns, under a one-line warning.
-      echo "adapter tasks failed (exit $rc)${why:+: $(head -1 <<<"$why")}; the board below has no tracker columns"
-      [ $# = 0 ] || [ -n "$BY_KEY" ] || exit 1
-      ADAPTER=   # no more calls to a failing adapter this run (each could wait out its timeout)
+      # The board still shows, without tracker columns, under a one-line warning; arguments that need the adapter
+      # stop at the failure line.
+      printf '%s' "adapter tasks failed (exit $rc)${why:+: $(head -1 <<<"$why")}"
+      if [ $# = 0 ] || [ -n "$BY_KEY" ]; then echo "; the board below has no tracker columns"; else echo; exit 1; fi
+      # No more calls to a failing adapter this run (each could wait out its timeout); the notices call already
+      # forked above still runs.
+      ADAPTER=
     fi
   fi
   [ -n "$TASKS" ] || [ $# = 0 ] || [ -n "$BY_KEY" ] ||

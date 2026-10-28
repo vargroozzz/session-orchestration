@@ -251,7 +251,10 @@ JQ
   mkdir -p "$tri"; find "$tri" -type f -mtime +7 -delete 2>/dev/null
   # The verdicts in, by id, into $T/verdicts: one awk and one jq for all of them, not a fork per item. A file per
   # line, read on its own (awk, not one jq stream), so a bad or half-written one is skipped, not the rest with it.
-  verdicts() { find "$tri" -type f -size +0 -exec awk '{ n = FILENAME; sub(/.*\//, "", n); print n "\t" $0 }' {} + |
+  # The files are read with getline, not as awk's input: BSD awk stops at a file it can't open (one mv'd away
+  # meanwhile), dropping the rest; getline just returns -1.
+  verdicts() { find "$tri" -type f -size +0 -exec awk 'BEGIN { for (a = 1; a < ARGC; a++) { f = ARGV[a]; n = f; sub(/.*\//, "", n)
+      while ((getline l < f) > 0) print n "\t" l; close(f) } }' {} + |
     jq -Rn '[inputs | index("\t") as $i | (try (.[$i + 1:] | fromjson) catch null) as $v
       | select($v | type == "object") | {(.[:$i]): $v}] | add // {}' > "$T/verdicts"; }
   verdicts

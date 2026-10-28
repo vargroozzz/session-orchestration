@@ -46,16 +46,21 @@ ask_for() {
 cmd=$(jq -r '.tool_input.command // ""' <<<"$input") || exit 1
 cwd=$(jq -r '.cwd // ""' <<<"$input") tp=$(jq -r '.transcript_path // ""' <<<"$input") || exit 1
 # Text given to a command is text, not calls, only when every command in sight is one that never runs what it's
-# given: an allowlist, so anything else (a shell, awk, a variable or `.` as the command, read, set, sudo) fails
-# closed. git counts unless it sets config (-c can define a shell alias). Shared by both passes below.
+# given: an allowlist, so anything else (a shell, awk, a variable, a path or `.` as the command, read, set, sudo)
+# fails closed. git counts only as git [-C DIR] add|commit|status|log|diff|show (-c, aliases and other subcommands
+# can run text); npx only as `npx [-y] CLI[@version]` for the three CLIs (no scope: any publisher can take one);
+# rg and sort not with --pre or --compress-program. Shared by both passes below.
 SAFE=' cat tee echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false sort uniq cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli '
 # lex(S): S with quoting resolved: quote marks dropped, and each separator, < and ( inside quotes made `_`, so what
-# is left splits into commands as the shell would (unclosed quote: the rest counts as quoted). safe(U): every
-# command in lexed text U starts with a SAFE word (after VAR=x and prefixes like env, then, while).
+# is left splits into commands as the shell would (unclosed quote: the rest counts as quoted). A # at a word start
+# becomes its own command `#`, which safe() refuses: where a comment starts (x\ #y, ${x/ #/}) is the shell's call,
+# so a command with one is read whole. safe(U): every command in lexed text U starts with a SAFE word (after VAR=x
+# and prefixes like env, then, while).
 awklib='
 function lex(s,   o, c, j, n, iq) { o = ""; iq = ""; n = length(s)
   for (j = 1; j <= n; j++) { c = substr(s, j, 1)
     if (iq == "" && c == "\\" || iq == "\"" && c == "\\") { o = o "_"; j++; continue }
+    if (iq == "" && c == "#" && (j == 1 || substr(s, j - 1, 1) ~ /[ \t\n;|&()]/)) { o = o ";#"; continue }
     if (iq == "") { if (c == "\"" || c == Q) iq = c; else o = o c; continue }
     if (c == iq) { iq = ""; continue }
     # "…$(cmd)" and "…`cmd`" run cmd: kept, so safe() sees it
@@ -66,23 +71,32 @@ function safe(u,   n, seg, x, m, w, y, t) { n = split(u, seg, /[;|&()`\n]|\$\(/)
   for (x = 1; x <= n; x++) { m = split(seg[x], w, /[ \t]+/); t = ""
     for (y = 1; y <= m; y++) { if (w[y] == "" || w[y] ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || index(PRE, " " w[y] " ")) continue; t = w[y]; break }
     if (t == "") continue
-    if (t == "npx") { for (y++; y <= m && w[y] ~ /^-/; y++); t = w[y]; sub(/@[^@\/]*$/, "", t) }   # npx -y @s/cli@1: cli
-    sub(/^.*\//, "", t)
-    if (!index(SAFE, " " t " ") || t == "git" && seg[x] ~ /[ \t](-c|--config-env)([ \t=]|$)/) return 0 }
+    if (t == "npx") { for (y++; w[y] == "-y" || w[y] == "--yes"; y++); t = w[y]; sub(/@[^@\/]*$/, "", t)
+      if (t !~ /^(bitbucketdc|forgejo|jiradc)-cli$/) return 0 }
+    if ((t == "rg" || t == "sort") && seg[x] ~ /--(pre|compress-program)/) return 0
+    if (t == "git") { for (y++; w[y] == "-C"; y += 2); if (!index(" add commit status log diff show ", " " w[y] " ")) return 0 }
+    if (!index(SAFE, " " t " ")) return 0 }
   return 1 }'
 awkv=(-v "SAFE=$SAFE" -v "PRE= env command time nohup rtk proxy then do else ! { } if elif while until done fi esac " -v "Q='")
-# A heredoc body (cat > f <<EOF … EOF) is text, not commands: dropped when its line is safe() and its terminator
-# is there. Else kept, unlexed. A << inside quotes, or in (( )) arithmetic, isn't a heredoc.
+# Heredoc bodies (cat > f <<EOF … EOF) are text, not commands: dropped when the whole command without them is
+# safe(); else the command is printed whole, its bodies unlexed, and the first line says 1 (opaque: the scan below
+# reads it all). A << inside quotes, in (( )) arithmetic, in a <<< here-string or on a line going on with \, or with
+# no terminator, isn't taken as a heredoc.
 cmd=$(printf '%s\n' "$cmd" | awk "${awkv[@]}" "$awklib"'
-  { L[NR] = $0 } END { i = 1; LQ = ""; q = ""
-    while (i <= NR) { line = L[i++]; print line
+  { L[NR] = $0 } END { i = 1; LQ = ""; q = ""; n = 0; cut = 0
+    while (i <= NR) { line = L[i++]
       u = lex(q line); q = LQ   # a quote still open goes on to the next line
-      if (q != "" || u ~ /\(\(/ || !match(u, /<<-?[ \t]*[A-Za-z_][A-Za-z0-9_]*/) || gsub(/<</, "&", u) > 1) continue
+      O[++n] = line
+      if (q != "" || u ~ /\(\(|<<</ || line ~ /\\$/ || !match(u, /<<-?[ \t]*[A-Za-z_][A-Za-z0-9_]*/) || gsub(/<</, "&", u) > 1) continue
       h = substr(u, RSTART + 2, RLENGTH - 2); dash = h ~ /^-/; gsub(/[- \t]/, "", h)
       for (k = i; k <= NR; k++) { t = L[k]; if (dash) sub(/^\t+/, "", t); if (t == h) break }
       if (k > NR) continue
-      if (safe(u)) { i = k + 1; continue }
-      for (; i <= k; i++) print L[i] } }')
+      for (; i <= k; i++) { O[++n] = L[i]; B[n] = 1 }
+      cut = 1 }
+    d = ""; if (cut) for (x = 1; x <= n; x++) if (!B[x]) d = d O[x] "\n"
+    op = cut && !safe(lex(d)); print op
+    for (x = 1; x <= n; x++) if (op || !B[x]) print O[x] }')
+opaque=${cmd:0:1} cmd=${cmd:2}
 ops='bitbucketdc-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|comment[[:space:]]+(create|reply|update))([[:space:]]|$)|forgejo-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|review|comment[[:space:]]+(create|update))([[:space:]]|$)|jiradc-cli[^[:space:]]*.*[[:space:]]issue[[:space:]]+comment[[:space:]]+(create|update)([[:space:]]|$)'
 ghw='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)'
 # gh, then pr/issue and a merge, comment or review, or api, in the same command (flags may sit between): what a gated
@@ -97,8 +111,8 @@ cmd=$(printf '%s\n' "$cmd" | awk 'NR > 1 { printf "%s", (c ? " " : " ; ") } { c 
 # message, a prompt), which are arguments, not calls. A quoted single word stays (gh "pr" merge), and so do a value
 # (X='npx cli', run as $X later) and a "…" holding $( or `, which the shell runs. Unless every command is safe(),
 # the whole command counts.
-scan=$(printf '%s' "$cmd" | awk "${awkv[@]}" -v q="'" "$awklib"'{ s = s (NR > 1 ? "\n" : "") $0 } END {
-  if (!safe(lex(s))) { printf "%s", s; exit }
+scan=$(printf '%s' "$cmd" | awk "${awkv[@]}" -v q="'" -v opaque="$opaque" "$awklib"'{ s = s (NR > 1 ? "\n" : "") $0 } END {
+  if (opaque || !safe(lex(s))) { printf "%s", s; exit }
   while (match(s, "[\\\\\"" q "]")) {
     out = out substr(s, 1, RSTART - 1); c = substr(s, RSTART, 1); s = substr(s, RSTART + 1)
     if (c == "\\") { out = out c substr(s, 1, 1); s = substr(s, 2); continue }
@@ -219,10 +233,17 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     'pr merge') k=merge ;;
     'pr comment'|'issue comment') k=prpost ;;
     'pr review') k=review ;;
-    # gh api sends fields as a POST unless -X says otherwise. A graphql query given inline (no @file, --input or
-    # variable) with no mutation, quotes ignored, only reads.
-    'api graphql') [ -z "$meth" ] && ! tr -d "\"'\\\\" <<<"$cmd" | grep -qi mutation &&
-        ! grep -qE -- '--input|@|\$' <<<"$cmd" || apiw=1; continue ;;
+    # gh api sends fields as a POST unless -X says otherwise. A graphql query given inline (no =@file, --input, $
+    # outside '…' (a GraphQL $variable inside one is text), or unquoted brace or glob that could rebuild one) with no
+    # mutation, quotes ignored, only reads.
+    'api graphql') printf '%s' "$cmd" | awk -v q="'" '{ s = s $0 "\n" } END { n = length(s)
+          for (j = 1; j <= n; j++) { c = substr(s, j, 1)
+            if (iq == q) { if (c == q) iq = ""; continue }
+            if (c == "\\") j++; else if (c == "\"") iq = iq == "" ? c : ""; else if (c == q && iq == "") iq = q
+            else if (c == "$" || c == "`" || iq == "" && index("{[*?", c)) exit 0 }
+          exit 1 }'
+      # (exit 1 only: an awk error counts as a write)
+      [ $? = 1 ] && [ -z "$meth" ] && ! tr -d "\"'\\\\" <<<"$cmd" | grep -qiE 'mutation|=@|--input' || apiw=1; continue ;;
     api*) m=$(tr a-z A-Z <<<"$meth"); [ "${m:-${fields:+POST}}" = "" ] || [ "$m" = GET ] || apiw=1; continue ;;
     *) continue ;;
   esac

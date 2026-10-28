@@ -146,6 +146,15 @@ grep -q $'^post\tapp#9\tgggggggg' <<<"$out" || fail "units: a review session's p
 grep -q $'^merge\tacme/app#21\tkkkkkkkk' <<<"$out" && grep -q $'^merge\t22\tkkkkkkkk' <<<"$out" &&
   grep -q $'^post\tacme/app#23\tllllllll' <<<"$out" || fail "units: gh -R, glab, gh pr review" "$out"
 grep -q 'merge=3 .*post=2 per_post=2.5' <<<"$out" || fail "units: totals, per post over review sessions" "$out"
+# The hook's heredoc rule: a body is dropped only after a safe line that ends there.
+python3 -I -B - "$here" <<'PY' || fail "units: heredoc_text_dropped follows the hook" ""
+import sys; sys.path.insert(0, sys.argv[1]); from rnd import heredoc_text_dropped as d
+assert d("cat > f <<'X'\nmerge\nX\ngit -C /x commit -m m") == "cat > f <<'X'\ngit -C /x commit -m m"
+for c in ("cat <<<X\nmerge\nX", "cat <<X |\nmerge\nX\nbash", "npx -p x sh <<X\nmerge\nX", "{ cat <<X\nmerge\nX\n} | bash",
+          "git rebase -x sh <<X\nmerge\nX", "/t/cat <<X\nmerge\nX", "npx -y @s/forgejo-cli <<X\nmerge\nX",
+          "cat > f <<X # c\nmerge\nX", "cat > f <<X\nmerge\nX\nrg --pre sh . f"):
+    assert "merge" in d(c), c
+PY
 [ "$(rnd units 7 --project nomatch 2>&1 >/dev/null)" = 'usd=0 review_usd=0.0 merge=0 done=0 post=0' ] || fail "units: --project filters" "$(rnd units 7 --project nomatch 2>&1)"
 out=$(rnd context 7 2026-10-12T10:30 other)
 grep -q $'^over\thhhhhhhh\t1\t50000\t250000' <<<"$out" || fail "context: the session over 200K" "$out"

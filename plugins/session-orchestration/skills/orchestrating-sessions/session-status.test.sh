@@ -87,6 +87,9 @@ printf '#!/bin/sh\ncase $1 in pending) echo "- carry ABC-12" ;; *) exit 2 ;; esa
 printf '#!/bin/sh\n[ "$1" = tasks ] && exit 3; exit 2\n' > "$root/.claude/session-status-adapter"
 out=$(run) && [ "$(head -1 <<<"$out")" = "adapter tasks failed (exit 3); the board below has no tracker columns" ] &&
   grep -q '^ABC-12 ' <<<"$out" || { echo "silent tasks failure: $out"; exit 1; }
+out=$(run some-arg) && { echo "tasks failure with an argument exited 0"; exit 1; }
+[ "$out" = "adapter tasks failed (exit 3)" ] ||
+  { echo "tasks failure with an argument: $out"; exit 1; }
 out=$(SESSION_STATUS_STRICT=1 run) && { echo "strict silent tasks failure exited 0"; exit 1; }
 [ "$out" = "adapter tasks failed (exit 3)" ] || { echo "strict silent tasks failure: $out"; exit 1; }
 # Not answering the sweep (its fix line kept), the keys found are looked up and its row is used; a key `done`

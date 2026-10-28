@@ -360,19 +360,21 @@ def unit_hits(f, rx):
 
 
 # The approved-action hook's rule (hooks/approved-action.sh, SAFE, lex, safe), so units counts what the hook gates:
-# commands that never run text they're given; a heredoc body is dropped only when its line has nothing else.
+# commands that never run text they're given; heredoc bodies are dropped only when the command without them is safe.
 SAFE = set("cat tee echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false sort "
            "uniq cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli".split())
 PRE = set("env command time nohup rtk proxy then do else ! { } if elif while until done fi esac".split())
 
 
 def lex(s, q=""):
-    """S with quoting resolved, as the hook's lex: (text, quote still open)."""
+    """S with quoting resolved, as the hook's lex: (text, quote still open). A # at a word start is a command `#`."""
     o, j = [], 0
     while j < len(s):
         c = s[j]
         if c == "\\" and q in ("", '"'):
             o.append("_"); j += 2; continue
+        if not q and c == "#" and (j == 0 or s[j - 1] in " \t\n;|&()"):
+            o.append(";#"); j += 1; continue
         if not q:
             if c in "\"'":
                 q = c
@@ -390,37 +392,46 @@ def lex(s, q=""):
 
 def safe(u):
     for seg in re.split(r"[;|&()`\n]|\$\(", u):
-        w = [x for x in seg.split() if not (re.match(r"[A-Za-z_]\w*=", x) or x in PRE)]
-        if not w:
+        w = seg.split()
+        y = next((k for k, x in enumerate(w) if not (re.match(r"[A-Za-z_]\w*=", x) or x in PRE)), len(w))
+        if y == len(w):
             continue
-        t = w[0]
+        t = w[y]
         if t == "npx":
-            t = next((x for x in w[1:] if not x.startswith("-")), "")
-            t = re.sub(r"@[^@/]*$", "", t)
-        t = t.rsplit("/", 1)[-1]
-        if t not in SAFE or t == "git" and re.search(r"\s(-c|--config-env)(\s|=|$)", seg):
+            y = next((k for k in range(y + 1, len(w)) if w[k] not in ("-y", "--yes")), len(w))
+            t = re.sub(r"@[^@/]*$", "", w[y] if y < len(w) else "")
+            if not re.fullmatch(r"(bitbucketdc|forgejo|jiradc)-cli", t):
+                return False
+        if t in ("rg", "sort") and re.search(r"--(pre|compress-program)", seg):
+            return False
+        if t == "git":
+            y += 1
+            while w[y:y + 1] == ["-C"]:
+                y += 2
+            if w[y:y + 1] not in (["add"], ["commit"], ["status"], ["log"], ["diff"], ["show"]):
+                return False
+        if t not in SAFE:
             return False
     return True
 
 
 def heredoc_text_dropped(cmd):
-    """CMD without the heredoc bodies a safe line only writes (cat > f <<EOF … EOF); any other body stays."""
-    out, rows, i, q = [], cmd.split("\n"), 0, ""
+    """CMD without its heredoc bodies when the rest is safe (cat > f <<EOF … EOF), else CMD."""
+    out, body, rows, i, q, cut = [], [], cmd.split("\n"), 0, "", False
     while i < len(rows):
-        out.append(rows[i])
-        u, q = lex(rows[i], q)
+        line = rows[i]
+        u, q = lex(line, q)
+        out.append(line); body.append(False)
         i += 1
         m = re.search(r"<<(-?)\s*([A-Za-z_]\w*)", u)
-        if q or "((" in u or not m or u.count("<<") > 1:
+        if q or re.search(r"\(\(|<<<", u) or line.endswith("\\") or not m or u.count("<<") > 1:
             continue
         end = next((k for k in range(i, len(rows)) if (rows[k].lstrip("\t") if m.group(1) else rows[k]) == m.group(2)), None)
         if end is None:
             continue
-        if safe(u):
-            i = end + 1
-        else:
-            out.extend(rows[i:end + 1]); i = end + 1
-    return "\n".join(out)
+        out.extend(rows[i:end + 1]); body.extend([True] * (end + 1 - i)); i = end + 1; cut = True
+    kept = [x for x, b in zip(out, body) if not b]
+    return "\n".join(kept if cut and safe(lex("\n".join(kept))[0]) else out)
 
 
 SUP = re.compile(r"(?:Supersedes: |[Yy]ou replace (?:session )?)([0-9a-f]{8})")

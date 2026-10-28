@@ -227,6 +227,56 @@ EOF" deny "heredoc into \$SHELL"
 check "git commit -q -m 'fix: gh pr merge 5 -R acme/app works'" pass "a commit message naming a merge"
 check "gh api graphql -F query=@$tmp/m.graphql" deny "gh api graphql from a file"
 check "gh api graphql -f query='muta''tion { mergePullRequest }'" deny "gh api graphql mutation split by quotes"
+check "gh api graphql -f query='query(\$n: Int!) { viewer { login } }' -F n=1" pass "gh api graphql read with a \$variable"
+check "gh api graphql -f query=\"'\$Q'\"" deny "gh api graphql query from a variable behind a '"
+check "cat <<<EOF
+gh pr merge 99 -R acme/app
+EOF" deny "<<< here-string is no heredoc"
+check "cat <<EOF |
+gh pr merge 99 -R acme/app
+EOF
+bash" deny "heredoc piped on past its body"
+check "npx -p x bash -c 'gh pr merge 99 -R acme/app'" deny "npx -p runs another command"
+check "npx -c 'gh pr merge 99 -R acme/app'" deny "npx -c"
+check "git rebase -x 'gh pr merge 99 -R acme/app' HEAD~1" deny "git rebase -x"
+check "git submodule foreach 'gh pr merge 99 -R acme/app'" deny "git submodule foreach"
+check "echo hi # it's
+gh pr merge 99 -R acme/app '" deny "an apostrophe in a # comment"
+check "$tmp/cat 'gh pr merge 99 -R acme/app'" deny "a SAFE name behind a path"
+check "{ cat <<EOF
+gh pr merge 99 -R acme/app
+EOF
+} | bash" deny "heredoc in a group piped into bash"
+check "x=\$(cat <<EOF
+gh pr merge 99 -R acme/app
+EOF
+)
+bash -c \"\$x\"" deny "heredoc caught in a variable, then run"
+check "cat <<EOF \\
+| bash
+gh pr merge 99 -R acme/app
+EOF" deny "heredoc line continued with a backslash"
+check "echo 'a
+# x' ; gh pr merge 99 -R acme/app" deny "a # inside quotes is no comment"
+check "gh api graphql -Fquery{=,=}@$tmp/m.graphql" deny "gh api graphql file behind brace expansion"
+check "npx -y @someone/cat 'gh pr merge 99 -R acme/app'" deny "npx of a package named like a SAFE command"
+check "cat > notes_ <<EOF
+gh pr merge 99 -R acme/app
+EOF" pass "heredoc written to a file ending in _"
+check "git add -A && git commit -m 'docs: gh pr merge 5 -R a/b'" pass "git add, then a commit message naming a merge"
+check "git -C /x commit -m 'gh pr merge 5 -R a/b'" pass "git -C commit"
+check "git log --grep 'gh pr merge 5 -R a/b'" pass "git log --grep"
+# A comment makes the command read whole (where one starts is the shell's call): a false deny, never a pass.
+check "grep -rn 'gh pr merge 5 -R a/b' . # callers" deny "a trailing comment is read whole"
+check "echo x\\ #y; gh pr merge 99 -R acme/app" deny "an escaped space before #"
+check "echo a\\
+#b; gh pr merge 99 -R acme/app" deny "# after a continued line"
+check "echo \${x/ #/y}; gh pr merge 99 -R acme/app" deny "# inside \${…}"
+check "cat > f <<EOF
+gh pr merge 99 -R acme/app
+EOF
+rg --pre bash . f" deny "rg --pre runs a command"
+check "npx -y @someone/forgejo-cli 'gh pr merge 99 -R acme/app'" deny "npx of a scoped package named like a CLI"
 # A long heredoc stays fast (bash 3.2's ${x//pat/rep} took minutes on this, and the hook's timeout blocks).
 big="python3 - <<'EOF'"$'\n'$(printf 'x = "a b gh pr view" # it'"'"'s\n%.0s' $(seq 2000))$'\nEOF'
 s=$SECONDS; check "$big" pass "a 50 KB heredoc"
