@@ -1,8 +1,9 @@
 # Status command and pane reference
 
 Read when writing or debugging a project's `session-status-adapter`, editing
-`.claude/coordinator-actions.json`, or when a status line, a pane group or a pane word is unclear. The
-rules a coordinator acts on every day are in [coordinator.md](coordinator.md).
+`.claude/coordinator-actions.json`, when a status line, a pane group or a pane word is unclear, or as a
+chunk session ([A chunk session's steps](#a-chunk-sessions-steps)). The rules a coordinator acts on
+every day are in [coordinator.md](coordinator.md).
 
 ## Contents
 
@@ -112,6 +113,18 @@ paths or globs; Est like `60K`, the growth in context the chunk is expected to a
 State lives in `KEY-build.md` in the plan file's own folder (KEY: the plan file's name without `.md`): a chunk appends
 `## cN: done` when it lands, or `## cN: handoff` when it stops early. Nothing else marks state. `--handover` and the
 context-watch hook look for it in the replies folder, so keep plans in the replies folder.
+
+#### A chunk session's steps
+
+A `Chunk: KEY/N` line in a session's first prompt marks it as one chunk of a plan:
+- Stay within your brief's est and touches.
+- A clean stop point: everything committed, no background task, no question waiting.
+- At the context-watch hook's soft line, reach the stop point, append `## cN: handoff ID8` (ID8: the first 8 characters of
+  `$CLAUDE_CODE_SESSION_ID`, so `--handover` knows the heading is yours) to `KEY-build.md` in the replies folder, rename yourself (call `name_session` with the name `session-status --prev-name` prints, `KEY-cN-prev-K`: your
+  successor takes `KEY-cN`), message the coordinator `handoff ready: KEY cN`, and end the turn. With no coordinator
+  (`session-status --coordinator` prints nothing), finish with `session-status --handover --self -- '<next step>'`
+  instead: its last line names the rename, and with no `--model`/`--effort` it takes them from your plan row.
+- After landing, append `## cN: done` and run `session-status --plan FILE --done N`.
 
 ## Context watch
 
@@ -262,6 +275,15 @@ exists in an interactive session that has the plugin loaded. The agent view (`cl
 show plugin panes. In a terminal narrower than about 144 columns (110 once the user has opened the pane themselves)
 the pane waits until the window is wider; `/coordinator close` closes it. Under the approvals, **Actions** holds the project's own
 commands (below).
+
+### Approval asks
+
+How the pane shows an `ask_approval` ask ([coordinator.md](coordinator.md), "Messaging"): it reads
+the `body_file` when the ask is queued and shows its text as markdown with its sha256 (as written,
+if markdown would hide a link target or HTML). Asks are grouped per task key, one line each, until
+the user opens one (NEW: never opened). An ask with a kind shows it as a coloured badge; a group
+lists its other asks (a merge, a post with no kind) first, then issues, suggestions, questions, and
+the group line counts each kind. `details`, `target` and `kind` show only in the pane.
 
 ## Project actions in detail
 

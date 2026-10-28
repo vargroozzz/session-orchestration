@@ -83,10 +83,6 @@ session whose first prompt or `Session task:` names the key.
 - **A name that doesn't fit the ticket is a stop sign** (an R&D name on a product ticket): recheck with
   `--owner`, don't explain it away.
 
-(2026-10-21: PROJ-4177 work went twice to an R&D session the status column guessed, after a
-first-prompt check died with an `xargs` error and the session's name `rnd-mattpocock-skills` was
-explained away.)
-
 Transcripts live in
 `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<encoded cwd>/*.jsonl`.
 The encoded cwd is the path with every non-alphanumeric character turned into `-`, e.g.
@@ -221,11 +217,11 @@ docs/claude/orchestration/memory.md`, as it names the replies folder. It holds w
 learned that another needs: decisions the user made, pitfalls, conventions found the hard way. Any
 session appends to it and every new session reads it (`SKILL.md`, Project memory).
 
-Memory is an inbox, not the home: every session start pays for it, so it stays an index (one line
-per topic file, with a "read when" trigger) over topic files read on demand, and entries leave once
-they've proved themselves. A flat file past a screen or so gets split that way, by a session you
-start: it builds the topic files and the new index as copies, re-checks for lines appended
-meanwhile, and swaps the index in with one `mv`, so no worker's append is lost.
+Memory is an inbox, not the home: every session start pays for it, so it stays an index over topic
+files read on demand, and entries leave once they've proved themselves. A flat file past a screen
+or so gets split that way by a session you start: it builds the topic files and the new index as
+copies, re-checks for lines appended meanwhile, and swaps the index in with one `mv`, so no
+worker's append is lost.
 
 - When starting a session, put "Read <memory file> first." in its prompt.
 - When the user tells you to remember something for the project, or a preference about how you
@@ -274,18 +270,14 @@ meanwhile, and swaps the index in with one `mv`, so no worker's append is lost.
     Keep the question one line (the action, as the hook names it) and put what the user reads into
     the optional fields: `details` (markdown: what's being decided, the review comment being
     answered), `target` (`app#282 src/a.ts:42`, `app#282 general`, `PROJ-5195`) and, for a comment
-    post, `body_file`. **For a post, write the body file first and pass its absolute path**: the
-    pane reads it when queued and shows its text as markdown with its sha256 (as written, if
-    markdown would hide a link target or HTML), and refuses the ask if the sha256 the question names
-    isn't the file's, or a question names a sha256 without `body_file`. Don't edit the file after
-    asking. The question and options may hold no control characters. Pass `kind` for PR review
-    findings, the comment's one kind: `issue` (the code is wrong), `suggestion` (it works but could
-    be better) or `question` (scope or intent the author or PO decides). Leave it out for any other
-    post (a Jira status or backfill comment, a review reply); an ask without `body_file` takes
-    none. The pane groups asks per task key, one line each, until the user opens one (NEW: never
-    opened). An ask with a kind shows it as a coloured badge; a group lists its other asks (a merge,
-    a post with no kind) first, then issues, suggestions, questions, and the group line counts each
-    kind. These fields show only in the pane and are not part of the answer line.
+    post, `body_file`. **For a post, write the body file first, pass its absolute path, and don't
+    edit it after asking**: the pane refuses the ask if the sha256 the question names isn't the
+    file's, or a question names a sha256 without `body_file`. No control characters in the question
+    or options. Pass `kind` for PR review findings, the comment's one kind: `issue` (the code is
+    wrong), `suggestion` (it works but could be better) or `question` (scope or intent the author or
+    PO decides). Leave it out for any other post (a Jira status or backfill comment, a review
+    reply); an ask without `body_file` takes none. How the pane shows these fields:
+    [Approval asks](status-reference.md#approval-asks). They are not part of the answer line.
   - To replace or withdraw an ask, queue the new one, then remove the old with `cancel_approval`
     (ToolSearch: `mcp__session-orchestration__cancel_approval`): the key, plus the `id`
     `ask_approval` returned or the exact question; the key alone removes all its asks. It submits
@@ -334,7 +326,7 @@ meanwhile, and swaps the index in with one `mv`, so no worker's append is lost.
 - **Follow-ups: `session-status --send-when-idle <id> '<text>'`**, run in the background (Bash
   `run_in_background`), for anything queued for later. `notify_when_idle` covers only the waiting, and
   only for a live session. It doesn't cover a retired one, or *how* to deliver: a `--resume` of a session that is still
-  running starts a copy (2026-10-13: 4f82e59d became a1bad5a1 that way). The helper waits until the
+  running starts a copy under a new id. The helper waits until the
   session isn't busy, then:
   - **live:** it prints `send: SendMessage to "<name>" now` and exits 0. You send the
     text with SendMessage; a script can't.
@@ -438,19 +430,14 @@ A multi-step task becomes chunks run by separate sessions, so none outgrows its 
 2. **Write the plan** as a table under `## Plan` in `<replies>/PROJ-123.md`, and run `session-status --plan FILE --check`.
    Write one brief per chunk, `<replies>/PROJ-123-cN.md`, from `--plan FILE --brief N`, plus a shared
    `PROJ-123-chunk-rules.md` (paths, setup, interface, checks, landing by fast-forward). Keep plans in the replies folder.
-3. **Start** what `--plan FILE --next` prints. It stops at `plan.max_parallel` (2 when chunks share a top-level
-   directory), counting chunks whose `PROJ-123-cN` session is live as running: it doesn't list those. A chunk it
-   lists again has no live session and no `## cN: done` (it died or handed off): start it, or take its handoff.
-   With `plan.enabled: false` it starts nothing and says so: run the task without a plan.
-   **While the planner is evaluated**, odd task starts get a plan and even ones run as before, with `plan: off` in the
-   brief (`rnd.py trial` compares the two).
+3. **Start** what `--plan FILE --next` prints; a chunk it lists again died or handed off: start it, or take its
+   handoff. With `plan.enabled: false` run the task without a plan. **While the planner is evaluated**, odd task
+   starts get a plan and even ones run as before, with `plan: off` in the brief (`rnd.py trial` compares the two).
 4. **Models** by kind, from `plan.models` (`default` in the table); never `fable`.
-5. **A `handoff ready: PROJ-123 cN` message**: `session-status --handover <id> --model M --effort E -- '<next step>'`. A
-   chunk that has `## cN: done` gets no resume. **A `handoff ready: PROJ-123` message** (a task):
-   `session-status --handover <id> -- '<next step>'`, the next step from `## Handoff` in its replies file. The old
-   session renames itself `NAME-prev-K` before it ends its turn (`session-status --prev-name`), and the successor
-   takes the plain name: a `-prev-K` name is a finished predecessor, so message and attach the plain one. When
-   `--handover` says the old session wasn't renamed, two sessions share the name until it is.
+5. **A `handoff ready: PROJ-123 cN` message**: `session-status --handover <id> --model M --effort E -- '<next step>'`
+   (none for a chunk with `## cN: done`). **A `handoff ready: PROJ-123` message** (a task): `session-status
+   --handover <id> -- '<next step>'`, the next step from `## Handoff` in its replies file. Message and attach the
+   successor's plain name; a `-prev-K` name is a finished predecessor.
 6. **Recalibrate** with `rnd.py chunks` (its ratio line, act against est) and size the next ests by it.
 
 ## Propose first, or start at once
@@ -475,7 +462,7 @@ one, e.g. `proj-status --watch`), with Bash `run_in_background: true` and a long
 timeout: it retries Jira/Bitbucket/jq blips and ignores working↔idle flips itself, so never wrap it
 in a loop or filter. Report what changed, then re-arm it. One watcher at a time: skip arming if one
 already runs. Never `/loop` the status command: every tick re-sends your whole context, and most
-ticks find nothing (2026-10-05: 49 ticks, 24M tokens).
+ticks find nothing.
 
 ## Rules
 
@@ -495,8 +482,6 @@ ticks find nothing (2026-10-05: 49 ticks, 24M tokens).
   user's approval. An approval addressed to a session is that session's. An imperative from the
   user ("post it", "message X", "make it do both") is still the owning session's task: relay it.
   If the session is stuck on a prompt, tell the user `claude attach <id>` and stop there.
-  (2026-09-30: the coordinator filed a ticket the owning session still held as pending, one "yes"
-  from a duplicate. 2026-10-05: it wrote a script and removed a plugin instead of handing them on.)
 - **Read for coordination, never to do or pre-empt the task.** You may read a task's content
   (tracker comments, a PR, review comments, chat threads, code) when coordinating needs it:
   answering a worker's question, checking something before you relay or approve it, or resolving a
@@ -504,23 +489,18 @@ ticks find nothing (2026-10-05: 49 ticks, 24M tokens).
   session: "TASK-1 has a new comment" means message the owning session, without fetching the
   comment first. Routing needs only the task key. Don't peek to summarize a task for the user when
   its session can report, and never edit anything on a task (comments, records, descriptions). A
-  retired owner gets revived, not covered for. (2026-10-07: told "PROJ-4172 has a comment", the
-  coordinator started fetching it, and the user stopped it: "Why do you check it yourself?". The
-  same day it edited three tickets' comments itself, though the user had approved only the wording.)
+  retired owner gets revived, not covered for.
 - **Read the session's last turn before saying what it waits on.** `state: blocked` covers a
-  question box, a permission prompt and a plain-text question alike. (2026-09-30: the coordinator
-  told the user to answer a question box that didn't exist.)
+  question box, a permission prompt and a plain-text question alike.
 - **A listed session `SendMessage` calls "not reachable": wake it** with
-  `claude --bg --resume <full id> "<short note>"`. With no flags it wakes the same session ("woke
-  session … with its saved options") and it becomes reachable; `claude attach` also works. Its
-  `claude agents` entry can be stale. Don't diagnose it from `ps`: an attached background session
-  runs as `claude bg-spare`. (2026-10-05.)
+  `claude --bg --resume <full id> "<short note>"` (a short id can start a copy); `claude attach`
+  also works. Its `claude agents` entry can be stale. Don't diagnose it from `ps`: an attached
+  background session runs as `claude bg-spare`.
 - **`claude stop` fails on an asleep background session** with "couldn't confirm <id> was stopped —
   the background service may be restarting", and retrying doesn't help. Such a session shows
   `blocked` (idle in session-status) with no question in its last turn. Wake it as for "not
-  reachable" above, with a note like "Closing you: reply `ok`, do
-  nothing else". Stop it once that turn ends. If the user attaches instead, they exit it
-  themselves. (2026-10-06.)
+  reachable" above, with the note "Closing you: reply `ok`, do nothing else", and stop it once that
+  turn ends. If the user attaches instead, they exit it themselves.
 - **A report that a task is finished is a claim until its done-when holds** (or, without one, what
   the task asked). Before telling the user, check it against what the status command shows (PR
   state, unpushed commits, tracker status, as far as the project's adapter gives them) and the
@@ -534,9 +514,8 @@ ticks find nothing (2026-10-05: 49 ticks, 24M tokens).
   something is merged, deployed, posted, fixed, running or decided, check it in this turn (a
   command, a file read) and name the evidence: PR state, SHA, version, URL, line. Can't check it
   now: say "unverified" and why. A summary from earlier in your conversation or a session's report
-  is not evidence. (2026-10-05: a worker was told PROJ-4825 was deployed; it wasn't, and #236 stalled.)
+  is not evidence.
 - **Check a session's wording against the project docs before repeating it** to the user.
-  (2026-10-05: "needs a develop build" meant only a restart.)
 - **Reports sent to a previous coordinator:** workers also write each status report to `<TASK>.md`
   in the project's replies folder (`SKILL.md`). At the start of a coordinator session, `ls -t` that
   folder and read the reports written since the previous coordinator's last turn.

@@ -52,8 +52,7 @@ one of: `coding`, `PR #N open`, `in review`, `ready to merge`, `merged, deployin
   first name it prints (newest coordinator first), then the next. Nothing printed: try the brief's
   name. No send works: the replies-folder file is the report. Always write every status report to
   `<TASK>.md` (overwrite it) in the project's replies folder, if its `CLAUDE.md` names one: a new
-  coordinator reads it there. (2026-10-05: a report to `myproj-3b` failed after the coordinator
-  was resumed under a new name.)
+  coordinator reads it there.
 - A status report is about this session's own work. Name another session only as a blocker or
   source; surveying them is the coordinator's job.
 - Code, diffs, logs and file contents go in a file. Reply with its path. If the project's
@@ -109,8 +108,7 @@ one of: `coding`, `PR #N open`, `in review`, `ready to merge`, `merged, deployin
   first prompt or your own earlier `Session task:` line names a different task (or "no ticket"), reply
   only `not my task: I'm <your task>; KEY's session is probably elsewhere` and do nothing else: no
   reading, no files, no marker. Take it on only when the brief explicitly reassigns it ("this is now
-  your task"). (2026-10-21: an R&D session given PROJ-4177 work by a misroute read the user's chat,
-  wrote replies and probed the dev cluster, and its marker then made it PROJ-4177's owner.)
+  your task"). Acting on it would make you its owner in `session-status`.
 - If the message hands you a task your first prompt doesn't name (a new session's first task, or an
   explicit reassignment), write `Session task: <KEY>` in your own reply text, not only inside a
   `SendMessage`. `session-status` reads the transcript's text blocks to map sessions to tasks.
@@ -119,19 +117,13 @@ one of: `coding`, `PR #N open`, `in review`, `ready to merge`, `merged, deployin
   once it knows the key, with `<KEY>-<short-desc>` (e.g. `PROJ-1234-fix-settler`; a review session
   `<KEY>-review-<short-desc>`), so `claude agents` and the coordinator pane list it by ticket. The
   rename lands when the turn ends. Once per task; the coordinator and subagents never call it. Tool
-  missing (plugin older than 0.29.0): call `reload_plugins`, then load it next turn.
+  missing: call `reload_plugins`, then load it next turn.
 
 ## Chunk sessions
 
-A `Chunk: KEY/N` line in your first prompt marks you as one chunk of a plan ([flags and hook](status-reference.md#plans-and-chunks)):
-- Stay within your brief's est and touches.
-- A clean stop point: everything committed, no background task, no question waiting.
-- At the context-watch hook's soft line, reach the stop point, append `## cN: handoff ID8` (ID8: the first 8 characters of
-  `$CLAUDE_CODE_SESSION_ID`, so `--handover` knows the heading is yours) to `KEY-build.md` in the replies folder, rename yourself (call `name_session` with the name `session-status --prev-name` prints, `KEY-cN-prev-K`: your
-  successor takes `KEY-cN`), message the coordinator `handoff ready: KEY cN`, and end the turn. With no coordinator
-  (`session-status --coordinator` prints nothing), finish with `session-status --handover --self -- '<next step>'`
-  instead: its last line names the rename, and with no `--model`/`--effort` it takes them from your plan row.
-- After landing, append `## cN: done` and run `session-status --plan FILE --done N`.
+A `Chunk: KEY/N` line in your first prompt marks you as one chunk of a plan: read
+[A chunk session's steps](status-reference.md#a-chunk-sessions-steps) before you start. After
+landing, append `## cN: done` to `KEY-build.md` and run `session-status --plan FILE --done N`.
 
 ## Handing the user a command
 
@@ -145,7 +137,7 @@ report, and don't wait on it: the coordinator passes on the outcome.
   compound command is fine here; it's the user's to approve.
 - Never hand over a step you could take yourself, or one that needs an approval you haven't got: ask
   for that as Relayed approvals says.
-- Tool missing (plugin older than 0.36.0): call `reload_plugins`; meanwhile the `!` line alone.
+- Tool missing: call `reload_plugins`; meanwhile the `!` line alone.
 
 ## Project memory
 
@@ -219,8 +211,7 @@ EOF
 Other sessions run live shared scripts while you edit them: `session-status`, a project's
 `.claude/session-status-adapter`, your own wrapper scripts, the installed plugin. Edit a copy, run
 `bash -n` and its self-test on the copy, then `mv` it over the original in one step. Never leave the
-live file half-edited between tool calls. (2026-10-06: a half-edited adapter killed every
-session's status call.)
+live file half-edited between tool calls: a half-edited script breaks every session that runs it.
 
 ## When the plugin itself is wrong
 
