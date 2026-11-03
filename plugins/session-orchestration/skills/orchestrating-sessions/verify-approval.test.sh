@@ -96,4 +96,11 @@ check ABC-1 yes "rejected: source session isn't running"                      # 
 echo "$home/.claude" > "$tmp/coord"; rm "$root/.claude/coordination.local.json"
 check ABC-1 yes "rejected: source session isn't running"                      # features.accounts off: this account only
 CFG=$home/.claude check ABC-1 yes "verified, answering: Merge ABC-1?"           # … where the coordinator is found
+# A command this session handed over for the same key is named with how to withdraw it; another session's or key's isn't.
+hd=$home/.cache/session-status/commands; mkdir -p "$hd"
+echo '{"session":"w1","key":"ABC-1","command":"teams-send a.txt"}' > "$hd/1.json"
+echo '{"session":"w2","key":"ABC-1","command":"echo other"}' > "$hd/2.json"
+echo '{"session":"w1","key":"ABC-2","command":"echo key"}' > "$hd/3.json"
+[ "$(CLAUDE_CODE_SESSION_ID=w1 CFG=$home/.claude v ABC-1 yes)" = "$(printf 'verified, answering: Merge ABC-1?\nyou also handed the user this command for ABC-1: teams-send a.txt\nif the approved action is the same, withdraw it before you act: hand_command with this key and command and withdraw: true')" ] ||
+  { echo "FAIL handed command not named: $(CLAUDE_CODE_SESSION_ID=w1 CFG=$home/.claude v ABC-1 yes)"; exit 1; }
 echo ok

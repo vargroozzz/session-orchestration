@@ -27,6 +27,8 @@ helper waits until the session isn't busy, then:
 - **retired** (listed under `--all`, no process): it wakes the session with `--bg --resume <id> '<text>'` under its
   own id.
 - **not listed:** it resumes the session from its transcript.
+- **under another Claude account** ([accounts](../../features/accounts.md)): with `--here` it ends up under yours,
+  name kept, so SendMessage reaches it after (a relay goes that way).
 
 Every resume path refuses a session holding over 200K tokens (exit 4) and prints the `--handover` command for it.
 Never put a relayed approval in the text: a relay is a SendMessage ([approvals.md](approvals.md)).

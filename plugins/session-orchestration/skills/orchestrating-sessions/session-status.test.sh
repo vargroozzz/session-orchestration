@@ -367,7 +367,8 @@ case "\$1" in
   stop) f="$tmp/agents-\$acct.json"   # its process ends: no pid from now on
     jq --arg id "\$2" '[.[]? | if (.sessionId | startswith(\$id)) then .pid = null else . end]' "\$f" > "\$f.t" && mv "\$f.t" "\$f"
     echo "stopped \$2" ;;
-  --bg) [ "\$2" != --resume ] && echo "backgrounded · abcdef12 · x" || echo "backgrounded · \$(printf %s "\$3" | cut -c1-8) · x" ;;
+  --bg) [ "\$acct" != "\${FAIL_BG_IN:-}" ] || { echo "Workspace not trusted"; exit 1; }
+    [ "\$2" != --resume ] && echo "backgrounded · abcdef12 · x" || echo "backgrounded · \$(printf %s "\$3" | cut -c1-8) · x" ;;
 esac
 EOF
 chmod +x "$tmp/bin/claude"
@@ -412,6 +413,18 @@ out=$(run --send-when-idle "$rid" x) && rc=0 || rc=$?
 export SESSION_STATUS_MAX_RESUME=1000000
 run --send-when-idle "$rid" "Follow up: X" | grep -q '^delivered to "rev"' &&
   [ "$(calls | grep -v ' agents ')" = "$(printf '.claude-work stop 22222222\n.claude-work --bg --resume %s Follow up: X' "$rid")" ] || { echo "send other account failed"; exit 1; }
+# --here: the same stop, but the resume runs under this account and keeps the name; a retired one too.
+setacct .claude-work "$(sess "$rid" rev idle 1)"
+run --send-when-idle --here "$rid" "Moved" | grep -q '^moved "rev" (22222222) to this account' &&
+  [ "$(calls | grep -v ' agents ')" = "$(printf '.claude-work stop 22222222\ncfg --bg --resume %s Moved --name rev' "$rid")" ] || { echo "send --here failed"; exit 1; }
+# A move that fails here (an untrusted folder) puts it back in its own account, exit 1.
+setacct .claude-work "$(sess "$rid" rev idle 1)"
+out=$(FAIL_BG_IN=cfg run --send-when-idle --here "$rid" "Moved") && rc=0 || rc=$?
+[ $rc = 1 ] && grep -q "^couldn't move \"rev\".*resumed it with the text in its own account" <<<"$out" &&
+  [ "$(calls | grep -v ' agents ')" = "$(printf '.claude-work stop 22222222\ncfg --bg --resume %s Moved --name rev\n.claude-work --bg --resume %s Moved' "$rid" "$rid")" ] || { echo "send --here fallback failed: $out"; exit 1; }
+setacct .claude-work "$(sess "$rid" rev '' null)"
+run --send-when-idle --here "$rid" "Moved" | grep -q '^woke "rev" .*, moved to this account$' &&
+  [ "$(calls | grep -v ' agents ')" = "cfg --bg --resume $rid Moved --name rev" ] || { echo "send --here retired failed"; exit 1; }
 setacct .claude-work "$(sess "$rid" rev waiting 1)"
 [ "$(run --send-when-idle "$rid" x >/dev/null; echo $?)" = 3 ] && ! calls | grep -q 'stop\|--bg' || { echo "send waiting other account failed"; exit 1; }
 setacct .claude-work "$(sess "$rid" rev '' null)"
@@ -447,8 +460,9 @@ out=$(run --start ABC-12) && [ "$(grep '^## ' <<<"$out" | sed 's/ (.*//')" = "$(
 touch -t 202601010000 "$root/replies/coordinator-handover.md"; touch -t 202601020000 "$root/replies/ABC-48.md"; out=$(run --start)
 grep -qx "## Replies written since the handover ($root/replies), newest first" <<<"$out" && grep -q 'ABC-49.md: ' <<<"$out" && grep -q 'ABC-48.md: ' <<<"$out" ||
   { echo "--start, an old handover: $out"; exit 1; }
-rm "$root/replies/coordinator-handover.md"; out=$(run --start)
-grep -qx "## Replies written in the last day ($root/replies), newest first" <<<"$out" && grep -q 'ABC-49.md: ' <<<"$out" && ! grep -q 'ABC-48' <<<"$out" ||
+rm "$root/replies/coordinator-handover.md"; printf '## Handoff\nx\n## Log 11-03: merged\n' >> "$root/replies/ABC-49.md"; out=$(run --start)
+grep -qx "## Replies written in the last day ($root/replies), newest first" <<<"$out" && ! grep -q 'ABC-48' <<<"$out" &&
+  grep -qx '[0-9-]* [0-9:]*  ABC-49.md: ABC-49 · proj · done · last section: Log 11-03: merged' <<<"$out" ||
   { echo "--start, no handover: $out"; exit 1; }
 rm "$root/replies/ABC-48.md" "$root/replies/ABC-49.md"
 setacct cfg "$(sess "$hid" "fix it" idle 1)"; calls >/dev/null

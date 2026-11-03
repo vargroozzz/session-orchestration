@@ -31,7 +31,9 @@ watcher.)
 3. When `--start` finishes (its completion notice; don't poll it), read its output: the status, the handoff file,
    the last handover note, the replies written since, and one line per enabled feature. Do each feature line's start
    step and whatever the project's coordinator doc adds. Prune the handoff file against the status (Handoff file).
-   Read a reply whole only when its header line needs you.
+   Read a reply whole only when its header line or its `last section` needs you. Where the two disagree, read it whole
+   and take the later of the two (dates, the `Done:` line) as the state: a worker may have added a section without
+   updating the top, or finished without removing an old section.
 4. Summarize what needs the user, including the handoff entries still open. Then arm the watcher (Watching).
 
 ## Which sessions
@@ -49,7 +51,7 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
    commits, the owning session live or closed), then the footers, each with the command it needs: **Waiting on
    you**, **Stale prompts**, **Leftovers**, **Notices**, **Other sessions**, and at most once a day `plugin
    feedback: N open … — apply?`: pass that to the user, and on a yes start an apply session
-   ([feedback.md](feedback.md)). Act on a messages module's Notices line per that module's doc (its feature line
+   ([feedback.md](feedback.md)); its `project feedback` part waits for the next R&D run. Act on a messages module's Notices line per that module's doc (its feature line
    names it); one the user calls handled: `session-status --dismiss "LINE"`, for every session, not passed on again.
 2. Message a session only to give it work, or for something only it knows. `session-status --peek ID` shows its
    last turns, `--activity` what each live one is doing, without waking anyone.
@@ -206,5 +208,5 @@ The files next to this one, each read whole when its event comes up, never at St
 | [pane.md](pane.md) | A `Coordinator pane action for …` or `Coordinator pane: the user ran the command …` prompt; the pane's Actions buttons; editing `.claude/coordinator-actions.json` |
 | [memory-rules.md](memory-rules.md) | Resolving a handoff entry with `pending.file` set; an entry's history; splitting or pruning memory; `[team]` lines; graduation; an R&D run's approved proposals |
 | [status-reference.md](status-reference.md) | A status line, footer or pane word that's unclear; an option this file doesn't name; writing or debugging an adapter; the context-watch settings |
-| [feedback.md](feedback.md) | The `plugin feedback: … apply?` footer; this plugin's own script failed or its docs are wrong (`feedback add`) |
+| [feedback.md](feedback.md) | The `plugin feedback: … apply?` footer; the moment you tell the user you worked around this plugin or the project, took an extra round trip, misreported because of a script's output or a file, or needed them to step in (`feedback add`, `--project` for the project's own friction) |
 | A feature's doc | When its line in `--start`'s output says |

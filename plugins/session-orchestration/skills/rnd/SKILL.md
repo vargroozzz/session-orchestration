@@ -112,7 +112,11 @@ schedules it.
    target, gain, risk), and a "Next run" section with the baselines to compare against. A proposal
    whose change is in this plugin itself becomes a feedback case instead (`../orchestrating-sessions/feedback
    add`, in the plugin's terms; [feedback.md](../orchestrating-sessions/feedback.md)), named in the report by
-   its title. The report ends with `feedback list` (open cases, most seen first) and offers the apply
+   its title. This project's own cases (`../orchestrating-sessions/feedback list --project`, run from the project
+   root: friction from its hosts, sign-ins, docs and scripts) become proposals too: group them into patterns (the
+   same cause, place or fix; one case seen ≥2× is a pattern of its own) and propose one project fix per pattern (a
+   doc, script or setting), naming its case files; the followups session applies the approved ones and marks those
+   cases fixed. The report ends with `feedback list --plugin` (open cases, most seen first) and offers the apply
    (feedback.md, "Applying"). Then
    `python3 -I rnd.py html <R>/rnd-run-<N+1>.md <R>/rnd-run-<N+1>.html`.
 7. Send the coordinator at most 5 lines with the `reply` tool, no `to` (ToolSearch

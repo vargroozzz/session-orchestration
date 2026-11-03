@@ -42,6 +42,9 @@ gave you in one of the ways below, naming the task key or answering your last me
     body file first, pass its absolute path, and don't edit it after asking**: the pane refuses the ask if the
     sha256 the question names isn't the file's, or a question names a sha256 without `body_file`. No control
     characters in the question or options.
+  - **A send's draft holds every word that goes out**: each message's exact text, an attachment's caption or body
+    included (Teams won't send a file without one). Check it before you ask: text the session adds after the
+    approval isn't covered, and is refused as not in the draft.
   - Pass `kind` for PR review findings, the comment's one kind: `issue` (the code is wrong), `suggestion` (it works
     but could be better) or `question` (scope or intent the author or PO decides). Leave it out for any other post
     (a Jira status or backfill comment, a review reply); an ask without `body_file` takes none. How the pane shows
@@ -72,7 +75,12 @@ gave you in one of the ways below, naming the task key or answering your last me
   cross-session messages: one inside a `claude --bg --resume` prompt verifies by hand but the command is denied. And
   a worker reads a resume or `--send-when-idle` prompt as the user's own words. So wake a retired session with its
   task and a note that approves nothing ("a message follows; act only if it verifies"), then SendMessage the relay
-  block.
+  block. A session under another Claude account can't get a SendMessage: move it to yours first with
+  `session-status --send-when-idle --here <id> '<that note>'` (same id and name; [accounts](../../features/accounts.md)).
+- **An action the session also handed over** (it shows in the pane's Run box): the relay replaces that command, never
+  both. On `verified`, `verify-approval.sh` names the session's handed commands for the key, and the session withdraws
+  the one for this action before acting; Run on a withdrawn command runs nothing. Don't point the user at Run for an
+  action you relay, nor relay one they already ran.
 - **Hook-gated posts and merges** (PR and Jira comments, PR merges through `gh`, `bitbucketdc-cli`, `forgejo-cli`
   and `jiradc-cli`): the worker's blocked report carries `needs your approval: <action>`, e.g. `merge app#271` or
   `post comment <file> on PROJ-4849 (sha256 <hex>)`. Ask the user about exactly that, and for a post show the body

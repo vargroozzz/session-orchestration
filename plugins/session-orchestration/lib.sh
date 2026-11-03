@@ -9,7 +9,7 @@
 #                                            repo's when the person file names one, see shared_dir)
 #   .claude/coordination.local.json          person keys: approvals.delegate, features.accounts, terminal, messages
 #                                            (and its module's block, e.g. msgraph), trusted, team, feedback.mode,
-#                                            feedback.repo_dir, telemetry, handoff.*, compact.window (always excluded;
+#                                            feedback.repo_dir, feedback.project_dir, telemetry, handoff.*, compact.window (always excluded;
 #                                            the repo file can't set them)
 # No file means every default. `config KEY` prints the key's value; an unknown value prints the default and one
 # warning line on stderr.
@@ -142,6 +142,8 @@ detect_host() {
 #   feedback.mode       auto | pr | fork-pr | issue | local: how plugin feedback cases are sent
 #                       (skills/orchestrating-sessions/feedback.md)    default auto
 #   feedback.repo_dir   a clone of the plugin repo you can push to (~ expanded)     default empty
+#   feedback.project_dir  this project's feedback cases (feedback --project; ~ expanded, relative: to the project
+#                       root; keep it out of git)     default empty: the state dir's feedback-projects/<root>
 #   telemetry           local | off: pane presses to the local usage log (usage below)     default off
 #   pending.file        the coordinator's handoff file, relative to the project root, *.md: its entries' history
 #                       and archive (skills/orchestrating-sessions/pending)              default empty (none)
@@ -162,10 +164,10 @@ model_ok() { [[ $1 =~ ^[a-z][a-z0-9.-]*$ && $1 != *fable* ]] && { [ $# = 1 ] || 
 config() {
   local key=${1:-} v ok=
   case $key in
-    tracker|host|key_pattern|approvals.delegate|features.accounts|features.review_inbox|terminal|messages|feedback.mode|feedback.repo_dir|telemetry|pending.file) ;;
+    tracker|host|key_pattern|approvals.delegate|features.accounts|features.review_inbox|terminal|messages|feedback.mode|feedback.repo_dir|feedback.project_dir|telemetry|pending.file) ;;
     plan.enabled|plan.max_parallel|plan.models.design|plan.models.build|plan.models.mechanical|plan.models.review|plan.models.release|plan.models.scan) ;;
     handoff.at.chunk|handoff.at.task|handoff.at.coordinator|handoff.hard_after|handoff.stop_room|compact.window) ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate features.accounts features.review_inbox terminal messages feedback.mode feedback.repo_dir telemetry pending.file plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window)" >&2; return 2 ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate features.accounts features.review_inbox terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
@@ -186,13 +188,14 @@ config() {
     plan.models.*) [[ $v == */* ]] && model_ok "${v%%/*}" "${v#*/}" && ok=1 ;;
     handoff.*|compact.window) [[ $v =~ ^(0|[1-9][0-9]{0,6})$ ]] && ok=1 ;;
     feedback.repo_dir) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [ -d "$v" ] && ok=1 ;;
+    feedback.project_dir) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [[ $v != *$'\n'* ]] && ok=1 ;;
   esac
   [ -n "$ok" ] && { echo "$v"; return 0; }
   local kind=; [ "$key" = terminal ] && kind=terminals; [ "$key" = messages ] && kind=messages
   [ -z "$v" ] || echo "warning: config $key=$v is not valid${kind:+ (no $kind/$v.sh found)}: using the default" >&2
   case $key in
     tracker) echo none ;; host) detect_host ;; key_pattern) ;; approvals.delegate|features.*) echo false ;; terminal) echo plain ;; messages) echo none ;;
-    feedback.mode) echo auto ;; feedback.repo_dir|pending.file) ;; telemetry) echo off ;;
+    feedback.mode) echo auto ;; feedback.repo_dir|feedback.project_dir|pending.file) ;; telemetry) echo off ;;
     plan.enabled) echo true ;; plan.max_parallel) echo 3 ;;
     plan.models.design|plan.models.review) echo opus/xhigh ;; plan.models.build) echo opus/medium ;;
     plan.models.mechanical|plan.models.release) echo sonnet/medium ;; plan.models.scan) echo haiku/low ;;

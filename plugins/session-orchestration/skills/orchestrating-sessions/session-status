@@ -100,7 +100,9 @@
 #        session-status --diff KEY|ID…  that folder's changes since its merge-base with origin/HEAD, committed or
 #                       not: `DIR · vs BASE`, the --stat lines and untracked `?? FILE`s, a blank line, the patch
 #        session-status --compact ID   an idle background session runs /compact (stopped, resumed with it)
-#        session-status --send-when-idle ID TEXT   wait until it isn't busy, then deliver TEXT without forking it
+#        session-status --send-when-idle [--here] ID TEXT   wait until it isn't busy, then deliver TEXT without forking
+#                       it; --here: a session under another account is moved to yours (same id and name), so you can
+#                       SendMessage it next
 #        session-status --coordinator   names of this account's live coordinator sessions (ran --start,
 #                       --changes, --watch or --owner, or opened the pane), newest first, excluding the caller; no
 #                       tracker calls
@@ -377,7 +379,9 @@ if [ "${1:-}" = --start ]; then
     r=(); while IFS= read -r -d '' f; do r+=("$f"); done < <(find "$rd" -maxdepth 1 -type f -name '*.md' ! -name coordinator-handover.md "${since[@]}" -print0 2>/dev/null)
     [ ${#r[@]} != 0 ] || echo '(none)'
     [ ${#r[@]} = 0 ] || mtime_named "${r[@]}" | sort -rn | head -20 | while read -r m f; do
-      printf '%s  %s: %s\n' "$(epochfmt "$m" '%m-%d %H:%M')" "${f##*/}" "$(grep -m1 . "$f" | cut -c1-160)"; done
+      # The last `## ` section too: a log or handoff under the header may be newer than its status line.
+      s=$(grep '^## ' "$f" | tail -1 | cut -c4-80)
+      printf '%s  %s: %s%s\n' "$(epochfmt "$m" '%m-%d %H:%M')" "${f##*/}" "$(grep -m1 . "$f" | cut -c1-160)" "${s:+ · last section: $s}"; done
     [ ${#r[@]} -le 20 ] || echo "(and $(( ${#r[@]} - 20 )) older: ls -t $rd)"
   fi
   printf '\n## Coordination config\n'; c=$("$SELF" --init --check 2>&1) && sed 1d <<<"$c" || echo "$c"
@@ -615,11 +619,11 @@ stop_session() {  # PREFIX ID
   done
   return 1
 }
-# Runs `<prefix> --bg --resume ID TEXT` in DIR, and checks the session went on under its own id (a resume of a
-# running session starts a copy instead).
-resume_with() {  # PREFIX DIR ID TEXT
+# Runs `<prefix> --bg --resume ID TEXT [--name NAME]` in DIR, and checks the session went on under its own id (a
+# resume of a running session starts a copy instead). NAME: keep that name in an account that doesn't know it.
+resume_with() {  # PREFIX DIR ID TEXT [NAME]
   local out
-  out=$(cd "$2" 2>/dev/null || cd "$ROOT"; bash -c "$1 --bg --resume \"\$0\" \"\$1\"" "$3" "$4" 2>&1)
+  out=$(cd "$2" 2>/dev/null || cd "$ROOT"; bash -c "$1 --bg --resume \"\$0\" \"\$1\"${5:+ --name \"\$2\"}" "$3" "$4" "${5:-}" 2>&1)
   grep -q "backgrounded · ${3:0:8}" <<<"$out" && return 0
   echo "resume of ${3:0:8} didn't keep its id: $(tail -1 <<<"$out")"; return 1
 }
@@ -822,6 +826,8 @@ fi
 #    prompt, it says so and exits 3, since a stop would drop that prompt;
 #  - retired (listed, no process): woken by resuming it with TEXT under its own id;
 #  - not listed in any account: resumed with TEXT, only from this project's transcripts and an unambiguous id.
+#  --here: the resume of a session under another account (live and idle, or retired) runs under this account with its
+#    name, so this account's SendMessage reaches it afterwards (a relayed approval goes that way, never in TEXT).
 #    "Another account" needs features.accounts; off, a second account sharing the transcripts refuses this resume
 #    (exit 2): the session may be live there, and a resume would start a copy.
 # A resume of a session holding over SESSION_STATUS_MAX_RESUME (200000) tokens of context is refused (exit 4): a small
@@ -834,8 +840,12 @@ if [ -n "$SEND" ]; then
     c=$(activity_fields "$1" | cut -f4); [ "${c:-0}" -gt "$max" ] || return 1
     echo "\"$2\" (${3:0:8}) holds $c tokens of context, over $max: not resumed for a follow-up. Hand its task to a fresh session: bash $(printf %q "$SELF") --handover $3 -- '<what next>'"
   }
+  here=; [ "${1:-}" != --here ] || { here=1; shift; }
   want=${1:-}; text=${2:-}
-  [ "${#want}" -ge 8 ] && [ -n "$text" ] || { echo "usage: session-status --send-when-idle ID TEXT (ID: 8+ characters)"; exit 2; }
+  [ "${#want}" -ge 8 ] && [ -n "$text" ] || { echo "usage: session-status --send-when-idle [--here] ID TEXT (ID: 8+ characters)"; exit 2; }
+  # The account a resume runs under, and the name it keeps there: --here moves one from another account to this one.
+  to() { if [ -n "$here" ]; then echo claude; else echo "$pre"; fi; }
+  moved() { [ -n "$here" ] && [ "$pre" != claude ]; }
   deadline=$(( SECONDS + ${SESSION_STATUS_WAIT_S:-86400} ))
   while :; do
     if row=$(find_session "$want"); then
@@ -843,8 +853,8 @@ if [ -n "$SEND" ]; then
       read_row id name st pre started cwd kind status pid
       if [ -z "$pid" ]; then
         f=$(transcript_of "$id"); [ -z "$f" ] || ! too_big "$f" "$name" "$id" || exit 4
-        resume_with "$pre" "$cwd" "$id" "$text" || exit 1
-        echo "woke \"$name\" (${id:0:8}, $st) with the text"; exit 0
+        resume_with "$(to)" "$cwd" "$id" "$text" "$(moved && echo "$name")" || exit 1
+        echo "woke \"$name\" (${id:0:8}, $st) with the text$(moved && echo ', moved to this account')"; exit 0
       fi
       [ "$status" = busy ] || { [ -z "$status" ] && [ "$st" = working ]; } || break
     fi
@@ -870,8 +880,14 @@ if [ -n "$SEND" ]; then
     echo "\"$name\" is $status in another account (SendMessage can't reach it): ask the user to answer it: $pre attach ${id:0:8}"; exit 3; }
   f=$(transcript_of "$id"); [ -z "$f" ] || ! too_big "$f" "$name" "$id" || exit 4
   stop_session "$pre" "$id" || { echo "couldn't stop \"$name\""; exit 1; }
-  resume_with "$pre" "$cwd" "$id" "$text" || exit 1
-  echo "delivered to \"$name\" (${id:0:8}, another account): stopped while idle, resumed with the text"; exit 0
+  if ! resume_with "$(to)" "$cwd" "$id" "$text" "$(moved && echo "$name")"; then
+    # A failed move (e.g. the folder isn't trusted here) mustn't leave it stopped: put it back where it ran.
+    moved && resume_with "$pre" "$cwd" "$id" "$text" &&
+      { echo "couldn't move \"$name\" (${id:0:8}) here; resumed it with the text in its own account instead, so SendMessage still can't reach it"; exit 1; }
+    exit 1
+  fi
+  if moved; then echo "moved \"$name\" (${id:0:8}) to this account: stopped while idle, resumed here with the text; SendMessage reaches it now"
+  else echo "delivered to \"$name\" (${id:0:8}, another account): stopped while idle, resumed with the text"; fi; exit 0
 fi
 
 # --handover ID [--] 'WHAT NEXT': a task session too big to resume (--send-when-idle's exit 4) hands its task to a

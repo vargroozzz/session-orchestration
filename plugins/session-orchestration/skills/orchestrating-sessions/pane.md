@@ -42,7 +42,9 @@ shows you (wherever they work, e.g. a plugin session in another repo's worktree,
 under the project root; **all projects** shows every one. A command runs in your folder, not its session's. **Run**
 makes the Bash call in your session with the press as the user's consent, so your hooks, rules, classifier and
 permission prompt still decide; **Copy** and **Dismiss** do what they say. Never run one yourself unasked: it is the
-user's button, like an action. After a Run you get a prompt with the outcome:
+user's button, like an action. A command its session withdrew (it did the action itself, on a relayed approval:
+[approvals.md](approvals.md), Relaying) isn't run: Run drops it and says so. After a Run you get a prompt with the
+outcome:
 - Send it to the session that handed it over, one line. A failure or refusal stays in the box with what happened,
   for another try or Copy.
 - After a handed command updates a plugin, call `reload_plugins` yourself too.

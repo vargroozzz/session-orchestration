@@ -5,18 +5,25 @@
 # Cases: ${XDG_STATE_HOME:-~/.local/state}/session-orchestration/feedback/<category>/YYYY-MM-DD-<slug>.md, category
 # bugfixes | features | refactorings. Each is defer-task's format plus where, found while, plugin, evidence, seen and
 # status lines (feedback.md shows one).
+# Project cases (--project): friction from the project itself (its hosts, sign-ins, docs, scripts), in the same format
+# and layout, in this project's store: config feedback.project_dir (relative: to the project root), else
+# ${XDG_STATE_HOME:-~/.local/state}/session-orchestration/feedback-projects/<project root, encoded>. Never committed,
+# scrubbed or sent: the R&D run turns them into project fixes.
 #
 # Usage: feedback add CATEGORY TITLE --where PATH[:LINE] --found 'ROLE; STEP' --evidence TEXT [--suggested TEXT] [--new]
-#                       writes a case and prints its path. Open cases with the same file in `where` or two title
-#                       words in common are printed instead (exit 3): add a date to one with `feedback seen FILE`,
-#                       or rerun with --new.
+#                     [--project]
+#                       writes a case and prints its path. Open cases (of the same scope) with the same file in
+#                       `where` or two title words in common are printed instead (exit 3): add a date to one with
+#                       `feedback seen FILE`, or rerun with --new.
 #        feedback seen FILE      today's date added to its `seen:` line (a duplicate counts there, not as a new file)
-#        feedback list [--all]   open cases (--all: every case): times seen, status, path, title (tabs), most seen first
-#        feedback count          `N open (M seen ≥2×)`, nothing when none are open
-#        feedback footer         count, at most once a day (the status sweep's footer)
+#        feedback list [--all] [--plugin|--project]   open cases (--all: every case), the plugin's and this project's
+#                                (or one scope): times seen, status, path, title (tabs), most seen first
+#        feedback count [--plugin|--project]   `N open (M seen ≥2×)` per scope (both: `…; project: …`), nothing
+#                                when none are open
+#        feedback footer         both counts, at most once a day (the status sweep's footer)
 #        feedback scrub FILE…    lines that could name the person or their projects (FILE:LINE: why: text); exit 1
 #                                on any hit. The deny list covers every project root your sessions ran in
-#        feedback mark FILE sent URL | dropped
+#        feedback mark FILE sent URL | fixed WHAT | dropped
 #        feedback mode           how cases are applied here: pr | fork-pr | issue | local (config feedback.mode, else
 #                                pr with feedback.repo_dir set, else fork-pr when gh is signed in, else issue)
 #        feedback repo           the plugin's GitHub repo (owner/name), from plugin.json's repository
@@ -31,8 +38,20 @@ LABEL=todo
 die() { echo "$*" >&2; exit 2; }
 field() { sed -n "s/^- $1: //p" "$2" | head -1; }
 title_of() { sed -n '1s/^# //p' "$1"; }
-cases() { find "$DIR" -mindepth 2 -maxdepth 2 -name '*.md' 2>/dev/null | sort; }
-open_cases() { cases | while read -r f; do [ "$(field status "$f")" = open ] && echo "$f"; done; }
+cases() { find "${1:-$DIR}" -mindepth 2 -maxdepth 2 -name '*.md' 2>/dev/null | sort; }   # [STORE]
+open_cases() { cases "${1:-$DIR}" | while read -r f; do [ "$(field status "$f")" = open ] && echo "$f"; done; }
+# This project's store (the header says where).
+pdir() {
+  local r d c; r=$(find_root); d=$(config feedback.project_dir 2>/dev/null)
+  # A git worktree outside the project (no marker up from it): the main checkout's project, so its cases meet.
+  [ -x "$r/.claude/session-status-adapter" ] || [ -f "$r/.claude/coordination.local.json" ] ||
+    ! c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || [ "${c##*/}" != .git ] ||
+    [ "${c%/.git}" = "$r" ] || r=$(cd "${c%/.git}" && find_root)
+  case $d in
+    '') echo "${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/feedback-projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$r")" ;;
+    /*) echo "$d" ;; *) echo "$r/$d" ;;
+  esac
+}
 seen_n() { field seen "$1" | tr ',' '\n' | grep -c .; }
 # Title words for the dedup: 4+ letters, without the ones nearly every case has (the plugin's own names).
 words() { tr 'A-Z' 'a-z' <<<"$1" | tr -cs 'a-z0-9' '\n' | awk 'length >= 4' |
@@ -44,21 +63,22 @@ case ${1:-} in
 add)
   cat=${2:-} title=${3:-}; shift 3 2>/dev/null || die "usage: feedback add CATEGORY TITLE --where … --found … --evidence …"
   case $cat in bugfixes|features|refactorings) ;; *) die "category: bugfixes | features | refactorings" ;; esac
-  where= found= evidence= suggested= new=
+  where= found= evidence= suggested= new= store=$DIR
   while [ $# -gt 0 ]; do
     case $1 in
       --where) where=${2:-} ;; --found) found=${2:-} ;; --evidence) evidence=${2:-} ;; --suggested) suggested=${2:-} ;;
-      --new) new=1; shift; continue ;; *) die "unknown argument: $1" ;;
+      --new) new=1; shift; continue ;; --project) store=$(pdir); shift; continue ;; *) die "unknown argument: $1" ;;
     esac
     [ $# -ge 2 ] || die "$1 needs a value"; shift 2
   done
   [ -n "$title" ] && [ -n "$where" ] && [ -n "$found" ] && [ -n "$evidence" ] || die "title, --where, --found and --evidence are required"
   [ "$(printf '%s\n' "$title" "$where" "$found" "$suggested" | wc -l | tr -d ' ')" = 4 ] || die "title, --where, --found and --suggested are one line each"
-  [[ $where == /* || $where == '~'* ]] && die "--where is a path in the plugin (skills/…/session-status:206), never a project's"
+  [ "$store" != "$DIR" ] || [[ $where != /* && $where != '~'* ]] ||
+    die "--where is a path in the plugin (skills/…/session-status:206), never a project's (project friction: --project)"
   [ "$(grep -c . <<<"$evidence")" -le 3 ] || die "--evidence: at most 3 lines"
   if [ -z "$new" ]; then
     file=${where%%:*} tw=$(words "$title")
-    sim=$(open_cases | while read -r f; do
+    sim=$(open_cases "$store" | while read -r f; do
       wf=$(field where "$f")
       common=$(comm -12 <(words "$(title_of "$f")") <(echo "$tw") | grep -c .)
       # The same place, the same file and a word in common, or two words in common.
@@ -68,14 +88,14 @@ add)
   fi
   slug=$(tr 'A-Z' 'a-z' <<<"$title" | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-50 | sed 's/-$//')
   slug=${slug:-case}   # a title with no ASCII letters or digits
-  f=$DIR/$cat/$TODAY-$slug.md; n=2
-  while [ -e "$f" ]; do f=$DIR/$cat/$TODAY-$slug-$n.md; n=$((n + 1)); done
-  mkdir -p "$DIR/$cat"
+  f=$store/$cat/$TODAY-$slug.md; n=2
+  while [ -e "$f" ]; do f=$store/$cat/$TODAY-$slug-$n.md; n=$((n + 1)); done
+  mkdir -p "$store/$cat" "$DIR" || die "can't create $store/$cat"
   find_root >> "$DIR/.roots"   # scrub's deny list covers it even once its sessions are gone
   { echo "# $title"
     echo "- where: $where"
     echo "- found while: $found"
-    echo "- plugin: $(jq -r .version "$PLUGIN_JSON")"
+    if [ "$store" = "$DIR" ]; then echo "- plugin: $(jq -r .version "$PLUGIN_JSON")"; else echo "- project: $(find_root)"; fi
     echo "- evidence: $(head -1 <<<"$evidence")"; tail -n +2 <<<"$evidence" | sed 's/^/  /'
     [ -z "$suggested" ] || echo "suggested: $suggested"
     echo "- seen: $TODAY"
@@ -87,22 +107,39 @@ seen)
   field seen "$f" | tr -d ' ' | tr ',' '\n' | grep -qxF "$TODAY" && exit 0
   sed -i.bak -E "s/^(- seen: .*)$/\1, $TODAY/" "$f" && rm -f "$f.bak" ;;
 list)
-  if [ "${2:-}" = --all ]; then cases; else open_cases; fi | while read -r f; do
+  shift; all= scope=
+  for a in "$@"; do case $a in --all) all=1 ;; --plugin|--project) scope=$a ;; *) die "usage: feedback list [--all] [--plugin|--project]" ;; esac; done
+  sel() { if [ -n "$all" ]; then cases "$1"; else open_cases "$1"; fi; }
+  { [ "$scope" = --project ] || sel "$DIR"; [ "$scope" = --plugin ] || sel "$(pdir)"; } | while read -r f; do
     printf '%s\t%s\t%s\t%s\n' "$(seen_n "$f")" "$(field status "$f" | cut -d' ' -f1)" "$f" "$(title_of "$f")"
   done | sort -t$'\t' -k1,1nr ;;
 count)
-  n=0 m=0
-  while read -r f; do [ -n "$f" ] || continue; n=$((n + 1)); [ "$(seen_n "$f")" -lt 2 ] || m=$((m + 1)); done <<<"$(open_cases)"
-  [ "$n" = 0 ] || echo "$n open ($m seen ≥2×)" ;;
+  cnt() {
+    local n=0 m=0 f
+    while read -r f; do [ -n "$f" ] || continue; n=$((n + 1)); [ "$(seen_n "$f")" -lt 2 ] || m=$((m + 1)); done <<<"$(open_cases "$1")"
+    [ "$n" = 0 ] || echo "$n open ($m seen ≥2×)"
+  }
+  case ${2:-} in
+    --plugin) cnt "$DIR" ;; --project) cnt "$(pdir)" ;;
+    '') p=$(cnt "$DIR") q=$(cnt "$(pdir)"); [ -z "$q" ] || p="${p:+$p; }project: $q"; [ -z "$p" ] || echo "$p" ;;
+    *) die "usage: feedback count [--plugin|--project]" ;;
+  esac ;;
 footer)
-  stamp=$DIR/.footer-shown
-  [ "$(cat "$stamp" 2>/dev/null)" = "$TODAY" ] && exit 0
-  c=$("$0" count); [ -n "$c" ] || exit 0
-  echo "$TODAY" > "$stamp"
-  echo "plugin feedback: $c — apply? (feedback.md)" ;;
+  # Once a day each: the plugin's count per person, the project's per project (its own store's stamp).
+  due() { [ "$(cat "$1/.footer-shown" 2>/dev/null)" != "$TODAY" ]; }
+  shown() { mkdir -p "$1" && echo "$TODAY" > "$1/.footer-shown"; }
+  P=$(pdir) p= q=
+  ! due "$DIR" || { p=$("$0" count --plugin); [ -z "$p" ] || shown "$DIR"; }
+  ! due "$P" || { q=$("$0" count --project); [ -z "$q" ] || shown "$P"; }
+  [ -n "$p$q" ] || exit 0
+  l=${p:+plugin feedback: $p — apply? (feedback.md)}
+  [ -z "$q" ] || l="${l:+$l · }project feedback: $q, for the next R&D run"
+  echo "$l" ;;
 mark)
-  f=${2:-}; [ -f "$f" ] || die "usage: feedback mark FILE sent URL | dropped"
-  case ${3:-} in sent) [ -n "${4:-}" ] || die "sent needs the URL"; s="sent $4" ;; dropped) s=dropped ;; *) die "sent URL | dropped" ;; esac
+  f=${2:-}; [ -f "$f" ] || die "usage: feedback mark FILE sent URL | fixed WHAT | dropped"
+  case ${3:-} in sent) [ -n "${4:-}" ] || die "sent needs the URL"; s="sent $4" ;; fixed) [ -n "${4:-}" ] || die "fixed needs what changed"; s="fixed $4" ;;
+    dropped) s=dropped ;; *) die "sent URL | fixed WHAT | dropped" ;; esac
+  [[ $s != *$'\n'* ]] || die "one line"
   # awk, not sed: a URL's # or & would be sed syntax.
   S="- status: $s" awk '/^- status: / && !d { print ENVIRON["S"]; d = 1; next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;
 mode)

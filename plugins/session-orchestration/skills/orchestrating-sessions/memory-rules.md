@@ -46,4 +46,5 @@ and swaps the index in with one `mv`, so no worker's append is lost.
 - **An R&D run only measures and proposes** (the `rnd` skill). When the user approves some of its proposals, start a
   fresh followups session for them (`claude --bg -n rnd-<N>-followups`, N the run's number; brief: that run's report
   in the replies folder plus the approved numbers, reporting in `replies/rnd-<N>-followups.md`). Never resume the
-  R&D session for it.
+  R&D session for it. A proposal built from project feedback cases names them: the followups session marks each
+  `feedback mark FILE fixed '<what changed>'` once its fix lands ([feedback.md](feedback.md)).

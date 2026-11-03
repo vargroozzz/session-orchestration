@@ -83,3 +83,11 @@ r=$(jq -r -n --arg q "$q" --arg key "$key" --argjson maxage "$((max_age_h * 3600
        else empty end)] | last // empty' "$f")
 [ -n "$r" ] || reject "no recent message typed by the user, question-box answer or pane click matches the whole quote and names $key in it or in the message it answers"
 echo "$r"
+# A command this session also handed the user for this task (hand_command) is still runnable from the pane: doing the
+# approved action and pressing Run would do it twice. Name each, with how to withdraw it.
+[ -z "${CLAUDE_CODE_SESSION_ID:-}" ] || for c in "$HOME/.cache/session-status/commands/"*.json; do
+  [ -f "$c" ] || continue
+  jq -r --arg s "$CLAUDE_CODE_SESSION_ID" --arg k "$key" 'select(.session == $s and .key == $k)
+    | "you also handed the user this command for \($k): \(.command)\nif the approved action is the same, withdraw it before you act: hand_command with this key and command and withdraw: true"' "$c" 2>/dev/null
+done
+exit 0

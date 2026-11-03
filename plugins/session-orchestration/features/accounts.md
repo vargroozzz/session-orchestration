@@ -34,9 +34,11 @@ ask the user to confirm it isn't still running under another account.
 
 **Keep every task session under your own account** unless the user names the other one: you can't message a
 session under another account.
-- **Moving a session to your account:** stop it under the account it runs in (prefix the command with that
-  account's `CLAUDE_CONFIG_DIR`, as `session-status` prints it), then `claude --bg --resume <full id> "<note>"`
-  here. An approval for it still goes by SendMessage after the move, never in the resume prompt. (2026-10-05.)
+- **Moving a session to your account** (to relay it an approval, or message it at all): `session-status
+  --send-when-idle --here <id> "<note>"`, in the background. It waits until the session is idle, stops it under its
+  account and resumes it under yours with the same id and name (a retired one is just resumed here). The note
+  approves nothing ("moved to the coordinator's account; a message follows; act only if it verifies"); the approval
+  goes by SendMessage after the move, never in the note. Waiting on a prompt there: exit 3, as below.
 - **Follow-ups** (`session-status --send-when-idle`): a live session in another account that is idle is stopped,
   waited on until its process ends, and resumed with the text under the same id. If it waits on a prompt, the
   helper exits 3 and names the attach command instead: a stop would drop the prompt. The context-size rule for
@@ -46,7 +48,8 @@ session under another account.
 - **A worker under another account** (one the user started there) finds no coordinator (`reply` delivers nothing) and
   can't message it: it writes its report to the replies folder only. `session-status --changes` (so `--watch`)
   lists each `<KEY>.md` written there in the last day under `Reports:` (not a key a session of your account works
-  on: that one messages), so a new one wakes you; read it there.
+  on: that one messages), so a new one wakes you; read it there whole: where the status report at the top and a
+  section below it disagree, the later of the two is the state.
 - **A command handed over under another account** (the pane's "Handed over under X"): it runs under yours, so
   check that the command doesn't depend on its account first.
 

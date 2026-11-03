@@ -93,6 +93,33 @@ rm .claude/coordination.local.json; printf '# x\n- broke on ABC-4654 rows\n' > "
 grep -qF ': a task key:' <<<"$("$FB" scrub "$dirty")" || fail "scrub missed the default task key"
 printf '# x\n- Pat saw it fail\n' > "$dirty"
 grep -qF ': names a local name:' <<<"$("$FB" scrub "$dirty")" || fail "scrub missed a part of the name"
+# Project cases: this project's own store, any --where, deduped within it; list, count and footer show both scopes.
+P=$XDG_STATE_HOME/session-orchestration/feedback-projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')
+pc=$("$FB" add features 'Sign-in to the dev host expires hourly' --where /opt/x/login.sh --found 'a task session; deploy' --evidence e --project)
+[[ $pc == "$P/features/$today-sign-in-to-the-dev-host-expires-hourly.md" ]] && grep -qx -- "- project: $(pwd -P)" "$pc" &&
+  ! grep -q '^- plugin:' "$pc" || fail "project add: $pc"
+"$FB" add features 'Sign-in to the dev host expires hourly' --where x --found f --evidence e --project >/dev/null; [ $? = 3 ] || fail "project dedup"
+[ "$("$FB" list --project | cut -f3)" = "$pc" ] && [ "$("$FB" list --plugin | cut -f3)" = "$clean" ] &&
+  [ "$("$FB" list | wc -l | tr -d ' ')" = 2 ] || fail "list scopes: $("$FB" list)"
+[ "$("$FB" count)" = "1 open (0 seen ≥2×); project: 1 open (0 seen ≥2×)" ] || fail "count both: $("$FB" count)"
+rm -f "$D/.footer-shown"
+[ "$("$FB" footer)" = "plugin feedback: 1 open (0 seen ≥2×) — apply? (feedback.md) · project feedback: 1 open (0 seen ≥2×), for the next R&D run" ] ||
+  fail "footer both: $(rm -f "$D/.footer-shown" "$P/.footer-shown"; "$FB" footer)"
+# Each part once a day: the project's stamp is its own, so another project's footer doesn't hide it.
+rm -f "$P/.footer-shown"
+[ "$("$FB" footer)" = "project feedback: 1 open (0 seen ≥2×), for the next R&D run" ] || fail "project footer stamp: $("$FB" footer)"
+[ -z "$("$FB" footer)" ] || fail "project footer twice"
+"$FB" mark "$pc" fixed 'the login doc says to refresh first' && grep -qx -- '- status: fixed the login doc says to refresh first' "$pc" &&
+  [ -z "$("$FB" count --project)" ] && [ "$("$FB" count)" = "1 open (0 seen ≥2×)" ] || fail "mark fixed: $(grep status "$pc")"
+echo '{"feedback": {"project_dir": ".fb"}}' > .claude/coordination.local.json
+q=$("$FB" add bugfixes 'Deploy script needs a flag' --where deploy.sh --found f --evidence e --project)
+[[ $q == "$(pwd -P)/.fb/bugfixes/"* ]] || fail "feedback.project_dir: $q"
+rm .claude/coordination.local.json
+# A git worktree outside the project files into the main checkout's store.
+git commit -q --allow-empty -m x && git worktree add -q "$T/wt-out" 2>/dev/null || fail "worktree setup"
+w=$(cd "$T/wt-out" && "$FB" add bugfixes 'Worktree case' --where x --found f --evidence e --project)
+[[ $w == "$P/bugfixes/"* ]] || fail "worktree outside the project: $w"
+
 # A case added in another project keeps that project on the deny list once its sessions are gone.
 mkdir -p "$T/other-proj/.claude" && echo '{}' > "$T/other-proj/.claude/coordination.local.json"
 (cd "$T/other-proj" && "$FB" add features 'Привіт' --where lib.sh --found f --evidence e --new) | grep -q -- '-case\.md$' || fail "empty slug"

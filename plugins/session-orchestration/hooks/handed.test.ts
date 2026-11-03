@@ -37,6 +37,12 @@ test('hand_command writes the command for the pane, with who handed it', async (
     wrote.push({ path: e.path, text: e.text })
     return { value: undefined }
   })
+  on('fs.read', async (_, e) => ({ value: wrote.find(w => w.path === e.path)?.text ?? '' }))
+  const rm: string[] = []
+  on('process.run', async (_, e) => {
+    if (e.argv[0] === 'rm') rm.push(String(e.argv[2]))
+    return { value: ok }
+  })
   const bad = await $.tool.call({ tool: 'mcp__session-orchestration__hand_command', key: 'PROJ-1', command: 'a\nb', what: 'x' })
   expect(bad.deny).toContain('one line')
   const r = await $.tool.call({ tool: 'mcp__session-orchestration__hand_command', key: 'PROJ-1', command: 'plugin-release rnd-x', what: 'Releases the plugin' })
@@ -46,6 +52,13 @@ test('hand_command writes the command for the pane, with who handed it', async (
   expect(JSON.parse(wrote[0]?.text ?? '')).toEqual({
     id, key: 'PROJ-1', session: 'sess-1', cwd: '/w/tree', account: '/h/.claude-work', command: 'plugin-release rnd-x', what: 'Releases the plugin', at: 5000,
   })
+  // withdraw: its own file goes; another key, or a command never handed, removes nothing.
+  const call = (key: string, command: string) => $.tool.call({ tool: 'mcp__session-orchestration__hand_command', key, command, withdraw: true })
+  expect(String((await call('PROJ-2', 'plugin-release rnd-x')).result)).toContain('Nothing to withdraw')
+  expect(String((await call('PROJ-1', 'other')).result)).toContain('Nothing to withdraw')
+  expect(rm).toEqual([])
+  expect(String((await call('PROJ-1', 'plugin-release rnd-x')).result)).toContain(`Withdrawn (id ${id})`)
+  expect(rm).toEqual([`${DIR}/${id}.json`])
 })
 
 // The pane open, with these command files in DIR; records Bash calls, removals and prompts.
@@ -59,7 +72,7 @@ async function pane($: Engine, on: On, files: object[], bash: () => ToolCallResu
     return { value: { ...ok, stdout: out } }
   })
   on('ui.open', async () => ({ value: { isPlaced: true } }))
-  on('fs.exists', async (_, e) => ({ value: e.path === DIR }))
+  on('fs.exists', async (_, e) => ({ value: e.path === DIR || files.some(f => e.path === `${DIR}/${(f as { id?: string }).id}.json`) }))
   on('fs.list', async () => ({ value: files.map((f, i) => ({ name: `${(f as { id?: string }).id ?? i}.json`, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }))
   on('fs.read', async (_, e) => ({ value: JSON.stringify(files.find(f => e.path.endsWith(`/${(f as { id?: string }).id}.json`)) ?? {}) }))
   on('tool.call', { tool: 'Bash' }, async (_, e) => {
@@ -101,6 +114,19 @@ test('a command from a session this pane runs shows wherever it works, saying wh
   expect(await ui.find({ type: 'Text', text: '! echo here' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'handed over from /w; it runs in /w' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '! echo fm' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a command its session withdrew (its file gone) is not run when Run is pressed before the next read', async ($, on) => {
+  const h = { id: '9'.repeat(16), key: 'PROJ-4', session: 'sess-4', cwd: '/w', account: '', command: 'teams-send msg.txt', what: 'Posts the reply', at: 9000 }
+  const files: object[] = [h]
+  const { ui, calls, prompts } = await pane($, on, files, () => ({ result: '' }))
+  expect(await ui.find({ type: 'Text', text: '! teams-send msg.txt' })).toBeDefined()
+  files.length = 0 // the session sent it itself on a relayed approval and removed its file
+  await ui.press({ key: `hrun-${h.id}` })
+  expect(calls).toEqual([])
+  expect(prompts).toEqual([])
+  expect(await ui.find({ type: 'Text', text: '! teams-send msg.txt' })).toBeUndefined()
   await ui.unmount()
 })
 

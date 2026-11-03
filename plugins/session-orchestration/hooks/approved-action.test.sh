@@ -30,6 +30,7 @@ typed() { jq -nc --arg ts "$2" --arg t "$1" '{type: "user", origin: {kind: "huma
   typed "yes, post the PROJ-12 comment" "$now"
   typed "yes, approve PROJ-13" "$now"
   typed "yes, request changes on PROJ-14" "$now"
+  typed "yes, merge PROJ-15 (app#305)" "$now"
 } > "$proj/$cid.jsonl"
 export CLAUDE_CODE_SESSION_ATTENDED=0 # unattended (a --bg session) unless a check says otherwise
 printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
@@ -61,11 +62,12 @@ w=$tmp/worker.jsonl
   relay "yes, post the PROJ-12 comment" "post comment $tmp/body.txt on org/app#302 (sha256 $sha) for PROJ-12"
   relay "yes, approve PROJ-13" "approve org/app#303 (PROJ-13)"
   relay "yes, request changes on PROJ-14" "post request-changes review $tmp/body.txt on org/app#304 (sha256 $sha) for PROJ-14"
+  relay "yes, merge PROJ-15 (app#305)" "merge app#305 (PROJ-15)"
 } > "$w"
 
 run() { # $1 command → allow | deny | pass | blocked (exit 2)
   local out rc
-  out=$(jq -nc --arg c "$1" --arg cwd "$root" --arg tp "$w" '{tool_input: {command: $c}, cwd: $cwd, transcript_path: $tp}' |
+  out=$(jq -nc --arg c "$1" --arg cwd "$root" --arg tp "$w" --arg s "${SID:-}" '{tool_input: {command: $c}, cwd: $cwd, transcript_path: $tp, session_id: $s}' |
     (cd "$root" && HOME=$home CLAUDE_CONFIG_DIR=$home/.claude PATH=$tmp/bin:$PATH bash "$here/approved-action.sh") 2>/dev/null) && rc=0 || rc=$?
   [ "$rc" = 2 ] && { echo blocked; return; }
   [ -n "$out" ] && jq -r .hookSpecificOutput.permissionDecision <<<"$out" || echo pass
@@ -335,4 +337,12 @@ mkdir -p "$tmp/broken/hooks" && cp "$here/approved-action.sh" "$tmp/broken/hooks
 out=$(jq -nc --arg c "$bb pr merge 271 --repo app" --arg cwd "$root" --arg tp "$w" '{tool_input: {command: $c}, cwd: $cwd, transcript_path: $tp}' |
   (cd "$root" && HOME=$home PATH=$tmp/bin:$PATH bash "$tmp/broken/hooks/approved-action.sh") 2>/dev/null) || true
 [ "$(jq -r .hookSpecificOutput.permissionDecision <<<"$out" 2>/dev/null)" != allow ] || { echo "FAIL: allowed without verify-approval.sh"; exit 1; }
+# The same command, also handed to the user by this session: allowing it withdraws that one; another command or
+# another session's stays.
+hd=$home/.cache/session-status/commands; mkdir -p "$hd"; m="$bb pr merge 305 --repo app"
+jq -nc --arg c "$m" '{session: "w1", key: "PROJ-15", command: $c}' > "$hd/a.json"
+jq -nc --arg c "$m" '{session: "w2", key: "PROJ-15", command: $c}' > "$hd/b.json"
+jq -nc '{session: "w1", key: "PROJ-15", command: "echo other"}' > "$hd/c.json"
+SID=w1 check "$m" allow "approved merge, also handed over"
+[ ! -e "$hd/a.json" ] && [ -e "$hd/b.json" ] && [ -e "$hd/c.json" ] || { echo "FAIL: handed command withdrawal: $(ls "$hd")"; exit 1; }
 echo ok

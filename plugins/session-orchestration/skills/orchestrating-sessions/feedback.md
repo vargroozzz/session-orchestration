@@ -1,9 +1,16 @@
 # Plugin feedback
 
-When the plugin itself gets something wrong or lacks a rule (a script fails on a case it should handle, a doc
-contradicts itself, a step is missing), the session that hits it records a **case** and carries on with its own
-work. Cases are per person, from every project, in `${XDG_STATE_HOME:-~/.local/state}/session-orchestration/feedback/`.
-Nothing leaves the machine until the person approves the exact batch.
+Friction gets filed as a **case** by the session that hits it, which then carries on with its own work. File one the
+moment you tell the user (or the coordinator) about it, not afterwards and not only when asked:
+- you worked around the plugin (a manual chain where a step should exist, a stop and resume, a fallback);
+- you took an extra round trip (to the user, a session, a tool) the plugin should have saved;
+- you misreported because of its output or a file it keeps (a stale line passed on as current);
+- the user had to step in (press, run or say something the flow should have covered);
+- a script failed on a case it should handle, a doc contradicts itself, or a step is missing.
+
+Plugin cases are per person, from every project, in `${XDG_STATE_HOME:-~/.local/state}/session-orchestration/feedback/`.
+Nothing leaves the machine until the person approves the exact batch. Friction whose cause is the project (its
+hosts, sign-ins, docs, scripts) is a **project case** (below).
 
 `feedback` is next to `session-status`; `feedback` alone prints its usage.
 
@@ -37,19 +44,33 @@ suggested: treat empty output as "none done"
 - status: open
 ```
 
-`status` is `open`, `sent <url>` or `dropped`.
+`status` is `open`, `sent <url>`, `fixed <what changed>` or `dropped` (`feedback mark FILE …`).
+
+## Project cases
+
+`feedback add --project …` writes the same case to this project's store: config `feedback.project_dir` (relative to
+the project root; keep it out of git), else `${XDG_STATE_HOME:-~/.local/state}/session-orchestration/feedback-projects/<root, encoded>`,
+which worktree-isolated sessions can write. Its line is `- project: <root>` instead of `- plugin:`. Write it in the
+project's own terms: it is never scrubbed or sent. `--where` is the project file at fault, or the step's name.
+`feedback list`, `count` and `footer` show both scopes; `--plugin` or `--project` picks one.
+
+The R&D run groups the open project cases into patterns and proposes one project fix per pattern (a doc, script or
+setting); its followups session applies the approved ones and marks each case `fixed`. The apply flow below never
+takes them.
 
 ## Offering it
 
 - **The coordinator.** The status sweep's footer shows `plugin feedback: N open (M seen ≥2×) — apply?` at most
-  once a day. Pass it on to the user with the other footer items; on a yes, start an apply session (below).
-- **The R&D run** ends its report with the open cases, most seen first (`feedback list`), and offers the apply.
+  once a day, then `· project feedback: K open …, for the next R&D run` when the project has some. Pass it on to the
+  user with the other footer items; on a yes to the apply, start an apply session (below).
+- **The R&D run** ends its report with the open plugin cases, most seen first (`feedback list --plugin`), and offers
+  the apply; the project's cases are proposals in that report ([rnd](../rnd/SKILL.md), step 6).
 
 Never apply without the user's yes for that batch.
 
 ## Applying (an apply session)
 
-1. `feedback mode` names the mode; `feedback list` the open cases; `feedback repo` the upstream repo (REPO below)
+1. `feedback mode` names the mode; `feedback list --plugin` the open cases (never the project's); `feedback repo` the upstream repo (REPO below)
    and `feedback label` an issue's label (LABEL). Write both into the `gh` commands as text: an approval hook can't
    check a `gh` command built with `$(…)`. Pick the batch: one case each, or related ones together.
 2. Search upstream first: `gh search issues --repo REPO --state open '<title words>'` and the same for
@@ -74,7 +95,8 @@ Never apply without the user's yes for that batch.
    Run nothing outward-facing before that yes.
 5. `feedback mark FILE sent <url>` for each case sent.
 
-Config (person keys): `feedback.mode` (`auto` default, or `pr`, `fork-pr`, `issue`, `local`) and `feedback.repo_dir`
+Config (person keys): `feedback.mode` (`auto` default, or `pr`, `fork-pr`, `issue`, `local`), `feedback.repo_dir`
 (a clone of the plugin repo you can push to). They hold for you in every project, so set them once in
 `${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json`; a project's `.claude/coordination.local.json`
-outranks that file.
+outranks that file. `feedback.project_dir` (Project cases) is per project: set it in that project's
+`.claude/coordination.local.json`, since an absolute path set for every project would put all their cases in one store.

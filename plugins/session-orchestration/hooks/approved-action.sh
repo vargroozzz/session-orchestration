@@ -46,6 +46,7 @@ ask_for() {
 }
 
 cmd=$(jq -r '.tool_input.command // ""' <<<"$input") || exit 1
+raw=$cmd sid=$(jq -r '.session_id // ""' <<<"$input") || exit 1
 cwd=$(jq -r '.cwd // ""' <<<"$input") tp=$(jq -r '.transcript_path // ""' <<<"$input") || exit 1
 # Text given to a command is text, not calls, only when every command in sight is one that never runs what it's
 # given and the call writes no file (no > but to /dev/null or &N; a file written could be run by what comes next:
@@ -368,7 +369,13 @@ while IFS= read -r r; do
   case "$v" in
     verified*) [ ! -e "$used" ] || { tried="this relay was used once already: check whether that run landed before asking again"; continue; }
                mkdir -p "${used%/*}" && touch "$used" || exit 1
-               decide allow "Relayed approval for $action (good for this one run): $v" ;;
+               # This exact command, also handed to the user (hand_command): withdrawn, or the pane's Run posts it again.
+               w=
+               [ -z "$sid" ] || for c in ~/.cache/session-status/commands/*.json; do
+                 [ -f "$c" ] && jq -e --arg s "$sid" --arg c "$raw" '.session == $s and .command == $c' "$c" >/dev/null 2>&1 || continue
+                 rm -f "$c" && w=" (the same command you handed the user is withdrawn from the pane)"
+               done
+               decide allow "Relayed approval for $action (good for this one run)$w: $v" ;;
   esac
   tried=${v:-verify-approval.sh failed}
 done < <(awk '{ l[NR] = $0 } END { for (i = NR; i > 0; i--) print l[i] }' <<<"$relays")   # newest first (no tail -r on Linux)

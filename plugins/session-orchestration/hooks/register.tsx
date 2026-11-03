@@ -724,6 +724,7 @@ const HAND_SCHEMA = {
     key: { type: 'string', description: 'Your task key, e.g. PROJ-123 (no ticket: your 3-5 word task name joined by -)' },
     command: { type: 'string', maxLength: COMMAND_MAX, description: 'The command, one line, exactly as the user would type it after `!`, e.g. make release' },
     what: { type: 'string', maxLength: 200, description: 'One line on what it does and why you can\'t run it, e.g. "Pushes main and publishes the release"' },
+    withdraw: { type: 'boolean', description: 'true: take back the command you handed over with this key and command (you are doing it yourself, e.g. on a relayed approval), so the pane\'s Run can\'t do it again' },
   },
   required: ['key', 'command', 'what'],
 }
@@ -918,7 +919,9 @@ async function dropHanded($: EngineInterface, h: Handed) {
   await syncStatus($)
 }
 // Run: the Bash call in this session, with the press as consent. Succeeded: the file goes; refused or failed: it
-// stays with the outcome, for another Run or Copy. One Run per command at a time.
+// stays with the outcome, for another Run or Copy. One Run per command at a time. A file gone since the last read
+// was withdrawn by its session (it did the action itself, on a relayed approval) or run from another pane: not run,
+// so nothing is done twice.
 async function runHanded($: EngineInterface, h: Handed) {
   let free = false
   await update($, handed, l => l.map((x): Handed => {
@@ -927,6 +930,11 @@ async function runHanded($: EngineInterface, h: Handed) {
     return { ...x, running: true }
   }))
   if (!free) return
+  if (!(await $.fs.exists(`${await handedDir($)}/${h.id}.json`).catch(() => true))) {
+    const at = new Date(await $.clock.now()).toTimeString().slice(0, 5)
+    await update($, handedResult, () => ({ label: `${h.key}: ${h.what}`, ok: false, line: 'not run: it is gone (its session withdrew it, or another pane ran it)', at }))
+    return dropHanded($, h)
+  }
   let ok = false, line = ''
   try {
     const r = await $.tool.call({ tool: 'Bash', command: h.command, description: h.what, timeout: 600_000, consent: runConsent(h) })
@@ -1204,10 +1212,19 @@ export const register: Register = on => {
 
   // A session's `!` command for the user, into HANDED_DIR for the coordinator pane (any session, any account).
   on('tool.call', { tool: 'mcp__session-orchestration__hand_command' }, async ($, e) => {
-    const { key, command, what } = e
+    const { key, command, what, withdraw } = e
+    const session = await $.session.id()
+    if (withdraw === true) {
+      // Only this session's own file: the id is its session and the command.
+      const id = await handedId(session, String(command))
+      const file = `${await handedDir($)}/${id}.json`
+      const h = await $.fs.read(file).then(parseHanded, () => undefined)
+      if (!h || h.session !== session || h.key !== key) return { result: `Nothing to withdraw: you have no handed command "${String(command)}" under ${String(key)}.` }
+      await $.process.run(['rm', '-f', file])
+      return { result: `Withdrawn (id ${id}): the pane no longer offers it.` }
+    }
     const bad = handedProblem(key, command, what)
     if (bad) return { deny: `hand_command: ${bad}.` }
-    const session = await $.session.id()
     const h: Handed = {
       id: await handedId(session, String(command)), key: String(key), session, cwd: await $.session.cwd(),
       account: await accountOf($), command: String(command), what: String(what), at: await $.clock.now(),

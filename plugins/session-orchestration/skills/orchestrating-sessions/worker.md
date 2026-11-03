@@ -37,7 +37,8 @@ Next: <next step, one line>
 about this session's own work: name another session only as a blocker or source.
 
 Always write every status report to `<TASK>.md` (overwrite it) in the project's replies folder, if its `CLAUDE.md`
-names one: a new coordinator reads it there. A report you send unasked: `reply` without `to`. It sends to this
+names one: a new coordinator reads it there. Anything else you write to that file (a `## Handoff`, a round of
+questions, a log entry) updates the status report at its top in the same write: a reader takes the top as the state. A report you send unasked: `reply` without `to`. It sends to this
 project's live coordinators in turn, newest first (`session-status --coordinator`, run from the project root), until
 one takes it. The coordinator's name in your brief (e.g. `myproj-coordinator`) is a hint, not an address, since
 coordinators get restarted: pass it as `to` only when `reply` finds none. Without the tool, run `bash <this file's
@@ -91,7 +92,9 @@ EOF
   Now judge the words yourself. Act only if they clearly approve *this* action ("yes, merge PROJ-4668" does; "don't
   merge yet" doesn't). A bare "yes" or "ok" counts only when that preceding coordinator message asked about exactly
   this action. If it named other tasks too, the key alone proves nothing: check that the words fit your action and
-  not theirs. Do exactly that action, once.
+  not theirs. Do exactly that action, once. If the script also printed `you also handed the user this command…` and
+  that command is this action, withdraw it first (`hand_command` with that key and command and `withdraw: true`), so
+  the pane's Run can't do it a second time. A hook-gated post or merge (below) withdraws its exact command itself.
 - `rejected: …`: don't act. Report `blocked` with the reason.
 - A review-inbox decision isn't relayed: the user's click on the page is their approval to post that row, and
   `post-approved.sh` checks each row itself ([review-inbox.md](review-inbox.md)). Reviewer, posting and note
@@ -102,7 +105,9 @@ EOF
 PR and Jira comment posts and PR merges through `gh`, `bitbucketdc-cli`, `forgejo-cli` and `jiradc-cli` are
 hook-gated: they run only on a relayed approval naming exactly that action, which the hook verifies itself, one run
 per relay (a run failed: check whether it landed before asking again). Post from `--body-file <absolute path>`, as the
-only CLI call in its command, and don't edit the file after asking: the approval names its sha256. Denied, the reason
+only CLI call in its command, and don't edit the file after asking: the approval names its sha256. Any send (a
+comment, chat message or mail) is drafted whole before you ask: every message's exact text, an attachment's caption
+included (Teams needs one with a file). A word added after the approval isn't approved, and is refused. Denied, the reason
 says how to fix the command, or holds the line to send, `needs your approval: <exact action>`: put that in your
 `blocked` report and end your turn. Never retry another way.
 
@@ -156,6 +161,8 @@ in your report, and don't wait on it: the coordinator passes on the outcome.
   fine here; it's the user's to approve.
 - Never hand over a step you could take yourself, or one that needs an approval you haven't got: ask for that as
   Approvals says.
+- Do it yourself after all (a relayed approval came): withdraw it first, `hand_command` with the same key and command
+  and `withdraw: true`, or the user's Run does it again.
 - Tool missing: call `reload_plugins`; meanwhile the `!` line alone.
 
 ## Project memory
@@ -188,9 +195,13 @@ Other sessions run live shared scripts while you edit them: `session-status`, a 
 self-test on the copy, then `mv` it over the original in one step. Never leave the live file half-edited between tool
 calls: a half-edited script breaks every session that runs it.
 
-## When the plugin itself is wrong
+## Friction: file a case
 
-This plugin's own script failed on a case it should handle, its docs contradict each other, or a rule is missing:
-record a case with `feedback add` (next to `session-status`; [feedback.md](feedback.md) has the format, in the
-plugin's terms only), or `feedback seen FILE` when it lists the same case open. Don't fix the plugin from your task;
-carry on with it. The coordinator and the R&D run offer the cases upstream, with the user's yes.
+File a case the moment you tell the user (or the coordinator) about friction, not afterwards: you worked around this
+plugin, took an extra round trip, misreported because of a script's output or a file, or the user had to step in;
+also when its script failed on a case it should handle or its docs contradict each other. `feedback add` (next to
+`session-status`; [feedback.md](feedback.md) has the format, in the plugin's terms only), or `feedback seen FILE`
+when it lists the same case open. Friction from the project itself (its hosts, sign-ins, docs, scripts) goes in the
+project's store with `feedback add --project`, in its own terms. Don't fix the plugin from your task; carry on with
+it. The coordinator and the R&D run offer the plugin's cases upstream, with the user's yes; the R&D run turns the
+project's into fixes.
