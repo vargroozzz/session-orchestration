@@ -31,6 +31,7 @@ watcher.)
 3. When `--start` finishes (its completion notice; don't poll it), read its output: the status, the handoff file,
    the last handover note, the replies written since, and one line per enabled feature. Do each feature line's start
    step and whatever the project's coordinator doc adds. Prune the handoff file against the status (Handoff file).
+   An `## Ended while the background service was off` section gets one ask (resuming.md, After a restart).
    Read a reply whole only when its header line or its `last section` needs you. Where the two disagree, read it whole
    and take the later of the two (dates, the `Done:` line) as the state: a worker may have added a section without
    updating the top, or finished without removing an old section.

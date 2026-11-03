@@ -77,7 +77,10 @@
 #        session-status ARG…         other args go to the adapter's `tasks`
 #        session-status --start [args]   a coordinator's Start in one run: the status, the handoff file, the last
 #                       handover note, the replies written since it (else in the last day) with their first lines,
-#                       and the coordination config with each enabled feature's start step
+#                       and the coordination config with each enabled feature's start step; when there are any, the
+#                       sessions that ended while the background service was off (or failed) with a task still open
+#        session-status --resume-ended [--pause SECS] ID…   resume those one at a time, SECS (60) apart, each checked
+#                       against the live list first
 #        session-status --changes [args]   only lines changed since the previous --changes run
 #        session-status --watch [--every SECS] [args]   block until --changes reports something at two polls in a
 #                       row (or fails 3 in a row), print it and exit; checks every SECS (default 1800). Run it in
@@ -376,11 +379,47 @@ replies_path() {
 # sweep), the handoff file (the adapter's pending), the last handover note, the replies written since that note (else
 # in the last day; 20 at most, newest first, each with its first line) and the coordination config (setup's check:
 # the config in effect, its warnings, each enabled feature's start step). Exits with the status's code.
+# --start and --resume-ended (before the sweep's helpers): a session that ended while the background service was off.
+# ended_transcript ID: its transcript, in any project folder (one started in a worktree has its own).
+ended_transcript() { ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl 2>/dev/null | head -1; }
+# ended_free ALL ID NAME: none of ALL (list_sessions --all) took ID's place: no other session has NAME unless it failed
+# too (a copy resumed by hand, live or retired since), and no transcript written after ID's, in its folder or the
+# root's, says in its first prompt that it supersedes ID (--handover's line).
+ended_free() {
+  local f g re="Supersedes: ${2:0:8}|[Yy]ou replace (session )?${2:0:8}"
+  ! awk -F'\t' -v id="$2" -v n="$3" '$1 != id && $2 == n && $3 != "failed" { f = 1 } END { exit !f }' <<<"$1" || return 1
+  f=$(ended_transcript "$2"); [ -n "$f" ] || return 0
+  find "$(dirname "$f")" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$ENC" -maxdepth 1 -name '*.jsonl' -newer "$f" -exec grep -lE "$re" {} + 2>/dev/null |
+    sort -u | while read -r g; do first_prompt "$g" 50 | grep -qE "$re" && echo x; done | grep -q . && return 1
+  return 0
+}
 if [ "${1:-}" = --start ]; then
   shift; rd=$(replies_path); h=${rd:+$rd/coordinator-handover.md}
-  echo '## Status'; "$SELF" "$@"; rc=$?
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  echo '## Status'; "$SELF" "$@" | tee "$TMP/rows"; rc=${PIPESTATUS[0]}
   pf=$(config pending.file 2>/dev/null); printf '\n## Handoff file%s\n' "${pf:+ ($pf)}"
-  "$SELF" --pending || echo '(none: the adapter gives no pending text)'
+  prc=0; pend=$("$SELF" --pending) || prc=$?; [ -z "$pend" ] || printf '%s\n' "$pend"
+  [ "$prc" = 0 ] || echo '(none: the adapter gives no pending text)'
+  # Sessions of this project that ended while the background service was off, or crashed (`claude agents` shows both
+  # as state failed, no process), and still have an open task: a status row whose session column is that closed
+  # session, or its key (first prompt, else name) or short id in the handoff file; ended_free. Shown only when there
+  # are any, or the listing failed; --resume-ended resumes them.
+  KEYRE=$(key_re "$(adapter_path "$ROOT")")
+  all=$(list_sessions --all)
+  ended=$(awk -F'\t' -v r="$ROOT" '$3 == "failed" && $9 == "" && ($6 == r || index($6, r "/") == 1) { print $1 "\t" $2 }' <<<"$all" |
+    while IFS=$'\t' read -r id name; do
+      why=$(grep -F "| sess:${id:0:8} closed " "$TMP/rows" | awk '{ print $1 }' | paste -sd, -); why=${why:+status row $why}
+      f=$(ended_transcript "$id") k=; [ -z "$f" ] || k=$(first_key "$(first_prompt "$f" 50)")
+      [ -n "$k" ] || k=$(grep -oE -m1 "$KEYRE" <<<"$name" | head -1)
+      if [ -z "$why" ] && { { [ -n "$k" ] && grep -qE "(^|[^A-Za-z0-9])$k([^0-9]|$)" <<<"$pend"; } || grep -qF "${id:0:8}" <<<"$pend"; }; then
+        why="handoff file${k:+ ($k)}"
+      fi
+      [ -n "$why" ] && ended_free "$all" "$id" "$name" || continue
+      printf '  "%s" (%s) · %s\n' "$name" "${id:0:8}" "$why"; printf '%s ' "${id:0:8}" >> "$TMP/ids"
+    done)
+  [ ! -e "$TMP/ask.failed" ] || ended="  (couldn't list an account's sessions: ended ones there are unknown; run --start again)${ended:+$'\n'$ended}"
+  [ -z "$ended" ] || printf '\n## Ended while the background service was off (or failed), task still open\n%s\n' "$ended"
+  [ ! -s "$TMP/ids" ] || echo "Resume them one at a time, after one ask (approvals.md): session-status --resume-ended $(sed 's/ $//' "$TMP/ids")"
   if [ -n "$h" ] && [ -f "$h" ]; then printf '\n## Handover (%s, written %s)\n' "$h" "$(epochfmt "$(mtime "$h")" '%m-%d %H:%M')"; cat "$h"
   else printf '\n## Handover\n(none%s)\n' "${h:+: no $h}"; fi
   if [ -z "$rd" ]; then printf '\n## Replies\n(none: the CLAUDE.md section names no replies folder)\n'
@@ -397,6 +436,38 @@ if [ "${1:-}" = --start ]; then
     [ ${#r[@]} -le 20 ] || echo "(and $(( ${#r[@]} - 20 )) older: ls -t $rd)"
   fi
   printf '\n## Coordination config\n'; c=$("$SELF" --init --check 2>&1) && sed 1d <<<"$c" || echo "$c"
+  exit "$rc"
+fi
+
+# --resume-ended [--pause SECS] ID…: resumes --start's ended sessions one at a time, SECS (60) apart so they don't all
+# spend their first tokens at once. Each is checked against a fresh listing just before its resume (after the pause):
+# resumed only while it is still failed with no process and ended_free (a duplicate otherwise). The resume itself is
+# --send-when-idle's (its own id and account; over 200K of context refused with the --handover command, exit 4).
+# Exit: 0 all resumed, else the last problem's code (1 a listing or resume failed, 2 unknown, 3 skipped: not ended
+# now or taken, 4 too big); each one not resumed says why.
+if [ "${1:-}" = --resume-ended ]; then
+  shift; pause=60; [ "${1:-}" != --pause ] || { pause=${2:-}; shift 2 || shift; }
+  [[ $pause =~ ^[0-9]+$ && $# -gt 0 ]] || { echo "usage: session-status --resume-ended [--pause SECS] ID… (ID: 8+ characters)"; exit 2; }
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  text='The background service stopped while you were working (a restart or a crash), and this resumes you. Check where you left off (your worktree, your last steps) and carry on with your task; nothing else is approved by this message.'
+  # still_ended WANT: sets id and name, or says why not and sets rc.
+  still_ended() {
+    local all st pid
+    [ "${#1}" -ge 8 ] || { echo "$1: an id needs 8+ characters: not resumed"; rc=2; return 1; }
+    rm -f "$TMP/ask.failed"; all=$(list_sessions --all)
+    [ ! -e "$TMP/ask.failed" ] || { echo "$1: couldn't list the sessions: not resumed"; rc=1; return 1; }
+    IFS=$'\037' read -r id name st _ _ _ _ _ pid <<<"$(awk -F'\t' -v w="$1" 'index($1, w) == 1' <<<"$all" | head -1 | tr '\t' '\037')"
+    [ -n "$id" ] || { echo "$1: not listed in any account: not resumed"; rc=2; return 1; }
+    [ "$st" = failed ] && [ -z "$pid" ] || { echo "\"$name\" (${id:0:8}) is $st now, not ended: not resumed"; rc=3; return 1; }
+    ended_free "$all" "$id" "$name" ||
+      { echo "\"$name\" (${id:0:8}): another session has that name or supersedes it: not resumed"; rc=3; return 1; }
+  }
+  rc=0 did=
+  for want; do
+    still_ended "$want" || continue
+    if [ -n "$did" ]; then sleep "$pause"; still_ended "$want" || continue; fi
+    did=1; "$SELF" --send-when-idle "$id" "$text" || rc=$?
+  done
   exit "$rc"
 fi
 

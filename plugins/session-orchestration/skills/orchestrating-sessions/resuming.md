@@ -10,6 +10,7 @@ the project root, after confirming the session owns the task (`session-status --
 | Session is live | `SendMessage` to its name |
 | Session was stopped with `claude stop` | `claude attach <id>` (its conversation is kept) |
 | Session is closed and not listed in `claude agents --json` | `claude --bg --resume <session-id> '<task>'` (single quotes). **Check the list first.** Resuming a session that's still listed starts a duplicate |
+| Sessions ended while the background service was off (a reboot) or crashed | `session-status --resume-ended ID…`, after the one ask ([below](#after-a-restart)) |
 | The user must answer a prompt or approve a plan | Tell them: `claude attach <id>` |
 | Finished session | `claude stop <id>` (the user's go first; a session replaced through `--handover` is stopped without asking, below) |
 | Task session too big to resume (over 200K, exit 4) | `session-status --handover <id> -- '<what next>'` (below) |
@@ -50,6 +51,24 @@ state is in `replies/<KEY>.md`, and a stopped session can be resumed. Every othe
 
 Only when the old context is really needed: `claude --bg --resume <id> --autocompact 200000 '<note>'`. A
 SendMessage to a live session is fine: nothing is re-read from cold.
+
+## After a restart
+
+A reboot or a crash of the background service ends every background session; `claude agents` shows them as
+`failed` ("ended while the background service was off"). `--start` lists the ones that still have an open task (they
+own a status row, or the handoff file names their key or short id) under `## Ended while the background service was
+off (or failed), task still open`, with a `session-status --resume-ended ID…` line. Don't resume them one by one:
+1. If the daemon isn't running (`claude daemon status`), start it first ([below](#reviving-a-retired-session), step 1).
+2. Put one `ask_approval` to the user for the whole list: key `resume-after-restart`, the question naming each
+   session, options "Yes, resume all N" (recommended) and "No, leave them" ([approvals.md](approvals.md#asking)).
+   Drop from the list any session the user said earlier to leave, or whose task you know moved on.
+3. On a yes, run that `--resume-ended` line with Bash `run_in_background: true` (it pauses 60s between resumes;
+   `--pause SECS` changes that). Before each resume it re-reads the list and skips a session that isn't `failed`
+   any more or whose name a live session has: a resume there would start a duplicate. One over 200K is refused
+   with its `--handover` command: hand those over instead. Its note approves nothing; a relay still goes as a
+   SendMessage after.
+4. On a no, leave them: they stay listed at each Start while their task is open. Ask again only when the user brings
+   it up or the list changes.
 
 ## Reviving a retired session
 

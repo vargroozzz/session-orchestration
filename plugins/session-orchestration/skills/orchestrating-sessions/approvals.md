@@ -61,6 +61,10 @@ gave you in one of the ways below, naming the task key or answering your last me
     and tell the reviewer session.
   - Plain text only when the pane isn't on screen (the tool says so: a narrow terminal, the agent view, a background
     session). Then each decision is still its own message, recommended answer first.
+- **Resuming after a restart is one ask for the whole list**, not one per session: when `--start` lists sessions
+  that ended while the background service was off, ask once (key `resume-after-restart`, each session named in the
+  question; "Yes, resume all N" recommended, "No, leave them") and on a yes run its `--resume-ended` line
+  ([resuming.md](resuming.md#after-a-restart)). The resume prompt approves nothing those sessions would need.
 - **To replace or withdraw an ask**, queue the new one, then remove the old with `cancel_approval` (ToolSearch:
   `mcp__session-orchestration__cancel_approval`): the key, plus the `id` `ask_approval` returned or the exact
   question; the key alone removes all its asks. It submits no answer, and a click on a removed ask's buttons does

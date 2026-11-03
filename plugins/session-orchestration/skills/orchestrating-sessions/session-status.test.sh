@@ -478,6 +478,36 @@ grep -qx "## Replies written in the last day ($root/replies), newest first" <<<"
   grep -qx '[0-9-]* [0-9:]*  ABC-49.md: ABC-49 · proj · done · last section: Log 11-03: merged' <<<"$out" ||
   { echo "--start, no handover: $out"; exit 1; }
 rm "$root/replies/ABC-48.md" "$root/replies/ABC-49.md"
+# --start lists the failed sessions (ended while the background service was off) that still have an open task: the
+# owner of a status row (e1), or named by key in the handoff file (e2). Not one with no open task (e3), nor one a
+# later session supersedes (e4). --resume-ended resumes them one at a time, skipping one that isn't failed now or
+# whose name a live session has.
+e1=e1e1e1e1-2222-3333-4444-555555555555 e2=e2e2e2e2-2222-3333-4444-555555555555 e3=e3e3e3e3-2222-3333-4444-555555555555
+e4=e4e4e4e4-2222-3333-4444-555555555555 e5=e5e5e5e5-2222-3333-4444-555555555555
+for p in "1 60" "2 62" "3 63" "4 61"; do set -- $p; e=e$1; echo "{\"type\":\"user\",\"message\":{\"content\":\"Work on ABC-$2\"}}" > "$proj/${!e}.jsonl"; done
+touch -t 202601010000 "$proj/$e4.jsonl"; echo "{\"type\":\"user\",\"message\":{\"content\":\"Work on ABC-61. Supersedes: $e4\"}}" > "$proj/$e5.jsonl"
+# A later transcript naming e1's id past its first prompt (an --owner listing) doesn't supersede it; a failed session
+# of a sibling folder ($root-two) isn't this project's.
+e6=e6e6e6e6-2222-3333-4444-555555555555 e7=e7e7e7e7-2222-3333-4444-555555555555
+printf '%s\n' '{"type":"user","message":{"content":"Look around"}}' "{\"type\":\"user\",\"message\":{\"content\":\"first: Work on ABC-60 Supersedes: $e1\"}}" > "$proj/$e6.jsonl"
+failed() { printf '{"sessionId":"%s","name":"%s","cwd":"%s","kind":"background","state":"failed","pid":null}' "$1" "$2" "${3:-$root}"; }
+setacct cfg "$(failed "$e1" one),$(failed "$e2" ABC-62-x),$(failed "$e3" three),$(failed "$e4" four),$(failed "$e7" ABC-62-y "$root-two")"
+cp "$root/.claude/session-status-adapter" "$tmp/adapter.keep"
+printf '#!/bin/sh\ncase $1 in tasks) printf "ABC-60\\t-\\t\\t\\nABC-61\\t-\\t\\t\\n" ;; pending) echo "- ABC-62: waiting on its PR; ABC-61 too" ;; *) exit 2 ;; esac\n' > "$root/.claude/session-status-adapter"
+out=$(run --start)
+[ "$(sed -n '/^## Ended while/,/^## /p' <<<"$out" | grep -v '^## \|^$')" = "$(printf '  "one" (e1e1e1e1) · status row ABC-60\n  "ABC-62-x" (e2e2e2e2) · handoff file (ABC-62)\nResume them one at a time, after one ask (approvals.md): session-status --resume-ended e1e1e1e1 e2e2e2e2')" ] ||
+  { echo "--start, ended sessions: $out"; exit 1; }
+setacct cfg "$(failed "$e3" three)"; [ -z "$(run --start | grep '^## Ended')" ] || { echo "--start listed an ended session with no open task row"; exit 1; }
+mv "$tmp/adapter.keep" "$root/.claude/session-status-adapter"
+# e2's name is taken by a copy resumed by hand that has retired since (no process): still a duplicate.
+setacct cfg "$(failed "$e1" one),$(failed "$e2" ABC-62-x),$(sess "$e5" ABC-62-x '' null),$(sess "$e3" three idle 1)"; calls >/dev/null
+out=$(run --resume-ended --pause 0 "${e1:0:8}" "${e2:0:8}" "${e3:0:8}" ffffffff) && rc=0 || rc=$?
+[ "$rc" = 2 ] && [ "$(calls | grep -v ' agents ')" = "cfg --bg --resume $e1 $(sed -n 's/^  text=.\(.*\).$/\1/p' "$here/session-status")" ] &&
+  grep -q '^woke "one" (e1e1e1e1, failed)' <<<"$out" && grep -qx '"ABC-62-x" (e2e2e2e2): another session has that name or supersedes it: not resumed' <<<"$out" &&
+  grep -qx '"three" (e3e3e3e3) is blocked now, not ended: not resumed' <<<"$out" && grep -qx 'ffffffff: not listed in any account: not resumed' <<<"$out" ||
+  { echo "--resume-ended: $rc $out"; exit 1; }
+[ "$(run --resume-ended --pause x "${e1:0:8}"; echo $?)" = "$(printf 'usage: session-status --resume-ended [--pause SECS] ID… (ID: 8+ characters)\n2')" ] || { echo "--resume-ended usage"; exit 1; }
+rm "$proj/$e1.jsonl" "$proj/$e2.jsonl" "$proj/$e3.jsonl" "$proj/$e4.jsonl" "$proj/$e5.jsonl" "$proj/$e6.jsonl"
 setacct cfg "$(sess "$hid" "fix it" idle 1)"; calls >/dev/null
 out=$(run --handover "$hid" -- 'Do X.') && rc=0 || rc=$?
 [ "$rc" = 2 ] && [ "$out" = 'no replies/ABC-40.md: ask "fix it" for a status report first, or write one' ] && ! calls | grep -q 'stop\|--bg' ||
