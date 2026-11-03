@@ -174,7 +174,7 @@ if [ "$mode" = check ]; then
                 if [ "$a" = true ]; then   # each account's weekly use (features/accounts.md, Weekly limits)
                   wu=$(weekly_use) u=
                   while IFS=$'\t' read -r wd wp wr; do
-                    u+="${u:+, }${wd/#$HOME/~} "; [ -n "$wp" ] && u+="$wp% (resets $(epochfmt "$wr" '%m-%d %H:%M'))" || u+="no reading"
+                    u+="${u:+, }$(tilde "$wd") ";[ -n "$wp" ] && u+="$wp% (resets $(epochfmt "$wr" '%m-%d %H:%M'))" || u+="no reading"
                   done <<<"$wu"
                   echo "  accounts weekly use: $u"; w=$(weekly_warn "$wu"); [ -z "$w" ] || echo "  accounts weekly limit: $w"
                 fi

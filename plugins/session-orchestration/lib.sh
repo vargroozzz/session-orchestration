@@ -360,8 +360,10 @@ weekly_warn() {
   done <<<"${1-$(weekly_use)}"
   [ -n "$cp" ] && [ "$cp" -ge 90 ] && [ -n "$best" ] || return 0
   printf '%s is past 90%% of its weekly limit (resets %s), %s is under it: hand over to a coordinator under %s (features/accounts.md, Weekly limits)\n' \
-    "${cur/#$HOME/~}" "$(epochfmt "$cr" '%m-%d %H:%M')" "${best/#$HOME/~}" "${best/#$HOME/~}"
+    "$(tilde "$cur")" "$(epochfmt "$cr" '%m-%d %H:%M')" "$(tilde "$best")" "$(tilde "$best")"
 }
+# tilde PATH: PATH with a leading $HOME as ~ (bash 5.2 expands a bare ~ in ${x/#$HOME/~}, so it goes in a variable).
+tilde() { local t='~'; printf '%s' "${1/#$HOME/$t}"; }
 
 # activity_of TRANSCRIPT: session-activity.jq's line (doing, since, last text line, …); last_text: its last text line.
 activity_of() { tail -n 2000 "$1" | jq -rRn -f "$LIB_DIR/skills/orchestrating-sessions/session-activity.jq" 2>/dev/null; }
