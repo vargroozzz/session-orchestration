@@ -6,7 +6,7 @@ Posting anything under the user's name is reserved (CLAUDE.md, "Cross-session me
 
 - Review read-only; never push or check out the PR branch. Diff with `git diff origin/{{default_branch}}...origin/<branch>`.
   To build or test, use a detached worktree, removed when done.
-- Write `{{orch}}/replies/PR-<repo>-<id>.md`, then send a status report naming it:
+- Write `{{replies_dir}}/PR-<repo>-<id>.md`, then send a status report naming it:
 
   ```
   # <repo> #<id> · <KEY> · <title>

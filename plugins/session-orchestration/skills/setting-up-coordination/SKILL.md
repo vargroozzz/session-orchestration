@@ -22,7 +22,11 @@ by a parent. Configured adds:
 - `committed code new or changed upstream: REL…: run setup to review it` (shared mode, below);
 - a warning per config value that isn't valid (the default is used), per terminal or feature module that doesn't
   load (see status-reference.md, Modules), and, when `CLAUDE.md` still delegates approvals
-  in words with no `approvals.delegate` key, `delegation found in CLAUDE.md: run setup to move it`.
+  in words with no `approvals.delegate` key, `delegation found in CLAUDE.md: run setup to move it`;
+- `replies folder … is inside the git checkout …` when the Replies folder line points into the repo: a task session
+  isolated in a worktree can't write there. Setup puts a git repo's replies folder in
+  `${XDG_STATE_HOME:-~/.local/state}/session-orchestration/replies/<root, as Claude names its projects folder>/`;
+  move an older one there and change the line.
 
 ## Propose, then write
 

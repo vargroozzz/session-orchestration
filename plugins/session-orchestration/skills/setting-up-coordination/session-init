@@ -97,6 +97,8 @@ fi
 adapter=; [ -n "$(adapter_path "$root" 2>/dev/null)" ] && adapter=1
 noexec=; [ -e "$root/.claude/session-status-adapter" ] && [ -z "$adapter" ] && noexec=1   # never rewritten: chmod +x
 replies=$(cd "$root" && sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
+# The section's orch folder: its memory line's, else the replies folder's parent (sections written before that line).
+mem=$(cd "$root" && sed -nE 's/.*Project memory: `([^`]+)\/memory\.md`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
 slug() { tr 'A-Z' 'a-z' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g'; }
 # A delegation line left in CLAUDE.md from before the approvals.delegate key (the old template's wording).
 deleg_line=; (cd "$root" && grep -qiE 'delegates approvals' CLAUDE.md CLAUDE.local.md 2>/dev/null) && deleg_line=1
@@ -106,7 +108,7 @@ name=$(slug "$(basename "$root")")
 accounts_n=$( . "$LIB_DIR/features/accounts.sh" && list_accounts | grep -c .)
 # A review inbox the project names already: "Review inbox" and a claude.ai page on one line of one of its docs.
 inbox= o=.claude/orchestration; [ -d "$root/docs/claude" ] && o=docs/claude/orchestration
-[ -z "$replies" ] || o=$(dirname "${replies%/}")
+case $replies in ''|*/session-orchestration/replies/*) ;; *) o=$(dirname "${replies%/}") ;; esac; o=${mem:-$o}
 for f in CLAUDE.md CLAUDE.local.md "$o/memory.md" "$o/coordinator.md"; do
   grep -qiE 'review inbox.*claude\.ai/(code/)?artifact/' "$root/$f" 2>/dev/null && inbox=1
 done
@@ -151,6 +153,9 @@ if [ "$mode" = check ]; then
                   echo "host=$h, but the origin remote is on $dh (moved?): set host to $dh in .claude/coordination/coordination.json"
                 [ "$r" = true ] || [ -z "$inbox" ] || [[ ! $h =~ ^(bitbucket|forgejo)$ ]] || echo "review inbox found, review_inbox off: set features.review_inbox to true in .claude/coordination/coordination.json (session-status --init --write adds it when unset)"
                 [ -z "$deleg_line" ] || [ -n "$deleg_set" ] || echo "delegation found in CLAUDE.md: run setup to move it (session-status --init --write --delegate)"
+                rp=${replies/#\~/$HOME}; case $rp in /*) ;; *) rp=$root/$rp ;; esac
+                gt=$(git -C "$root" rev-parse --show-toplevel 2>/dev/null) && gt=$(cd "$gt" && pwd -P) && case $rp in "$gt"/*)
+                  echo "replies folder $replies is inside the git checkout $gt: a worktree-isolated session can't write there. Move it out, e.g. to ${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/replies/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root")/, and change the Replies folder line" ;; esac
                 exit 0 ;;
     parent) echo "covered by a parent: $parent ($(slug "$(basename "$parent")")-coordinator) covers this folder"; exit 3 ;;
     partial) m="the CLAUDE.md section naming a replies folder"; [ -n "$adapter" ] || m="the adapter (.claude/session-status-adapter)"
@@ -243,7 +248,8 @@ else worktree_cmd="EnterWorktree (under .claude/worktrees/)"; fi
 section_file=CLAUDE.md
 [ -n "$top" ] && git -C "$root" ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1 && section_file=CLAUDE.local.md
 orch=.claude/orchestration; [ -d "$root/docs/claude" ] && orch=docs/claude/orchestration
-[ -z "$replies" ] || orch=$(dirname "${replies%/}")   # an existing section's paths win
+# An existing section's paths win, but a replies folder in the state dir (below) says nothing about orch.
+case $replies in ''|*/session-orchestration/replies/*) ;; *) orch=$(dirname "${replies%/}") ;; esac; orch=${mem:-$orch}
 urls=-   # built after the corrections, from a corrected repo_slug or tracker_url too, unless urls itself is given
 
 # Corrections from the reply: KEY=VALUE.
@@ -262,6 +268,11 @@ if [ "$urls" = - ]; then
   [ "$host" = github ] && [ -n "$repo_slug" ] && urls="${urls:+$urls }'pr https://github.com/${repo_slug%/*}/{repo}/pull/{id}'"
 fi
 enc_root=$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root")
+# A task session isolated in a worktree can't write into its repo's checkout, so in a git repo the replies folder
+# lives outside every checkout, in the state dir. An existing section's path wins.
+replies_dir=$orch/replies
+[ -z "$top" ] || replies_dir=${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/replies/$enc_root
+[ -z "$replies" ] || replies_dir=${replies%/}
 done_rule="its session's done-when held (no command to count)"
 [ -n "$merge_cmd" ] && done_rule="its PR merged (the merge is the unit)"
 [ "$keys" = tracker ] && done_rule="its $key_example ticket moved to done (pass that command's regex as \`--done RX\`)"
@@ -344,7 +355,7 @@ for p in ${plan[@]+"${plan[@]}"}; do
   todo+=("$p")
 done
 targets=$(for p in ${todo[@]+"${todo[@]}"}; do t=${p#*	}; [ -e "$(at "$t")" ] && t="$t (section appended)"; echo "$t"; done
-          [ -d "$(at "$orch/replies")" ] || echo "$orch/replies/")
+          [ -d "$(at "$replies_dir")" ] || echo "$replies_dir/")
 
 if [ "$mode" = propose ]; then
   # lines that are there only sometimes, each ending in its newline (a $(…) in the text below would drop it)
@@ -381,7 +392,7 @@ fill() { # template, then flags: lines starting {{?FLAG}} kept when FLAG is set,
     fi
     out+=$line$'\n'
   done < "$tpl/$1"
-  for v in name orch default_branch key_example key_re branch_pattern worktree_cmd enc_root urls repo_slug topic_title topic_trigger merge_cmd post_cmd done_rule; do
+  for v in name orch replies_dir default_branch key_example key_re branch_pattern worktree_cmd enc_root urls repo_slug topic_title topic_trigger merge_cmd post_cmd done_rule; do
     out=${out//"{{$v}}"/${!v:-}}
   done
   printf '%s' "$out"
@@ -403,7 +414,7 @@ for p in ${todo[@]+"${todo[@]}"}; do
     wrote+=("${p#*	}")
   fi
 done
-[ -d "$(at "$orch/replies")" ] || { mkdir -p "$(at "$orch/replies")" && wrote+=("$orch/replies/"); }
+[ -d "$(at "$replies_dir")" ] || { mkdir -p "$(at "$replies_dir")" && wrote+=("$replies_dir/"); }
 # The config: each key only when unset (an existing value is the user's); approvals.delegate also when --delegate
 # turns it on.
 [ -z "$miss_repo" ] || { missing_keys "$cfg_repo" "$cfg_repo_json" --write >/dev/null || exit 1; wrote+=(".claude/coordination/coordination.json ($miss_repo$cfg_note)"); }

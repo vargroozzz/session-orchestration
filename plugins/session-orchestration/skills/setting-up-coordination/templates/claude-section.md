@@ -9,7 +9,7 @@
   - deploys, releases, anything on production;
   - anything sent under the user's name (PR or issue comments, chat, email);
   - anything hard to undo (deleting data, force-pushing a shared branch). When in doubt, it's reserved.
-- Replies folder (the plugin's "folder for this"): `{{orch}}/replies/`.
+- Replies folder (the plugin's "folder for this"): `{{replies_dir}}/`.
 - Project memory: `{{orch}}/memory.md`. Coordinator handoff file: `{{orch}}/pending.md`.
 {{?tracker_keys}}- Task sessions start with "Work on {{key_example}}" and are named `-n {{key_example}}-<short-desc>`.
 {{?!tracker_keys}}- A task is its session's name, `{{key_example}}`: start it with `claude --bg -n {{key_example}}`.
