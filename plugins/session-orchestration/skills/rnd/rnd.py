@@ -38,7 +38,10 @@ usage: python3 -I rnd.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args]
   loads [days=7]                  one row per session kind (sessions started in the window): messages (mid-turn too),
                                   skill loads and re-injects, worker.md reads, reply cards, SendMessage and reply
                                   schema loads and calls, median tokens of a skill load, a card and a reply schema
-  html IN.md OUT.html            Markdown report -> self-contained HTML
+  search TEXT [days=7]            one line per hit of TEXT in prompts, cross-session messages and sessions' own text:
+                                  NAME (ID8) · date · who: snippet, masked (emails, credentials, long opaque strings)
+                                  and capped at 220 chars; 3 a session, 30 in all (session-status --search)
+  html IN.md OUT.html             Markdown report -> self-contained HTML
 
 Transcripts: <account>/projects/*/*.jsonl for every account dir ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*),
 each distinct projects/ tree once (accounts that share one through a symlink are read once).
@@ -1313,8 +1316,89 @@ def usage(days=30):
         print(f"{k}\t{n}\t{count[(k, n)] if known or k == 'path' else '-'}\t{first.get((k, n), '-' if k == 'path' else today)}\t{'unused' if unused else ''}")
 
 
+MASKS = [(re.compile(p, re.I), r) for p, r in [
+    (r"[\w.+-]+@[\w-]+(\.[\w-]+)+", "<email>"),
+    (r"\b(bearer|basic)\s+(?=[\w.~+/-]*[\d+/])[\w.~+/-]{12,}=*", r"\1 <masked>"),
+    (r"\b((?:\w*[_-])?(?:password|passwd|secret|token|api[_-]?key|auth[_-]?token|cookie|session[_-]?key))\b(\"?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)", r"\1\2<masked>"),
+    (r"\b(gh[pousr]_|github_pat_|glpat-|xox[abprs]-|sk-|AKIA|AIza|eyJ)[\w.+/=-]{8,}", "<masked>"),
+    (r"(?<![\w+=])(?=[\w+=]*\d)(?=[\w+=]*[A-Za-z])[\w+=]{32,}", "<masked>"),  # long opaque runs: keys, SHAs
+]]
+# A mixed-case run with digits and a 16+ piece between / or -: a key such as AWS's, not a path or slug.
+KEYISH = re.compile(r"(?<![\w+/=.-])[\w+/=-]{24,}")
+iskey = lambda m: bool(re.search(r"\d", m) and re.search(r"[a-z]", m) and re.search(r"[A-Z]", m)) and \
+    max(map(len, re.split(r"[/-]", m))) >= 16
+
+
+def mask(s):
+    """S with emails, credentials and long opaque strings replaced, and the home folder as ~."""
+    s = re.sub(re.escape(HOME) + r"(?![\w.-])", "~", s)
+    for rx, r in MASKS:
+        s = rx.sub(r, s)
+    return KEYISH.sub(lambda m: "<masked>" if iskey(m.group(0)) else m.group(0), s)
+
+
+def search(text="", days=7):
+    """One line per hit of TEXT (case-insensitive, whitespace-insensitive) in sessions' prompts, messages from other
+    sessions and their own text, newest first: `NAME (ID8) · DATE · who: snippet` (who: you, msg, claude; local
+    time), the snippet masked and clipped like events'; masked text isn't found. Not tool calls or results, sidechains
+    or the calling session. At most 3 hits a session and 30 lines, then how many more; exit 1 with no hit."""
+    needle = " ".join(text.split()).lower()
+    if not needle:
+        sys.exit("usage: rnd.py search TEXT [days=7]")
+    window(days)
+    longest = max(needle.replace("~", " ").split() or [""], key=len)   # ~ is the masked home: the raw line has the path
+    pre = "" if re.search(r'["\\]', longest) else longest   # raw-line prefilter where JSON keeps the text as is
+    me = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    hits, names = {}, {}  # session id -> [(ts, who, snippet)] over all its transcripts; its name
+    for f in transcripts():
+        sid = os.path.basename(f).removesuffix(".jsonl")
+        if me and sid == me:
+            continue
+        for line in open(f, errors="replace"):
+            if '"agent-name"' in line:
+                try:
+                    names[sid] = json.loads(line).get("agentName") or names.get(sid, "")
+                except Exception:
+                    pass
+                continue
+            if pre and pre not in line.lower():
+                continue
+            try:
+                o = json.loads(line)
+            except Exception:
+                continue
+            ts = o.get("timestamp", "")
+            if out_of(ts) or o.get("isSidechain") or o.get("type") not in ("user", "assistant"):
+                continue
+            c = (o.get("message") or {}).get("content")
+            txt = c if isinstance(c, str) else " ".join(b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
+            who = "claude" if o["type"] == "assistant" else {"human": "you", "xmsg": "msg"}.get(said(o, txt))
+            t = " ".join(txt.split())
+            if not who or needle not in t.lower().replace(HOME.lower(), "~"):   # cheap check before masking
+                continue
+            t = mask(t)
+            i = t.lower().find(needle)
+            if i >= 0:
+                hits.setdefault(sid, []).append((ts, who, ("…" if i > 80 else "") + clip(t[max(0, i - 80):])))
+    rows = sorted(((ts, sid, who, snip) for sid, g in hits.items() for ts, who, snip in g), reverse=True)
+    shown, per, cut = [], {}, set()
+    when = lambda ts: P(ts).astimezone().strftime("%Y-%m-%d %H:%M") if ts else "-"
+    for ts, sid, who, snip in rows:
+        if per.get(sid, 0) < 3 and len(shown) < 30:
+            per[sid] = per.get(sid, 0) + 1
+            nm = names.get(sid)
+            shown.append(f"{nm + ' (' + sid[:8] + ')' if nm else sid[:8]} · {when(ts)} · {who}: {snip}")
+        else:
+            cut.add(sid)
+    print("\n".join(shown) or f"no hits for {text!r} in {days} days")
+    if cut:
+        print(f"… {len(rows) - len(shown)} more (sessions: {len(cut)}): narrow TEXT or days, or --peek ID")
+    if not shown:
+        sys.exit(1)
+
+
 CMDS = {"sessions": sessions, "events": events, "context": context, "units": units, "waits": waits, "bgtasks": bgtasks, "replies": replies,
-        "triggers": triggers, "usage": usage, "chunks": chunks, "trial": trial, "handoff": handoff, "start": start, "loads": loads,
+        "triggers": triggers, "usage": usage, "chunks": chunks, "trial": trial, "handoff": handoff, "start": start, "loads": loads, "search": search,
         "html": md2html}
 
 if __name__ == "__main__":

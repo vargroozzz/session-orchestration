@@ -39,7 +39,7 @@ cat > "$b/bbbbbbbb-2222.jsonl" <<'EOF'
 {"type":"assistant","timestamp":"2026-10-10T09:00:01.000Z","requestId":"q1","message":{"usage":{"output_tokens":40000}}}
 EOF
 
-rnd() { HOME=$home CLAUDE_CONFIG_DIR=$home/.claude-work python3 -I "$here/rnd.py" --until 2026-10-13T12:00:00 "$@"; }
+rnd() { TZ=UTC HOME=$home CLAUDE_CONFIG_DIR=$home/.claude-work python3 -I "$here/rnd.py" --until 2026-10-13T12:00:00 "$@"; }
 fail() { echo "FAIL: $1"; echo "$2"; exit 1; }
 row() { awk -F'\t' -v s="$1" '$2 == s' <<<"$out"; }
 
@@ -324,6 +324,42 @@ out=$(rnd start 7)
 out=$(rnd loads 7)
 grep -q $'^review\t1\t1\t2\t1\t0\t0\t1\t1\t0\t1\t0\t1\t-\t800\t300$' <<<"$out" &&
   grep -q $'^coordinator\t1\t0\t0\t0\t1\t0\t0\t0\t1\t0\t0\t0\t6000\t-\t-$' <<<"$out" || fail "loads: per kind" "$out"
+
+# search: prompts, cross-session messages and own text, masked and capped; not tool calls, subagents, old lines or the
+# caller; 3 hits a session, then a count of the rest.
+cat > "$a/eeeeeeee-5555.jsonl" <<EOF
+{"type":"agent-name","agentName":"searcher"}
+{"type":"user","timestamp":"2020-01-01T00:00:00.000Z","message":{"content":"Zebra decision, long ago"}}
+{"type":"user","timestamp":"2026-10-12T09:00:00.000Z","message":{"content":"We chose the   zebra plan; mail a@b.co, token=hunter2xyz, key ghp_abcdefghijklmnop, in $home/x/docs/orchestration/replies/rnd-competitors-2026-11-04.md, a basic idea"}}
+{"type":"assistant","timestamp":"2026-10-12T09:01:00.000Z","message":{"content":[{"type":"tool_use","id":"z1","name":"Bash","input":{"command":"echo zebra plan"}}]}}
+{"type":"assistant","timestamp":"2026-10-12T09:02:00.000Z","isSidechain":true,"message":{"content":[{"type":"text","text":"zebra plan in a subagent"}]}}
+{"type":"user","timestamp":"2026-10-12T09:03:00.000Z","message":{"content":"<cross-session-message from=\"x\">the Zebra Plan is approved</cross-session-message>"}}
+{"type":"assistant","timestamp":"2026-10-12T09:04:00.000Z","message":{"content":[{"type":"text","text":"$(printf 'x%.0s' {1..300}) zebra plan done, sha 0123456789abcdef0123456789abcdef01234567 $(printf 'y%.0s' {1..300})"}]}}
+{"type":"assistant","timestamp":"2026-10-12T09:05:00.000Z","message":{"content":[{"type":"text","text":"zebra plan again"}]}}
+{"type":"assistant","timestamp":"2026-10-12T09:06:00.000Z","message":{"content":[{"type":"text","text":"llama: aws wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY gcp AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY, Bearer abc.def123ghi; kept: basic configuration, the bearer of news, author: Bob, context tokens: 45000, ${home}2/y"}]}}
+EOF
+# The same session under a second account: its hits join the first's.
+mkdir -p "$home/.claude-other/projects/-x-proj"
+printf '%s\n' '{"type":"user","timestamp":"2026-10-12T08:30:00.000Z","message":{"content":"zebra plan, second login"}}' > "$home/.claude-other/projects/-x-proj/eeeeeeee-5555.jsonl"
+printf '%s\n' '{"type":"user","timestamp":"2026-10-12T08:00:00.000Z","message":{"content":"zebra plan from the caller"}}' > "$a/ffffffff-6666.jsonl"
+out=$(rnd search llama 7)
+[ "${out%, *}" = "searcher (eeeeeeee) · 2026-10-12 09:06 · claude: llama: aws <masked> gcp <masked>, Bearer <masked>; kept: basic configuration, the bearer of news, author: Bob, context tokens: 45000" ] && [[ ${out##*, } == *home2/y && ${out##*, } != '~'* ]] ||
+  fail "search: keys masked, plain words kept" "$out"
+[ "$(rnd search '~/x/docs' 7 | cut -c1-38)" = "searcher (eeeeeeee) · 2026-10-12 09:00" ] || fail "search: ~ finds the home path" ""
+out=$(CLAUDE_CODE_SESSION_ID=ffffffff-6666 rnd search 'Zebra  PLAN' 7)
+exp="searcher (eeeeeeee) · 2026-10-12 09:05 · claude: zebra plan again
+searcher (eeeeeeee) · 2026-10-12 09:04 · claude: …$(printf 'x%.0s' {1..79}) zebra plan done, sha <masked> $(printf 'y%.0s' {1..110})
+searcher (eeeeeeee) · 2026-10-12 09:03 · msg: <cross-session-message from=\"x\">the Zebra Plan is approved</cross-session-message>
+… 2 more (sessions: 1): narrow TEXT or days, or --peek ID"
+[ "$out" = "$exp" ] || fail "search: newest first, 3 a session, masked, no caller" "$out"
+out=$(rnd search 'chose the zebra' 7)
+[ "$out" = "searcher (eeeeeeee) · 2026-10-12 09:00 · you: We chose the zebra plan; mail <email>, token=<masked>, key <masked>, in ~/x/docs/orchestration/replies/rnd-competitors-2026-11-04.md, a basic idea" ] ||
+  fail "search: a prompt, masked" "$out"
+rnd search hunter2xyz 7 >/dev/null && fail "search: a masked secret isn't found" ""
+[ "$(rnd search 'no such words' 7)" = "no hits for 'no such words' in 7 days" ] || fail "search: no hits" ""
+[ "$(rnd search 'second login' 7)" = "searcher (eeeeeeee) · 2026-10-12 08:30 · you: zebra plan, second login" ] ||
+  fail "search: a session's second account" "$(rnd search "other account" 7)"
+rm -r "$a/eeeeeeee-5555.jsonl" "$a/ffffffff-6666.jsonl" "$home/.claude-other/projects/-x-proj"
 
 printf '#!/bin/sh\necho "$@" > %q\n' "$tmp/claude.args" > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"
 out=$(HOME=$tmp RND_LOG=$tmp/log "$here/rnd-weekly" "$tmp" --dry-run)

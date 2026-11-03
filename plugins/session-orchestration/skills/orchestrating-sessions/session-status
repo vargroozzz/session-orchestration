@@ -95,6 +95,9 @@
 #                       session-activity.jq. --activity --all-projects: every project's sessions, not only this one's
 #        session-status --peek ID [N]   a session's last N (12) prompts, texts and tool calls as Markdown, then
 #                       what it's doing now (session-peek.jq); any project, any account
+#        session-status --search TEXT [days]   one line per hit of TEXT (default the last 7 days) in sessions' prompts,
+#                       messages and own text, any project and account: NAME (ID8) · date · who: snippet, masked
+#                       and capped (rnd.py search); --peek ID for more
 #        session-status --dir KEY|ID…   the folder a task or session works in (the first argument that resolves):
 #                       KEY's worktree; for an ID, the git top of its latest cwd (its transcript), else that cwd
 #        session-status --diff KEY|ID…  that folder's changes since its merge-base with origin/HEAD, committed or
@@ -153,6 +156,11 @@ prev_name() {
 if [ "${1:-}" = --prev-name ]; then
   prev_name "${2:-}" || { echo "usage: session-status --prev-name [NAME] (this session isn't listed: name it)" >&2; exit 2; }
   exit 0
+fi
+# --search TEXT [days]: rnd.py search, every project and account, the caller left out.
+if [ "${1:-}" = --search ]; then
+  [ -n "${2:-}" ] && [[ ${3:-7} =~ ^[0-9]+$ ]] || { echo "usage: session-status --search TEXT [days]" >&2; exit 2; }
+  exec python3 -I "$(dirname "$0")/../rnd/rnd.py" search "$2" "${3:-7}"
 fi
 # --plan FILE [--check | --next | --brief N | --done N]: FILE's plan table (the first table under `## Plan` or `## Build plan`:
 # # | Chunk | Kind | Deps | Touches | Est | Model/effort | Done when), with each chunk's state from the

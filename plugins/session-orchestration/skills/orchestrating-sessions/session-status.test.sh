@@ -627,6 +627,9 @@ out=$(run --peek "${pid:0:8}")
 grep -q '^Work on ABC-50$' <<<"$out" && grep -q '^Running them\.$' <<<"$out" && grep -q '^→ Bash: Run the tests' <<<"$out" &&
   ! grep -q 'subagent\|system-reminder' <<<"$out" && grep -q '^_Now: ' <<<"$out" || { echo "peek failed: $out"; exit 1; }
 [ "$(run --peek 'x*'; echo $?)" != 0 ] || { echo "peek took a bad id"; exit 1; }
+# --search: rnd.py search over this account's transcripts (rnd.test.sh covers the rest); TEXT is required.
+[ "$(run --search 'running THEM')" = "cccccccc · - · claude: Running them." ] && ! run --search 2>/dev/null &&
+  ! run --search x y 2>/dev/null || { echo "--search failed: $(run --search 'running them')"; exit 1; }
 # --dir: a session's latest cwd, as its git top; a task key, its worktree. --diff: against its merge-base with origin/HEAD,
 # with the untracked files, then the patch.
 [ "$(run --dir "${pid:0:8}")" = "$root/wt" ] && [ "$(run --dir ABC-12)" = "$root/wt" ] || { echo "dir failed"; run --dir "$pid"; exit 1; }
