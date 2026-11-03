@@ -156,8 +156,14 @@ bbn=$(grep -oE 'bitbucketdc-cli|forgejo-cli|jiradc-cli' <<<"$scan" | wc -l | tr 
 [ -z "$bbops" ] || [ "$bbn" = 1 ] ||
   decide deny "Blocked: a PR/Jira comment post, review or PR merge must be the only bitbucketdc-cli/forgejo-cli/jiradc-cli call in its command. $alone"
 
-# Tokens, quotes honoured (xargs fails on an unbalanced quote: a heredoc's text, say).
-tokstr=$(printf '%s' "$cmd" | xargs printf '%s\n' 2>/dev/null) && [ -n "$tokstr" ] ||
+# Tokens, quotes honoured (xargs fails on an unbalanced quote: a heredoc's text, say). An unquoted ; becomes a token
+# of its own first, so x; ends a call and a quoted 'x;' (a --subject value) doesn't.
+tokstr=$(printf '%s' "$cmd" | awk -v q="'" '{ s = s (NR > 1 ? "\n" : "") $0 } END { n = length(s)
+  for (j = 1; j <= n; j++) { c = substr(s, j, 1)
+    if (iq != q && c == "\\") { o = o c substr(s, j + 1, 1); j++; continue }
+    if (iq == "") { if (c == "\"" || c == q) iq = c; else if (c == ";") { o = o " ; "; continue } } else if (c == iq) iq = ""
+    o = o c }
+  printf "%s", o }' | xargs printf '%s\n' 2>/dev/null) && [ -n "$tokstr" ] ||
   { [ -z "$bbops" ] && ! grep -qE "$ghops" <<<"$scan" && pass; decide deny "Blocked: this command mentions a PR/Jira comment post or a PR merge, and the approval hook can't parse it. $alone"; }
 toks=()
 while IFS= read -r t; do toks+=("$t"); done <<<"$tokstr"
@@ -165,23 +171,25 @@ while IFS= read -r t; do toks+=("$t"); done <<<"$tokstr"
 # starts) as GROUP VERB TARGET with its flags anywhere.
 groups=' agent-task alias api attestation auth browse cache codespace completion config copilot extension gist gpg-key help issue label org pr preview project release repo ruleset run search secret ssh-key status variable version workflow '
 calls=0 ghcalls=0 apiw= kind= target= repo= bodyfile= body= help= host= mode= modes=0 fj= cm=
-i=0
+i=0 st=1
 while [ "$i" -lt "${#toks[@]}" ]; do
   t=${toks[$i]}; i=$((i + 1)); prev=; [ "$i" -lt 2 ] || prev=${toks[$((i - 2))]}
   b=${t%;}; b=${b#\(}; b=${b#\$\(}; b=${b%\)}
+  # Where a command starts: first, after a separator, or after a command prefix (env, VAR=x, sudo …) that itself
+  # starts one (brew list rtk gh: rtk there is an argument, so gh is too).
+  case "$prev" in ''|'|'|'||'|'&&'|';'|'&'|'('|'$(') st=1 ;;
+    env|command|rtk|proxy|exec|time|nohup|sudo|xargs|then|do|else|'!'|'{'|if|while|until|[A-Za-z_]*=*) ;; *) st= ;; esac
   case "$t" in
     *bitbucketdc-cli*|*forgejo-cli*|*jiradc-cli*) h= ;;
     *) [ "${b##*/}" = gh ] || continue
-       # Where a command starts: first, after a separator or a command prefix (env, VAR=x, sudo …).
-       case "$prev" in ''|'|'|'||'|'&&'|';'|'&'|*';'|'('|'$('|env|command|rtk|proxy|exec|time|nohup|sudo|xargs|then|do|else|'!'|[A-Za-z_]*=*) ;; *)
-         [ "$t" != "$b" ] || continue ;; esac
+       [ -n "$st" ] || [ "$t" != "$b" ] || continue
        [ "$prev" != xargs ] || attended "Blocked: gh run through xargs can't be checked by the approval hook. $alone"
        h=gh ;;
   esac
   cli=$t args=()
   while [ "$i" -lt "${#toks[@]}" ]; do
     a=${toks[$i]}; case "$a" in '|'|'||'|'&&'|';'|'&') break ;; esac
-    i=$((i + 1)); a=${a%;}; args+=("${a%)}"); case "$a" in *';') break ;; esac
+    i=$((i + 1)); args+=("${a%)}")
   done
   if [ -z "$h" ]; then
     sub="${args[*]:0:3}"
