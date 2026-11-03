@@ -19,6 +19,10 @@
 # - SessionStart after a compaction, chunk sessions only: write the handoff from what's on disk and stop. A
 #   compaction or resume also clears the stamps (a resume may bring another window: the thresholds too, and the
 #   compacted-mid-chunk stamp).
+# - The reply card (reply-card.txt, {dir} the skill's folder): how to answer a message without the skill. Once per
+#   session, again after a compaction, never a coordinator's. A keyed task, a chunk or a review gets it at its first
+#   firing; any other session at its first message (.msg, which the module's session.receive hook writes, mid-turn
+#   too). It rides on the firing's other text, if any.
 # Subagents' tool calls (agent_id set) are skipped: they carry the parent's transcript.
 # Stamps: ${XDG_CACHE_HOME:-~/.cache}/session-status/handoff-<sid>.<level>; .kind caches the kind and thresholds.
 # ponytail: thresholds cached per session at its first firing; a config change reaches the next session.
@@ -31,8 +35,7 @@ d=${XDG_CACHE_HOME:-$HOME/.cache}/session-status; s=$d/handoff-$sid
 claim() { (set -C; : > "$1") 2>/dev/null; }   # atomic: parallel tool calls fire the hook at once
 if [ "$ev" = SessionStart ]; then
   rm -f "$s.soft" "$s.hard" "$s.noted"; [ "$src" = compact ] || { rm -f "$s.kind" "$s.compact"; exit 0; }
-  [ -e "$s.compact" ] && exit 0
-elif [ -e "$s.hard" ]; then exit 0
+  rm -f "$s.card"; [ -e "$s.compact" ] && exit 0
 fi
 
 # .kind: "KIND KEY N AT HARD NOTE"; a task's has coord_re on a second line, so no call sources lib.sh (13 ms).
@@ -85,13 +88,24 @@ if [ -z "$cached" ]; then
     at=0 hard=0 note=; mkdir -p "$d" && printf '%s - - 0 0\n%s\n' "$kind" "$re" > "$s.kind"
   else thresholds; fi
 fi
+emit() { jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName: $e, additionalContext: $m}}'; }
+# The card goes out with this firing's other text (say), else on exit; a prompt that is a message counts as one.
+card=
+if [ "$kind" != coordinator ] && [ ! -e "$s.card" ] && { [ "$kind $key" != 'task -' ] || [ -e "$s.msg" ] ||
+  [[ $ev = UserPromptSubmit && $input == *'<cross-session-message from='* ]]; } && claim "$s.card"; then
+  card=$(cat "$here/reply-card.txt") && card=${card//'{dir}'/"${here%/hooks}/skills/orchestrating-sessions"}
+  trap '[ -z "$card" ] || emit "$card"' EXIT
+fi
+# shortcut: a coordinator whose first prompt isn't `Act as a coordinator` is a keyless task until its first status
+# run, so a message before that gets it the card; tell it by the first prompt if rnd.py loads shows coordinator cards.
+[ ! -e "$s.hard" ] || exit 0   # past the hard stop: told to stop, nothing more (but a card still due)
 # A task or review without messages (no key, a review, handoff.at.task=0) only waits to turn coordinator: its own
 # tool call (stdin, coord_re's tool_name branch) decides, without the tail, grep and jq (~39 ms on a 45 MB transcript).
-# A keyless task's name_session call (a session that learned its key mid-run, SKILL.md) re-reads the tail for its last
+# A keyless task's name_session call (a session that learned its key mid-run, worker.md) re-reads the tail for its last
 # `Session task: KEY` line: found, it's that task from then on. Every other keyless call costs one regex test more.
 if (( at <= 0 )); then
   case $kind in task|review) ;; *) exit 0 ;; esac
-  if [ -n "$re" ] && [[ $input =~ $re ]]; then kind=coordinator key=- n= re=; rm -f "$s.soft"
+  if [ -n "$re" ] && [[ $input =~ $re ]]; then kind=coordinator key=- n= re= card=; rm -f "$s.soft"
   elif [ "$kind $key" = 'task -' ] && [[ $input =~ \"tool_name\":\"mcp__session-orchestration__name_session\" ]] &&
     c=$(tail -c 262144 "$tp" | grep 'Session task: ' | jq -r 'if .type=="assistant" then .message.content[]? | select(.type=="text")
       | .text elif .type=="user" and (.message.content|type)=="string" then .message.content else empty end' 2>/dev/null |
@@ -105,7 +119,9 @@ fi
 
 say() {
   [ -e "$s.noted" ] || { [ -z "$note" ] || set -- "$1 $note"; touch "$s.noted"; }
-  jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName: $e, additionalContext: $m}}'
+  emit "${card:+$card
+
+}$1"; card=
 }
 texts() {   # where the handoff goes, the -prev-K rename, whom to tell, and (chunk and task) the self-handover
   printf -v ss %q "${here%/hooks}/skills/orchestrating-sessions/session-status"
@@ -114,7 +130,7 @@ texts() {   # where the handoff goes, the -prev-K rename, whom to tell, and (chu
     chunk) where="\`## c$n: handoff ${sid:0:8}\` (your session id's first 8 characters) appended to $key-build.md in the replies folder"
            tell="$rn Message the coordinator \"handoff ready: $key c$n\"." ;;
     task) where="\`## Handoff\` in your replies file"; tell="$rn Message the coordinator \"handoff ready: $key\"." ;;
-    *) where="the handover file your coordinator doc names"; tell= ;;
+    *) where="coordinator-handover.md in the replies folder, the handover file: overwrite it with the state in no file, as the coordinator skill's Handoff file says"; tell= ;;
   esac
   case $kind in chunk|task) selfh=" If no coordinator is running (\`$ss --coordinator\` prints nothing), finish with \`$ss --handover --self -- '<next step>'\`." ;; *) selfh= ;; esac
 }
@@ -139,7 +155,7 @@ scan() { LC_ALL=C grep -E "\"usage\":|compact_boundary${re:+|$re}" | jq -Rrn --a
   | select(. > 0) end] | reduce .[] as $x (""; if $x < 0 then "" else $x end) | tostring)' 2>/dev/null; }
 out=$(tail -c 262144 "$tp" | scan); ctx=${out#* }
 [ -n "$ctx" ] || { ctx=$(tail -n 300 "$tp" | scan); ctx=${ctx#* }; }
-if [ "${out%% *}" = coordinator ]; then kind=coordinator key=- n= re=; rm -f "$s.soft"; thresholds; fi
+if [ "${out%% *}" = coordinator ]; then kind=coordinator key=- n= re= card=; rm -f "$s.soft"; thresholds; fi
 (( at > 0 )) || exit 0
 [[ $ctx =~ ^[0-9]+$ ]] || exit 0
 texts

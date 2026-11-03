@@ -32,6 +32,12 @@ usage: python3 -I rnd.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args]
                                   wait, blocker bucket, rewordings, rounds, reason, detail/history bytes, reads of
                                   its files in the window (tokens, sessions); stderr: totals, wait per bucket, and
                                   entries whose history a session read against the rest
+  start [days=7]                  one row per coordinator started in the window: its Start's requests, context at the
+                                  first request and after Start, and Start's tokens by part (skill, coord_docs,
+                                  feature_docs, project_docs, schemas, status, rest); then the medians
+  loads [days=7]                  one row per session kind (sessions started in the window): messages (mid-turn too),
+                                  skill loads and re-injects, worker.md reads, reply cards, SendMessage and reply
+                                  schema loads and calls, median tokens of a skill load, a card and a reply schema
   html IN.md OUT.html            Markdown report -> self-contained HTML
 
 Transcripts: <account>/projects/*/*.jsonl for every account dir ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*),
@@ -129,7 +135,7 @@ def sessions(days=7):
                         bang += 1
                     if b.get("type") == "tool_use":
                         if b.get("name") == "AskUserQuestion": asks += 1
-                        if b.get("name") == "SendMessage": sm += 1
+                        if b.get("name") in ("SendMessage", "mcp__session-orchestration__reply"): sm += 1
             if t == "user" and not o.get("isSidechain"):
                 if isinstance(c, str):
                     txt = c
@@ -899,6 +905,204 @@ def triggers(sid, days=7):
         print(f"{sid}\t{k}\twakes={w}\trequests={n}\tusd={d:.2f}\tper_wake={d / max(w, 1):.2f}")
 
 
+CARD = "Coordinated session (session-orchestration)"  # the reply card's first words (hooks/reply-card.txt)
+PLUGIN_MD = re.compile(r"session-orchestration/(?:\S*/)?(skills/[\w-]+|features|messages|terminals)/([\w.-]+\.md)\b")
+STATUS_CMD = re.compile(r"[\w.]-status\b")  # session-status, or a project's own (proj-status); not a --status flag
+OUTPUT = re.compile(r"/tasks/(\w+)\.output\b")  # a background Bash's output file
+
+
+def doc_part(path):
+    """The part of the context a read Markdown file is: skill (the orchestrating-sessions SKILL.md), coord_docs (the
+    plugin's other skill files), feature_docs (features/, messages/, terminals/) or project_docs; None if not Markdown."""
+    m = PLUGIN_MD.search(path)
+    if m:
+        if m.group(1) == "skills/orchestrating-sessions" and m.group(2) == "SKILL.md":
+            return "skill"
+        return "coord_docs" if m.group(1).startswith("skills") else "feature_docs"
+    return "project_docs" if path.endswith(".md") else None
+
+
+def kind_of(first, name, coord):
+    """context-watch.sh's session kinds from the first prompt (coordinator, chunk, review, task), with rnd and other
+    told apart; a session with neither a task nor rnd that opened the pane or ran the status command with --start,
+    --changes, --watch or --owner (lib.sh's coord_re) is a coordinator (a task that tests session-status stays a task)."""
+    if re.search(r"^Act as a coordinator", first, re.M):
+        return "coordinator"
+    if re.search(r"^Chunk: [^/\n]+/[A-Za-z0-9]+", first, re.M):
+        return "chunk"
+    if re.search(r"^Session task: \S+ review([.,;:!)]|$)", first, re.M):
+        return "review"
+    if re.match(r"\s*([Ww]ork on |[A-Z][A-Z0-9]+-\d+:)", first) or re.search(r"^Session task: ", first, re.M):
+        return "task"
+    if re.search(r"R&D run|rnd-weekly|<command-name>/?(session-orchestration:)?rnd<", first) or name.startswith("rnd"):
+        return "rnd"
+    return "coordinator" if coord else "other"
+
+
+def scan(f):
+    """A main transcript: its requests ([context, output, ts]), what reached the context ([part, chars, what, the
+    request it first reached, tokens]: each request's growth less the previous output, split by characters over what
+    arrived since), counts per kind of load, the request before the first typed prompt after the first one, the
+    request after the status watcher was armed, and whether it's a `-p` run."""
+    reqs, items, pending, calls, bg, seen, n = [], [], [], {}, set(), set(), {}
+    first = name = ""
+    coord, typed, watch, test = False, None, None, False
+    add = lambda part, chars, what="": pending.append([part, chars, what])
+    count = lambda k, v=1: n.__setitem__(k, n.get(k, 0) + v)
+    for _, o in lines(f):
+        if o.get("isSidechain"):
+            continue
+        test = test or o.get("entrypoint") == "sdk-cli"
+        t, a, m = o.get("type"), o.get("attachment") or {}, o.get("message") or {}
+        c = m.get("content")
+        if t == "agent-name":
+            name = o.get("agentName") or name
+        elif a:
+            at = a.get("type")
+            if at == "deferred_tools_record":  # the schemas a ToolSearch loaded (their text is here, not in its result)
+                names = {e.get("name") for e in a.get("entries") or [] if isinstance(e, dict)}
+                count("sendmessage_schema", "SendMessage" in names)
+                count("reply_schema", "mcp__session-orchestration__reply" in names)
+                if names:
+                    add("schemas", len(json.dumps(a)), "reply" if names == {"mcp__session-orchestration__reply"} else "")
+            elif at == "invoked_skills":  # a compaction put the skill back
+                for s in a.get("skills") or []:
+                    ours = "orchestrating-sessions" in s.get("name", "")
+                    count("skill_reinject", ours)
+                    add("skill" if ours else "rest", len(s.get("content", "")))
+            elif at == "hook_additional_context":
+                body = json.dumps(a.get("content", ""))
+                count("card", CARD in body)
+                add("rest", len(body), "card" if CARD in body else "")
+            elif at == "queued_command" and "<cross-session-message" in str(a.get("prompt", "")):
+                count("msgs"); count("mid_turn")
+                add("rest", len(str(a.get("prompt", ""))))
+        elif t == "user":
+            blocks = [b for b in c if isinstance(b, dict)] if isinstance(c, list) else []
+            txt = c if isinstance(c, str) else "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+            results = [b for b in blocks if b.get("type") == "tool_result"]
+            if isinstance(c, str):
+                count("msgs", c.startswith("Another Claude session sent a message"))
+                add("rest", len(c))
+            if not first and txt.strip() and not results and not o.get("isMeta"):
+                first = txt
+            elif first and typed is None and txt != first and said(o, txt) == "human" \
+                    and not txt.startswith(("Coordinator pane", "Approval pane")):  # the pane's prompts
+                typed = len(reqs) - 1
+            for b in results:
+                part, what = calls.get(b.get("tool_use_id"), ("rest", ""))
+                rt = b.get("content")
+                rt = rt if isinstance(rt, str) else "".join(x.get("text", "") for x in rt or [] if isinstance(x, dict))
+                mm = re.search(r"with ID: (\w+)", rt) if part == "status" else None
+                if mm:
+                    bg.add(mm.group(1))  # its output, read later, is status output too
+                add(part, len(rt), what)
+            for b in blocks:
+                if b.get("type") == "text":
+                    tx = b.get("text", "")
+                    ours = tx.startswith("Base directory for this skill:") and "orchestrating-sessions" in tx.split("\n", 1)[0]
+                    count("skill_load", ours)
+                    add("skill" if ours else "rest", len(tx), "load" if ours else "")
+        elif t == "assistant":
+            rid = o.get("requestId")
+            if rid and rid not in seen and m.get("model") != "<synthetic>":  # a synthetic one (an API error) has no usage
+                seen.add(rid)
+                u = m.get("usage") or {}
+                items += [it + [len(reqs)] for it in pending]
+                pending.clear()
+                reqs.append([u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0),
+                             u.get("output_tokens", 0), o.get("timestamp") or ""])
+            for b in c if isinstance(c, list) else []:
+                if not isinstance(b, dict) or b.get("type") != "tool_use":
+                    continue
+                nm, inp = b.get("name", ""), b.get("input") or {}
+                cmd, p = str(inp.get("command", "")), str(inp.get("file_path", ""))
+                out = OUTPUT.search(cmd if nm == "Bash" else p)
+                docs = [(d, os.path.basename(x)) for x in ([p] if nm == "Read" else re.findall(r"\S+\.md\b", cmd) if nm == "Bash" else [])
+                        for d in [doc_part(x)] if d]
+                # shortcut: a cat of several files counts as its first one's part; split it if such reads turn up at Start
+                part, what = docs[0] if docs and (nm == "Read" or re.search(r"\b(cat|sed|head|tail|awk)\b", cmd)) else ("rest", "")
+                if part == "rest" and ((nm == "Bash" and STATUS_CMD.search(cmd)) or (out and out.group(1) in bg)):
+                    part = "status"
+                part = "schemas" if nm == "ToolSearch" else part
+                if nm == "Bash" and STATUS_CMD.search(cmd) and re.search(r"\s--(start|changes|watch|owner)\b", cmd):
+                    coord = True
+                    if watch is None and re.search(r"\s--watch\b", cmd):
+                        watch = len(reqs)  # this call's request is len(reqs) - 1: the next one is the first after it
+                coord = coord or nm == "mcp__session-orchestration__open_pane"
+                count("worker_md", part == "coord_docs" and what == "worker.md")
+                count("sendmessage_call", nm == "SendMessage")
+                count("reply_call", nm == "mcp__session-orchestration__reply")
+                calls[b.get("id")] = (part, what)
+    tot = {}
+    for it in items:
+        tot[it[3]] = tot.get(it[3], 0) + it[1]
+    for it in items:
+        i = it[3]
+        grow = reqs[i][0] - reqs[i - 1][0] - reqs[i - 1][1] if i > 0 else 0
+        it.append(round(grow * it[1] / tot[i]) if grow > 0 and tot[i] else 0)
+    return dict(kind=kind_of(first, name, coord), reqs=reqs, items=items, n=n, typed=typed, watch=watch, test=test)
+
+
+def started(days):
+    """The main transcripts whose first request falls in the window, scanned; `-p` runs left out."""
+    window(days)
+    for f in transcripts():
+        s = scan(f)
+        if s["reqs"] and not s["test"] and not out_of(s["reqs"][0][2]):
+            yield os.path.basename(f)[:8], s
+
+
+START_PARTS = ["skill", "coord_docs", "feature_docs", "project_docs", "schemas", "status"]
+
+
+def start(days=7):
+    """One row per coordinator that started in the window: its Start's requests, the context at the first request and
+    after Start, and what Start added by part (tokens; rest: model output, small reads, hook text); then the medians.
+    Start ends at the request after the status watcher was armed, or the one before the first typed prompt after the
+    first if that comes sooner; with neither, at request 15."""
+    print("session\tstarted\treqs\tbase\tafter_start\t" + "\t".join(START_PARTS) + "\trest")
+    rows = []
+    for sid, s in started(days):
+        if s["kind"] != "coordinator":
+            continue
+        reqs = s["reqs"]
+        ends = [e for e in (s["watch"], s["typed"]) if e is not None and e >= 1]
+        end = min(min(ends) if ends else 14, len(reqs) - 1)
+        parts = [sum(x[4] for x in s["items"] if x[0] == p and x[3] <= end) for p in START_PARTS]
+        row = [end + 1, reqs[0][0], reqs[end][0]] + parts + [reqs[end][0] - reqs[0][0] - sum(parts)]
+        rows.append(row)
+        print("\t".join(map(str, [sid, reqs[0][2][:16]] + row)))
+    med = lambda xs: sorted(xs)[len(xs) // 2] if xs else 0
+    print("\t".join(map(str, ["median", f"n={len(rows)}"] + [med([r[i] for r in rows]) for i in range(len(START_PARTS) + 4)])))
+
+
+LOADS = ["msgs", "mid_turn", "skill_load", "skill_reinject", "worker_md", "card", "sendmessage_schema", "reply_schema",
+         "sendmessage_call", "reply_call"]
+
+
+def loads(days=7):
+    """One row per session kind, over sessions that started in the window: sessions, those with messages, then counts
+    of messages (mid-turn too), orchestrating-sessions skill loads and compaction re-injects, worker.md reads, reply
+    cards, SendMessage and reply schema loads and calls, and the median tokens of a skill load, a card and a reply
+    schema load (only reply in its ToolSearch), over those after the first request (one before it has no growth to
+    measure)."""
+    agg = {}
+    for _, s in started(days):
+        a = agg.setdefault(s["kind"], {"sessions": 0, "with_msgs": 0, "tok": {"load": [], "card": [], "reply": []}})
+        a["sessions"] += 1
+        a["with_msgs"] += s["n"].get("msgs", 0) > 0
+        for k in LOADS:
+            a[k] = a.get(k, 0) + s["n"].get(k, 0)
+        for x in s["items"]:
+            if x[2] in a["tok"] and x[3] > 0:
+                a["tok"][x[2]].append(x[4])
+    med = lambda xs: sorted(xs)[len(xs) // 2] if xs else "-"
+    print("kind\tsessions\twith_msgs\t" + "\t".join(LOADS) + "\tskill_tok\tcard_tok\treply_tok")
+    for k, a in sorted(agg.items(), key=lambda kv: -kv[1]["sessions"]):
+        print("\t".join(map(str, [k, a["sessions"], a["with_msgs"]] + [a[x] for x in LOADS] + [med(a["tok"][t]) for t in ("load", "card", "reply")])))
+
+
 def inline(t):
     t = html.escape(t, quote=False)
     t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
@@ -1110,7 +1314,8 @@ def usage(days=30):
 
 
 CMDS = {"sessions": sessions, "events": events, "context": context, "units": units, "waits": waits, "bgtasks": bgtasks, "replies": replies,
-        "triggers": triggers, "usage": usage, "chunks": chunks, "trial": trial, "handoff": handoff, "html": md2html}
+        "triggers": triggers, "usage": usage, "chunks": chunks, "trial": trial, "handoff": handoff, "start": start, "loads": loads,
+        "html": md2html}
 
 if __name__ == "__main__":
     a = sys.argv[1:]

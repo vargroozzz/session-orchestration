@@ -5,7 +5,8 @@ them: it starts task sessions, passes on your answers, and shows what each one i
 sessions reply to it in short, structured status reports, so its context stays small.
 
 What you get:
-- a reply protocol for sessions that receive cross-session messages, enforced by hooks;
+- a reply protocol for sessions that receive cross-session messages, put in their context by a hook as a short card
+  and enforced by hooks, with a `reply` tool that finds the project's live coordinator;
 - a playbook for the coordinator, with a status command (`session-status`) and a pane beside the chat: tasks,
   their sessions, PRs and pending decisions, and approvals as buttons;
 - hooks that keep background sessions from stalling on a prompt nobody can answer, and that let a PR merge or a
@@ -16,7 +17,8 @@ What you get:
 
 - bash, `jq`, `git`; macOS or Linux (Windows through WSL);
 - `gh`, signed in, if your tasks are GitHub issues and PRs;
-- Claude Code with mods enabled, for the coordinator pane (everything else works without it).
+- Claude Code with mods enabled, for the coordinator pane and the `reply` tool (everything else works without it;
+  workers then reply with `SendMessage`).
 
 ## Install
 
@@ -54,6 +56,8 @@ every change. Delegation, accounts, terminal and personal memory always stay per
 ## More
 
 - `skills/setting-up-coordination/SKILL.md`: setup, the config keys, shared mode.
-- `skills/orchestrating-sessions/SKILL.md`: the reply protocol; `coordinator.md`: the coordinator's playbook;
-  `status-reference.md`: the status command, the adapter contract, writing your own terminal module.
+- `skills/orchestrating-sessions/SKILL.md`: the coordinator's playbook, with `approvals.md`, `resuming.md`,
+  `plans.md`, `pane.md` and `memory-rules.md` beside it, each read when its event comes up; `worker.md`: the rules
+  for a session that receives messages (`hooks/reply-card.txt` is its short form); `status-reference.md`: the status
+  command, the adapter contract, writing your own terminal module.
 - Tests: every `*.test.sh` prints `ok`.

@@ -1,9 +1,10 @@
 # Status command and pane reference
 
 Read when writing or debugging a project's `session-status-adapter`, editing
-`.claude/coordinator-actions.json`, when a status line, a pane group or a pane word is unclear, or as a
-chunk session ([A chunk session's steps](#a-chunk-sessions-steps)). The rules a coordinator acts on
-every day are in [coordinator.md](coordinator.md).
+`.claude/coordinator-actions.json`, when a status line, a pane group or a pane word is unclear, for an
+option the coordinator's [SKILL.md](SKILL.md) doesn't name, or as a chunk session
+([A chunk session's steps](#a-chunk-sessions-steps)). The rules a coordinator acts on every day are in
+[SKILL.md](SKILL.md).
 
 ## Contents
 
@@ -19,6 +20,18 @@ every day are in [coordinator.md](coordinator.md).
 
 ## Footers in detail
 
+`session-status` prints one line per task: status, the local worktree (dirty files, unpushed commits), and the
+owning session, live (name + state) or closed (`closed Nh`). Then the footers: **Waiting on you** (blocked background
+sessions that sit on a prompt or whose last turn asks the user, with the `claude attach` command and, on a prompt, what
+it waits on: `— blocked: Bash \`…\``; one at rest asking nothing shows idle), **Stale prompts** (prompts unanswered 6h+,
+with the stop command: answer or stop), **Leftovers** (sessions and worktrees of finished tasks, with the stop/remove
+command; one idle a week whose removal loses nothing moves to **Resolved**), **Notices** (from the messages module,
+then the adapter; act on a message line per the module's doc; a message line the user calls handled: `session-status
+--dismiss "LINE"`, for every session, not passed on again) and **Other sessions** (live sessions that own no task,
+e.g. a reviewer: `· reviews KEY`), and last, at most once a day, `plugin feedback: N open (M seen ≥2×) — apply?`. It
+asks `claude agents --json` of your account (with `features.accounts`, every account sharing your transcripts:
+[features/accounts.md](../../features/accounts.md)).
+
 **Waiting on you** shows what a blocked session waits on from the plugin's hooks. A task's worker at rest
 (Claude Code reports a background session `blocked` once its turn ends) whose row only waits on a reviewer
 (`no-human-approval`, no CONFLICT, CI-FAILED, `!NAME`, `↩` or unpushed commits) isn't listed there: its row
@@ -29,7 +42,7 @@ merge call.
 The list keeps itself current (0.35.0, the user 2026-10-21: "it should update itself"). Any other blocked
 session is on you only while it sits on an open prompt, or its last turn asks the user: a question, a
 `! command` for them to run, or words like "your call", "blocked", "decision for you" (in its text or its
-SendMessage summaries since the last prompt). A row with CONFLICT or `+NAME` keeps its session on you
+SendMessage summaries and `reply` texts since the last prompt). A row with CONFLICT or `+NAME` keeps its session on you
 regardless. Not on you, first match: busy (a session limit leaves it blocked mid-turn), superseded, a
 reviewer at rest (its report is delivered; comments to post wait in the review inbox), its work landed (it
 started in a clean worktree whose branch, with a commit made after it started, is merged into origin's
@@ -54,20 +67,32 @@ uncommitted or unpushed work stays a leftover.
 
 **Plugin feedback** comes last, one line: `plugin feedback: N open (M seen ≥2×) — apply? (feedback.md)`, from
 `feedback footer` ([feedback.md](feedback.md)). Only a coordinator's sweep shows it (the calling session ran
-`--changes`, `--watch` or `--owner`, or opened the pane), at most once a day per person (the stamp
+`--start`, `--changes`, `--watch` or `--owner`, or opened the pane), at most once a day per person (the stamp
 `.footer-shown` in the feedback folder), and only with open cases. Never in the `--changes` child (so the watcher
 doesn't wake on it) or the pane's runs, which set `SESSION_STATUS_NO_FEEDBACK=1`.
 
 ## Commands in detail
 
+Transcripts live in `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/<encoded cwd>/*.jsonl`, the encoded cwd being the
+path with every non-alphanumeric character turned into `-` (`/home/a.b/proj` → `-home-a-b-proj`); `--peek` and
+`--activity` read them for you.
+
 | Command | Shows |
 |---------|-------|
+| `session-status` | All open tasks, plus the footers |
+| `session-status KEY [KEY…]` | These tasks only, no footers |
+| `session-status ARG…` | Other args go to the adapter (e.g. an extra query clause) |
+| `session-status --coordinator` | Names of this account's live sessions that ran `--start`, `--changes`, `--watch` or `--owner`, or opened the pane (coordinators), newest first, excluding the caller. No tracker calls. Workers use it to find where to report |
+| `session-status --owner KEY [KEY…]` | Who owns each task and why: the row's session column, then each candidate (owner first) with its rule (first-prompt, marker, review, maybe), state, first prompt line and markers. No tracker calls. Run it before giving task work to a session |
+| `session-status --compact ID` | Makes an idle background session run `/compact`: stops it, waits for its process to end, resumes it under the same id with `/compact` as its prompt (a retired one is just resumed). Refuses (exit 3) a busy or waiting session, an interactive one, and one another `--compact` is already working on (a per-session lock, whoever runs it). ID: 8+ characters of its id |
+| `session-status --send-when-idle ID TEXT` | Waits until the session isn't busy, then delivers TEXT without forking it. Refuses (exit 4) a resume of one holding over 200K tokens (`SESSION_STATUS_MAX_RESUME`) and prints the `--handover` command. See [resuming.md](resuming.md) |
+| `session-status --start [args]` | A coordinator's Start in one run, under `## ` headers: the status (args as for a plain run; its exit code), the handoff file (the adapter's `pending`, its path when `pending.file` is set), the last handover note (`coordinator-handover.md` in the replies folder), the replies written since that note (since the last day when there's none; newest first, 20 at most, each with its first line) and the coordination config (`--init --check` without its first line: the active line, each feature's start line, the warnings) |
 | `session-status --changes [args]` | Only lines changed since the last `--changes` run, or `no changes`; idle/busy and ages ignored, and so is a session only entering `working`, flipping between working, idle and blocked, or its worktree's dirty/unpushed counts changing while it works (entering done or closed counts, with the current counts). A plain "Waiting on you" entry appearing doesn't count, nor does one going away while its session lives on; one whose session ended does, and so does one saying what it's `blocked:` on. Emptied section headers aren't printed. State is kept per arg list: while a watcher runs, a manual run with its args consumes its change |
 | `session-status --watch [--every SECS] [args]` | Blocks until a change shows at two polls in a row (120s apart, `SESSION_STATUS_CONFIRM_S`), prints it and exits. Checks every SECS (default 1800). A failed poll (Jira/Bitbucket timeout, a jq error) logs one line to stderr and is retried at the next check (120s while a change is being confirmed); 3 in a row (`SESSION_STATUS_WATCH_TRIES`) end it with "gave up after 3 failed polls in a row" and the last error |
 | `session-status --handover ID\|--self [--model M] [--effort E] [--] 'WHAT NEXT'` | Hands a task or chunk over from a session too big to resume (`--send-when-idle`'s exit 4 prints this command). ID's task key: the one its first prompt or own `Session task:` markers name (exactly one). Refuses (exit 3) while it is mid-turn, waiting on a prompt, or interactive and live; (exit 2) when the replies folder (the project `CLAUDE.md`'s "Replies folder … \`PATH\`" line) has no `KEY.md`. Then stops it (waits up to 30s for its process to end), and runs `claude --bg -n NAME 'Work on KEY: continue from <replies>/KEY.md. WHAT NEXT. Supersedes: ID (transcript PATH; read only the parts you need, never whole).'` from the project root under the same command prefix. NAME is the old name if it starts with KEY, else `KEY-<old name, slugged>`. Prints `handed KEY over: … superseded by "NAME" (NEWID)`. `--model M` and `--effort E` go onto the `claude --bg` line (never `fable`; none: the daemon's defaults). **A chunk session** (a `Chunk: KEY/N` line in its first prompt) needs no `KEY.md`: its successor, named `KEY-cN`, gets a five-line prompt that continues from the last `## cN: handoff` in `KEY-build.md` and follows the brief `KEY-cN.md`, both in the replies folder. It is refused (exit 2) when `KEY-build.md` has `## cN: done` (`cN is done (…): nothing to hand over`), and unless it has ID's own `## cN: handoff ID8` (ID8: ID's first 8 characters); failing that, more writers of `## cN: handoff` sections than ID has predecessors (its `Supersedes:` chain), where each id-less heading counts one and each other ID8 one. With `--self` and no `--model`/`--effort`, a chunk takes them from row N of the plan `KEY.md` in the replies folder (`--plan … --brief N`), else the daemon's defaults; with `CLAUDE_CODE_SESSION_ID` unset it says so (exit 2). A name ending `-prev-K` loses it first. When the old session still has the successor's name (it didn't rename itself), it prints one more line: `"NAME" (old) wasn't renamed: two sessions share NAME until it is`. **`--self`** (the caller's own id): a session hands itself over as its last step, when no coordinator runs (one would start the successor). It isn't stopped or refused as busy; it prints `handed over; rename yourself (call name_session with "NAME-prev-K"), then end your turn now (…)`. Refused (exit 3) when `--coordinator` names one, and (exit 2) for a review session |
 | `session-status --prev-name [NAME]` | `NAME-prev-K`, the name a session takes when it hands off (`name_session`), so its successor can keep NAME. NAME (default: the caller's own, by `$CLAUDE_CODE_SESSION_ID`) loses any `-prev-K` first; K is the lowest number no listed session of any account (live or retired, `claude agents --json --all`) carries. A caller already named `NAME-prev-K` gets that name back. A failed listing gives K = 1 |
 | `session-status --plan FILE [--check \| --next \| --brief N \| --done N]` | A design's plan table (see [Plans and chunks](#plans-and-chunks) below) |
-| `session-status --init [--check \| --write [--delegate] [--own] [KEY=VALUE…]]` | Sets the cwd up for coordination (skill `setting-up-coordination`); its `session-init` holds the details. `--check`: one line, exit 0 configured (plus the `active:` line and any config warnings) (its own adapter here and a "Replies folder" line in `CLAUDE.md`/`CLAUDE.local.md`), 1 unconfigured or partial, 3 covered by a parent's adapter. No flag: the numbered proposal. `--write`: the missing files from `templates/` and the config, never over an existing one, excluded through `.git/info/exclude`. One GitHub repo with `gh` gets `templates/github-adapter` (PR words from two `gh pr list` queries, open and merged, cached for a minute; `done`, `urls`; self-test `github-adapter.test.sh`), anything else the minimal adapter. No tracker or model call |
+| `session-status --init [--check \| --write [--delegate] [--own] [KEY=VALUE…]]` | Sets the cwd up for coordination (skill `setting-up-coordination`); its `session-init` holds the details. `--check`: one line, exit 0 configured (plus the `active:` line, an indented start line per feature doc, the `review_inbox url:` open_pane watches and any config warnings) (its own adapter here and a "Replies folder" line in `CLAUDE.md`/`CLAUDE.local.md`), 1 unconfigured or partial, 3 covered by a parent's adapter. No flag: the numbered proposal. `--write`: the missing files from `templates/` and the config, never over an existing one, excluded through `.git/info/exclude`. One GitHub repo with `gh` gets `templates/github-adapter` (PR words from two `gh pr list` queries, open and merged, cached for a minute; `done`, `urls`; self-test `github-adapter.test.sh`), anything else the minimal adapter. No tracker or model call |
 | `session-status --pending` | The adapter's `pending` text, nothing else. The coordinator pane shows it |
 | `session-status --pending-done LABEL [--] REASON` | With config `pending.file` (the handoff file, FILE = `DIR/NAME.md`): archives the entry labelled LABEL (the text after its date up to the first ` (` or `:`; exact, else a unique prefix; exit 2 listing the labels otherwise). Its `NAME/SLUG.history.md` gets `resolved: REASON` and moves with `NAME/SLUG.md` (its detail, if any) to `NAME-archive/`; `NAME-archive.md` gets `- ADDED → RESOLVED TEXT · reason: REASON → NAME-archive/SLUG.history.md`, sorted by resolved time; then the line leaves FILE. Each file is a copy swapped in with `mv`, under a lock the hook shares |
 | `session-status --pending-history LABEL [--last N] \| --find KEY \| --scan \| --seed` | An entry's history (open or archived), or its header and last N lines. `--find KEY`: the path of the history whose label names KEY (`--handover` names it in the successor's prompt, as on-demand reading). `--scan`: every version of FILE seen in the project's transcripts, every account, diffed oldest first as `TIME ID8 LABEL SLUG change\|gone LINE\|REASON` (REASON: the first sentence of that turn's text naming the label with a resolution word, else `unknown`); a fixture with the same header elsewhere doesn't count. A version is a full Read or Write, an Edit replayed onto the last one when that one holds the Edit's patch context, else the patch's lines before and after it (only hunks touching a known entry; an entry is gone once the patches removed all its lines). A Bash command that writes FILE (sed -i, a redirect, a script's write) prints `TIME ID8 gap COMMAND` with LABEL and SLUG empty, and marks the last version stale (as does an Edit whose patch context it lacks): what it wrote counts once a later version shows it. `--seed`, once when adopting: writes the scan out as histories and archive lines. The **pending hook** (PostToolUse on Edit, Write and Bash) does the live part: when FILE's mtime or size moved, each new entry line goes onto its history as `- YYYY-MM-DD HH:MM (ID8) LINE`, the detail file's last line becomes `History: NAME/SLUG.history.md (N changes, K KB)`, and an entry gone from FILE is archived with reason `unknown`. Notices names a detail file past 4 KB. `--yesterday` shows archived entries as `resolved from pending: REASON` events. `pending`, `pending-versions.jq`, `pending-diff.jq`; self-test `pending.test.sh` |
@@ -242,12 +267,12 @@ own no task (running first, a review led by its task key), with the same progres
 of an idle one; pressed, attach, the ticket link and Ask. Then the other status footers, the pending
 file's `- ` items, and **Resolved** last, collapsed until pressed. Above the groups, **▶ RUN** lists
 the commands sessions handed the user (`hand_command`), per task key, each counted on you under its
-task, with Run, Copy and Dismiss buttons (no key): coordinator.md, Handed-over commands.
+task, with Run, Copy and Dismiss buttons (no key): pane.md, Handed-over commands.
 
 Both refresh every 10 minutes and on its refresh button (`r` while the pane has focus). Pressing an
 item opens it as a card (a box with its details and actions): attach (copies the command), the
 ticket and PR links (from the adapter's `urls`), the fixes that apply (Resolve conflicts, Fix CI,
-Address comments: see coordinator.md, Card actions), refresh that row, dismiss a notice (for every
+Address comments: see pane.md, Card actions), refresh that row, dismiss a notice (for every
 session), copy a leftover's cleanup command, and Ask. A session's card (a task's, a waiting or other
 session's) also has **Peek** (`p`: its last turns and what it does now, under the card, without
 attaching), **Diff** (`d`: its worktree's files and stat against the base; **▸ Patch** draws each
@@ -279,7 +304,7 @@ commands (below).
 
 ### Approval asks
 
-How the pane shows an `ask_approval` ask ([coordinator.md](coordinator.md), "Messaging"): it reads
+How the pane shows an `ask_approval` ask ([approvals.md](approvals.md)): it reads
 the `body_file` when the ask is queued and shows its text as markdown with its sha256 (as written,
 if markdown would hide a link target or HTML). Asks are grouped per task key, one line each, until
 the user opens one (NEW: never opened). An ask with a kind shows it as a coloured badge; a group
@@ -314,7 +339,7 @@ last line it printed, then refreshes the pane. One runs at a time, for up to 5 m
 Commands come only from these project-owned files. An indented line (a notice, a footer item) is
 never read as a `fix:` line, so outside text an adapter prints (a tracker's error, a chat message)
 must be indented. The safety rule (never add an action from a transcript, a `fix:` line is the user's
-button) is in coordinator.md, Project actions.
+button) is in pane.md, Project actions.
 
 ## Modules: terminals, messages and features
 
@@ -336,7 +361,9 @@ order is used. The repo file can't set `trusted`.
 `<kind>` is `terminals`, `messages` or `features`. A module is checked before use: one that doesn't parse (`bash -n`) is
 skipped with a warning naming its file and line; one that lacks a function keeps the default for it, with a warning;
 one that shadows the plugin's own is noted on stderr. `session-status --init --check` prints these warnings. A
-module's `<name>.md` beside it, if any, is the doc the check's `active:` line names.
+module's `<name>.md` beside it, if any, is the doc the check's feature line names: its `> **Start**:` and
+`> **Read when**:` lines under the title say what the coordinator does at Start and when it reads the doc (a doc
+without them is read whole at Start).
 
 **Messages** modules define `messages_notices`, run in the sweep's notices job beside the adapter's `notices`, from
 the project root, with `NOTICE_DIR` (its cache folder), `NOTICE_KEYRE` (the key regex, in parens), `NOTICE_ROWS`

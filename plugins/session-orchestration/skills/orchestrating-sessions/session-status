@@ -61,7 +61,7 @@
 # session idle or done; a clean worktree whose commits are merged or on origin): by transcript, last commit and folder times.
 # --changes doesn't compare that section: an item moving there, or going away from it, isn't news.
 # "Other sessions": live sessions that own no row (no task, a reviewer, a session dir) and aren't blocked (Waiting
-# on you has those), coordinators (ran --changes, --watch or --owner, or opened the pane) left out: `"NAME" STATE AGE[ · reviews KEY][ — LAST TEXT] (PREFIX attach ID)`.
+# on you has those), coordinators (ran --start, --changes, --watch or --owner, or opened the pane) left out: `"NAME" STATE AGE[ · reviews KEY][ — LAST TEXT] (PREFIX attach ID)`.
 # AGE is since start while working, else since its transcript was last written; idle or done ones drop off at
 # SESSION_STATUS_OTHER_HOURS (3). --changes doesn't compare it either.
 # Owners: a review session (`Session task: KEY review`, "review" ending the marker) never owns KEY. Task markers
@@ -75,6 +75,9 @@
 # Usage: session-status              all open tasks
 #        session-status KEY [KEY…]   these tasks; no footer (it covers all sessions)
 #        session-status ARG…         other args go to the adapter's `tasks`
+#        session-status --start [args]   a coordinator's Start in one run: the status, the handoff file, the last
+#                       handover note, the replies written since it (else in the last day) with their first lines,
+#                       and the coordination config with each enabled feature's start step
 #        session-status --changes [args]   only lines changed since the previous --changes run
 #        session-status --watch [--every SECS] [args]   block until --changes reports something at two polls in a
 #                       row (or fails 3 in a row), print it and exit; checks every SECS (default 1800). Run it in
@@ -98,8 +101,9 @@
 #                       not: `DIR · vs BASE`, the --stat lines and untracked `?? FILE`s, a blank line, the patch
 #        session-status --compact ID   an idle background session runs /compact (stopped, resumed with it)
 #        session-status --send-when-idle ID TEXT   wait until it isn't busy, then deliver TEXT without forking it
-#        session-status --coordinator   names of this account's live coordinator sessions (ran --changes,
-#                       --watch or --owner, or opened the pane), newest first, excluding the caller; no tracker calls
+#        session-status --coordinator   names of this account's live coordinator sessions (ran --start,
+#                       --changes, --watch or --owner, or opened the pane), newest first, excluding the caller; no
+#                       tracker calls
 #        session-status --owner KEY…   who owns each task and why: the row's session, then each candidate
 #                       (first prompt, marker, review, maybe) with its state, first prompt line and markers
 #        session-status --handover ID|--self [--model M] [--effort E] [--] 'WHAT NEXT'   a task or chunk session too
@@ -120,7 +124,7 @@
 # Superseded: a first prompt's `Supersedes: ID` line (--handover writes it) or `You replace session ID` marks session
 # ID replaced. It never owns
 # a task, nor shows as a leftover: under Other sessions it reads `· superseded by NEWID`.
-# Transcripts that ran session-status (or a status-names command) with --changes, --watch or --owner, or that
+# Transcripts that ran session-status (or a status-names command) with --start, --changes, --watch or --owner, or that
 # opened the pane (open_pane), are a coordinator's and never own a task; a plain run (a worker checking its own
 # task) doesn't count.
 # The default key pattern also matches UTF-8 or SHA-256; a project with real keys should answer key-pattern.
@@ -348,6 +352,37 @@ ROOT=$(find_root); cd "$ROOT" || exit 1
 ENC=$(sed 's/[^A-Za-z0-9]/-/g' <<<"$ROOT")
 RESOLVED='Resolved (idle a week)'   # the pane's RESOLVED (hooks/register.tsx)
 NOW=$(date +%s); RESOLVE_S=$(( ${SESSION_STATUS_RESOLVE_DAYS:-7} * 86400 ))
+# replies_path: the replies folder the project's CLAUDE.md section names, absolute; empty when it names none.
+replies_path() {
+  local r; r=$(sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
+  r=${r%/}; r=${r/#\~/$HOME}; case $r in ''|/*) echo "$r" ;; *) echo "$ROOT/$r" ;; esac
+}
+
+# --start [args]: what a coordinator reads at Start, in one run, so it needn't pick files: the status (args as for a
+# sweep), the handoff file (the adapter's pending), the last handover note, the replies written since that note (else
+# in the last day; 20 at most, newest first, each with its first line) and the coordination config (setup's check:
+# the config in effect, its warnings, each enabled feature's start step). Exits with the status's code.
+if [ "${1:-}" = --start ]; then
+  shift; rd=$(replies_path); h=${rd:+$rd/coordinator-handover.md}
+  echo '## Status'; "$SELF" "$@"; rc=$?
+  pf=$(config pending.file 2>/dev/null); printf '\n## Handoff file%s\n' "${pf:+ ($pf)}"
+  "$SELF" --pending || echo '(none: the adapter gives no pending text)'
+  if [ -n "$h" ] && [ -f "$h" ]; then printf '\n## Handover (%s, written %s)\n' "$h" "$(epochfmt "$(mtime "$h")" '%m-%d %H:%M')"; cat "$h"
+  else printf '\n## Handover\n(none%s)\n' "${h:+: no $h}"; fi
+  if [ -z "$rd" ]; then printf '\n## Replies\n(none: the CLAUDE.md section names no replies folder)\n'
+  else
+    # The last coordinator saw what came before its handover, however old the note.
+    if [ -f "$h" ]; then since=(-newer "$h") what='since the handover'; else since=(-mtime -1) what='in the last day'; fi
+    printf '\n## Replies written %s (%s), newest first\n' "$what" "$rd"
+    r=(); while IFS= read -r -d '' f; do r+=("$f"); done < <(find "$rd" -maxdepth 1 -type f -name '*.md' ! -name coordinator-handover.md "${since[@]}" -print0 2>/dev/null)
+    [ ${#r[@]} != 0 ] || echo '(none)'
+    [ ${#r[@]} = 0 ] || mtime_named "${r[@]}" | sort -rn | head -20 | while read -r m f; do
+      printf '%s  %s: %s\n' "$(epochfmt "$m" '%m-%d %H:%M')" "${f##*/}" "$(grep -m1 . "$f" | cut -c1-160)"; done
+    [ ${#r[@]} -le 20 ] || echo "(and $(( ${#r[@]} - 20 )) older: ls -t $rd)"
+  fi
+  printf '\n## Coordination config\n'; c=$("$SELF" --init --check 2>&1) && sed 1d <<<"$c" || echo "$c"
+  exit "$rc"
+fi
 
 # --watch: a change must show at two polls in a row (CONFIRM_S apart) to count, so a flicker (a Bitbucket blip, a
 # state flip) wakes no one; the first poll peeks (SESSION_STATUS_PEEK: --changes keeps its state), the second commits.
@@ -399,10 +434,9 @@ if [ "${1:-}" = --changes ]; then
   # the replies folder. With accounts on, each <KEY>.md written there in the last day is a line, so writing one is
   # news; not a key a session of this account works on (it messages), nor the coordinator's own files (plans, briefs).
   if [ "$(config features.accounts 2>/dev/null)" = true ]; then
-    rdir=$(sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1); rdir=${rdir%/}
-    rdir=${rdir/#\~/$HOME}; case $rdir in /*) rd=$rdir ;; *) rd=$ROOT/$rdir ;; esac
+    rd=$(replies_path)
     kre=$(key_re "$(adapter_path "$ROOT")"); mine=$(awk -F'\t' '$4 == "claude" { print $2 }' ~/.cache/session-status/"$ENC".agents 2>/dev/null)
-    r=(); [ -z "$rdir" ] || while IFS= read -r -d '' f; do k=${f##*/}; k=${k%.md}
+    r=(); [ -z "$rd" ] || while IFS= read -r -d '' f; do k=${f##*/}; k=${k%.md}
       grep -qxE "$kre" <<<"$k" && ! grep -qE "^$k(-|\$)" <<<"$mine" && r+=("$f")
     done < <(find "$rd" -maxdepth 1 -type f -name '*.md' -mtime -1 -print0 2>/dev/null)
     [ ${#r[@]} = 0 ] || new+=$'\nReports:'$(mtime_named "${r[@]}" | sort -rn |
@@ -963,7 +997,7 @@ fi
 #  2. no owner: `sess:— (maybe ID: N mentions)`, the worker mentioning KEY most in its own text and the prompts it
 #     received (not tool output: a listing or grep hit isn't work), >= 10 times. A guess, never an owner. Reviewers
 #     and a session whose first prompt names another key are skipped. ponytail: breaks if two share a key evenly.
-# Coordinators (they ran the status command with --changes, --watch or --owner, or opened the pane) mention every
+# Coordinators (they ran the status command with --start, --changes, --watch or --owner, or opened the pane) mention every
 # key: never owners. A worker running it for its own task, or only reading the docs, stays a worker.
 find "$TRANSCRIPTS" -maxdepth 1 -name '*.jsonl' -mtime -30 2>/dev/null > "$TMP/files"
 names=$(adapter status-names 2>/dev/null) || names=
@@ -1084,7 +1118,7 @@ review_only() {  # EXTRA WT
     return 1 ;; esac
 }
 fmt_age() { if [ "$1" -lt 3600 ]; then echo "$(( $1 / 60 ))m"; elif [ "$1" -lt 86400 ]; then echo "$(( $1 / 3600 ))h"; else echo "$(( $1 / 86400 ))d"; fi; }
-# Its last turn (what it wrote since the last prompt or message, and its SendMessage summaries) asks the user: a
+# Its last turn (what it wrote since the last prompt or message, its SendMessage summaries, its reply texts) asks the user: a
 # `! command` line for them to run, or, outside code (fenced blocks, `spans`), a question or words like "your
 # call", "blocked on", "decision for you".
 # ponytail: a word list; "not blocked on" still reads as an ask, an offer with no question mark doesn't.
@@ -1093,7 +1127,8 @@ asks_user() {  # TRANSCRIPT
   t=$(tail -n 400 "$1" | jq -rRn '[inputs | fromjson? | select(type == "object" and .isSidechain != true)]
     | (map(.type == "user" and ((.message.content | type) == "string" or any(.message.content[]?; .type? == "text"))) | indices(true) | last) as $i
     | .[($i // -1) + 1:][] | select(.type == "assistant") | .message.content[]?
-    | if .type == "text" then .text elif .type == "tool_use" and .name == "SendMessage" then .input.summary // "" else empty end' 2>/dev/null)
+    | if .type == "text" then .text elif .type != "tool_use" then empty elif .name == "SendMessage" then .input.summary // ""
+      elif .name == "mcp__session-orchestration__reply" then .input.text // "" else empty end' 2>/dev/null)
   grep -qE '^[[:space:]]*! [a-z~./]' <<<"$t" && return
   awk '/^[[:space:]]*```/ { f = !f; next } !f' <<<"$t" | sed 's/`[^`]*`//g' > "$TMP/asks"
   grep -qiE '\?([[:space:]*)]|$)|(^|[^a-z])(blocked (on|by|until)|blocked:|(is|am|still|stays) blocked|(you|to) decide|decision for you|on you|your (call|go-ahead|go|approval|decision|answer|input|ok)|waiting (on|for) (you|your))([^a-z]|$)' "$TMP/asks"

@@ -14,7 +14,7 @@
 // for what was worked on since the last working day (session-status --yesterday), for the daily standup, written as
 // a few spoken sentences by a small model (standup-summary), the raw list one key away.
 import { atom, read, update } from 'claude-code'
-import type { Color, EngineInterface, Register, RenderElement, RenderNode, UiPressArgument } from 'claude-code'
+import type { Color, EngineInterface, Register, RenderElement, RenderNode, ToolCallResult, UiPressArgument } from 'claude-code'
 
 import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek } from '../types'
 
@@ -46,6 +46,7 @@ const ydList = atom({ plugin: 'session-orchestration', key: 'ydList' } as const,
 const handed = atom({ plugin: 'session-orchestration', key: 'handed' } as const, [])
 const handedResult = atom({ plugin: 'session-orchestration', key: 'handedResult' } as const, null)
 const terminal = atom({ plugin: 'session-orchestration', key: 'terminal' } as const, 'plain')
+const inboxWatched = atom({ plugin: 'session-orchestration', key: 'inboxWatched' } as const, null)
 
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
 // Text a session wrote, made safe to draw and kept whole: CRLF to LF, then every other control character (an
@@ -109,15 +110,15 @@ export async function readBody($: EngineInterface, path: string): Promise<AskBod
   }
 }
 // The prompt a click submits, and the Quote a relay carries. The clicked option comes first, so text in the
-// question can't pose as the answer. Keep in sync with coordinator.md and SKILL.md.
+// question can't pose as the answer. Keep in sync with approvals.md and worker.md.
 export const answerText = (a: Ask, option: string) =>
   `Approval pane answer for ${a.key}: ${oneLine(option)}. Asked: ${oneLine(a.question)}`
 // An item's Ask button. Never starts "Approval pane answer for ", so verify-approval.sh never takes it.
 export const askText = (about: string) => `Coordinator pane: where does ${about} stand, and what's next? Answer briefly.`
 // A card action (Resolve conflicts, Fix CI, Address comments): the user's instruction for the owning session,
-// which the coordinator relays. Never starts "Approval pane answer for ". Keep in sync with coordinator.md.
+// which the coordinator relays. Never starts "Approval pane answer for ". Keep in sync with pane.md.
 export const fixText = (key: string, says: string, prs: string) =>
-  `Coordinator pane action for ${key}: tell the session that owns it to ${says}${prs ? ` (${prs})` : ''}. Relay it per coordinator.md (Card actions).`
+  `Coordinator pane action for ${key}: tell the session that owns it to ${says}${prs ? ` (${prs})` : ''}. Relay it per pane.md (Card actions).`
 
 // A task row of session-status: `printf '%-9s %-14s %s%s | %s' KEY STATUS EXTRA LOCAL SESSION` then ` | TITLE`.
 // `maybe`: no owner, the guess session-status prints beside `—` (`ID: N mentions`), else ''.
@@ -662,7 +663,7 @@ async function dropAsks($: EngineInterface, hit: (a: Ask) => boolean) {
 
 // A review finding's ask (one with a kind) that expired unanswered comes back to the coordinator: a first ask to
 // re-ask once as a reminder, an expired reminder (question starts REMINDER) to record as dropped. Never starts
-// "Approval pane answer for ". Keep in sync with coordinator.md (Messaging).
+// "Approval pane answer for ". Keep in sync with approvals.md.
 export const REMINDER = 'Reminder: '
 const isReminder = (a: Ask) => a.question.startsWith(REMINDER)
 export const expiredText = (as: Ask[]) => {
@@ -670,7 +671,7 @@ export const expiredText = (as: Ask[]) => {
   const first = as.filter(a => !isReminder(a))
   const reminders = as.filter(isReminder)
   return [
-    'Approval pane: review finding asks expired unanswered after 24h (coordinator.md, Messaging).',
+    'Approval pane: review finding asks expired unanswered after 24h (approvals.md).',
     ...(first.length ? [`Re-ask each once, the same ask with its question starting "${REMINDER}": ${list(first)}.`] : []),
     ...(reminders.length ? [`These reminders expired too, so they are dropped: record each in its review file's header and tell its reviewer session: ${list(reminders)}.`] : []),
   ].join(' ')
@@ -734,12 +735,20 @@ const NAME_SCHEMA = {
   properties: { name: { type: 'string', pattern: SESSION_NAME, maxLength: 64, description: 'The new name: <KEY>-<short-desc>, e.g. PROJ-1234-fix-settler' } },
   required: ['name'],
 }
+const REPLY_SCHEMA = {
+  type: 'object',
+  properties: {
+    text: { type: 'string', minLength: 1, description: 'The message: your report, answer or question' },
+    to: { type: 'string', description: 'A received message\'s `from`, or a session name. Left out: this project\'s coordinator' },
+  },
+  required: ['text'],
+}
 
-async function runStatus($: EngineInterface, args: string[]) {
+async function runStatus($: EngineInterface, args: string[], init: { cwd?: string, env?: Record<string, string> } = {}) {
   const script = `${$.plugin.root}/skills/orchestrating-sessions/session-status`
   try {
     // The plugin-feedback footer is the coordinator's to read, once a day: the pane's sweeps mustn't use it up.
-    const r = await $.process.run(['bash', script, ...args], { timeoutMs: 180_000, env: { SESSION_STATUS_NO_FEEDBACK: '1' } })
+    const r = await $.process.run(['bash', script, ...args], { timeoutMs: 180_000, ...init, env: { ...init.env, SESSION_STATUS_NO_FEEDBACK: '1' } })
     return r.exitCode === 0 || r.stdout ? r.stdout.trimEnd() : ''
   } catch (err) {
     return `failed: ${err instanceof Error ? err.message : String(err)}`
@@ -830,6 +839,9 @@ export const HANDED_TTL = 3 * 86_400_000 // ponytail: a command older than 3 day
 // Unset, or no environment to read (a test that mocks none), reads as ''. $.env.get takes a literal name.
 const accountOf = async ($: EngineInterface) => (await $.env.get('CLAUDE_CONFIG_DIR').catch(() => undefined)) ?? ''
 const handedDir = async ($: EngineInterface) => `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/${HANDED_DIR}`
+// context-watch.sh's stamps, ${XDG_CACHE_HOME:-$HOME/.cache}/session-status: an empty XDG_CACHE_HOME is unset there (||).
+const stampDir = async ($: EngineInterface) => `${(await $.env.get('XDG_CACHE_HOME').catch(() => undefined)) ||
+  `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/.cache`}/session-status`
 // What's wrong with a hand_command call, or undefined. One line, no control or bidi character: the pane shows it
 // whole and Run runs exactly what it shows.
 export function handedProblem(key: unknown, command: unknown, what: unknown): string | undefined {
@@ -862,7 +874,7 @@ export const runConsent = (h: Handed) => `The user pressed "Run" in the coordina
 // Tells the coordinator a Run's outcome, to pass on to the session that handed it over. Not asUser: it states a
 // result, it approves nothing.
 export const ranText = (h: Handed, ok: boolean, line: string) =>
-  `Coordinator pane: the user ran the command session ${h.session.slice(0, 8)} handed over for ${h.key} (${h.what}); it ${ok ? 'succeeded' : 'failed'}${line ? `: ${line}` : ''}. Command: ${h.command}. Pass it on per coordinator.md (Handed-over commands).`
+  `Coordinator pane: the user ran the command session ${h.session.slice(0, 8)} handed over for ${h.key} (${h.what}); it ${ok ? 'succeeded' : 'failed'}${line ? `: ${line}` : ''}. Command: ${h.command}. Pass it on per pane.md (Handed-over commands).`
 
 // Handed commands this pane removed, with when it handed them: a read that raced the removal can't bring one back,
 // while the same command handed again later (a newer `at`) shows.
@@ -948,18 +960,39 @@ async function nameCoordinator($: EngineInterface) {
 // The bootstrap trigger (skill setting-up-coordination): a folder not set up for coordination says so in open_pane's
 // result, so the coordinator proposes the setup without having to remember to check. Set up, it gives the config in
 // effect and its warnings instead.
-async function initCheck($: EngineInterface): Promise<{ setUp: boolean, text: string }> {
+async function initCheck($: EngineInterface): Promise<{ setUp: boolean, text: string, inbox?: string }> {
   try {
     const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--init', '--check'], { timeoutMs: 30_000 })
     const line = oneLine(r.stdout)
     if (r.exitCode === 1) return { setUp: false, text: ` Not set up for coordination (${line}): run session-status --init and propose the setup (skill setting-up-coordination).` }
     if (r.exitCode === 3) return { setUp: false, text: ` This folder is ${line}. Tell the user, and ask whether this folder gets a coordinator of its own; if they meant the parent's project, its coordinator runs from there (skill setting-up-coordination).` }
-    // configured: the lines after the first are the config in effect and its warnings
-    const rest = r.stdout.split('\n').slice(1).map(l => l.trim()).filter(Boolean).join('; ')
-    return { setUp: true, text: rest && ` Coordination config: ${rest}.` }
+    // configured: the lines after the first are the config in effect and its warnings; the indented ones (each
+    // feature's start step) are session-status --start's to show
+    const rest = r.stdout.split('\n').slice(1).filter(l => !l.startsWith('  ')).map(l => l.trim()).filter(Boolean).join('; ')
+    const inbox = /^ {2}review_inbox url: (https:\/\/claude\.ai\/\S+)$/m.exec(r.stdout)?.[1]
+    return { setUp: true, text: rest && ` Coordination config: ${rest}.`, inbox }
   } catch {
     return { setUp: true, text: '' }
   }
+}
+
+// The review inbox's watch (features.review_inbox), started here so the coordinator loads no ArtifactComments schema
+// at Start. Its comments wake the session only once the watch is armed, which needs the link from the user. Once per
+// session and URL once it watches: a reopen leaves alone a watch the coordinator has armed since, and tries a failed
+// one again.
+async function watchInbox($: EngineInterface, url: string) {
+  if ((await read($, inboxWatched)) === url) return ''
+  let r: ToolCallResult<'ArtifactComments'>
+  try {
+    r = await $.tool.call({ tool: 'ArtifactComments', action: 'watch', url })
+  } catch (err) {
+    r = { deny: err instanceof Error ? err.message : String(err) }
+  }
+  const w = !r.isError && r.result && 'watch' in r.result ? r.result.watch : undefined
+  if (w?.watching) await update($, inboxWatched, () => url)
+  if (w?.auto_reply === 'armed') return ' Review inbox watched: its decisions wake you.'
+  if (w?.watching) return ` Review inbox watched but not armed, so its comments don't wake you: ask the user to paste ${url} once, then ArtifactComments watch it.`
+  return ` Review inbox not watched (${oneLine(r.deny ?? r.text ?? '') || 'no answer'}): ArtifactComments watch ${url} yourself.`
 }
 
 async function runCompact($: EngineInterface, id: string, name: string) {
@@ -1074,7 +1107,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'ask_approval',
-      description: 'Coordinator only: queue a reserved approval as buttons in the coordinator pane instead of the question box. Returns at once; the user\'s click arrives later as a prompt "Approval pane answer for <KEY>: <option>. Asked: <question>" (<option> may be the user\'s own words, typed in the pane\'s question dialog), which is the Quote for a relayed approval. Unanswered asks expire after 24h; an expired one with a kind (a review finding) comes back to you as a prompt: re-ask it once with the question starting "Reminder: "; an expired reminder is dropped (record it and tell the reviewer). Keep the question one line; put what the user should read in details (markdown), target, and for a comment post body_file (the body file, written first: the pane shows its text and sha256). Use it only for an action the project reserves for the user, one action per ask; ask anything else in plain text, or in the question box when the answer needs the user\'s own words (coordinator.md, Messaging).',
+      description: 'Coordinator only: queue a reserved approval as buttons in the coordinator pane instead of the question box. Returns at once; the user\'s click arrives later as a prompt "Approval pane answer for <KEY>: <option>. Asked: <question>" (<option> may be the user\'s own words, typed in the pane\'s question dialog), which is the Quote for a relayed approval. Unanswered asks expire after 24h; an expired one with a kind (a review finding) comes back to you as a prompt: re-ask it once with the question starting "Reminder: "; an expired reminder is dropped (record it and tell the reviewer). Keep the question one line; put what the user should read in details (markdown), target, and for a comment post body_file (the body file, written first: the pane shows its text and sha256). Use it only for an action the project reserves for the user, one action per ask; ask anything else in plain text, or in the question box when the answer needs the user\'s own words (approvals.md, next to the coordinator skill).',
       inputSchema: ASK_SCHEMA,
     })
     await $.tool.register({
@@ -1095,6 +1128,11 @@ export const register: Register = on => {
       name: 'hand_command',
       description: 'Any session: hand the user a command to run themselves (one you would otherwise give as `! <command>`: a classifier-refused CLI call, a release or deploy command, a settings or hook change). It shows in the coordinator pane under the task key with your session id and `what`, where the user runs it with one press (or copies it). Still put the `! <command>` line in your report: without a pane the user runs it by hand. The command is one line, run exactly as written in the coordinator\'s folder and account, so make it independent of your cwd (absolute paths). Don\'t wait on it: the coordinator tells you the outcome. Handing the same command again replaces it.',
       inputSchema: HAND_SCHEMA,
+    })
+    await $.tool.register({
+      name: 'reply',
+      description: 'Task sessions: send a message to another Claude session, in place of SendMessage. Answering a message: to is its `from`. A report you send unasked: leave to out, and it goes to this project\'s live coordinator (newest first, then the next). Returns who got it, or why nobody did: then the replies file is your report.',
+      inputSchema: REPLY_SCHEMA,
     })
     // immediate: it only opens or closes the pane, so it runs mid-turn, when a queued approval may be waiting.
     await $.command.register({ name: 'coordinator', description: 'Open the coordinator pane at any width (close: close it)', argumentHint: '[close]', immediate: true })
@@ -1126,7 +1164,8 @@ export const register: Register = on => {
     const init = await initCheck($)
     // Not set up yet: no name, which would be the parent's coordinator's or not the one the setup writes.
     const named = !init.setUp ? 'This session keeps its name until the folder is set up; open_pane names it then.' : await nameCoordinator($)
-    return { result: `${isPlaced ? 'Coordinator pane open.' : 'The pane is waiting: this terminal is too narrow or draws no panes. Tell the user /coordinator opens it at any width.'} ${named}${init.text}` }
+    const inbox = init.inbox ? await watchInbox($, init.inbox) : ''
+    return { result: `${isPlaced ? 'Coordinator pane open.' : 'The pane is waiting: this terminal is too narrow or draws no panes. Tell the user /coordinator opens it at any width.'} ${named}${init.text}${inbox}` }
   })
 
   // Any session's own name, `<KEY>-<short-desc>` once it knows its task, through open_pane's /rename at turn end.
@@ -1141,6 +1180,26 @@ export const register: Register = on => {
     if (name.endsWith('-coordinator')) return { deny: 'name_session: a "-coordinator" name is the coordinator\'s (open_pane gives it).' }
     await update($, naming, () => name)
     return { result: `This session becomes "${name}" when this turn ends.` }
+  })
+
+  // A worker's message without SendMessage's 2K schema: to a received `from`, else to this project's live
+  // coordinators (session-status --coordinator, newest first) until one takes it. That runs from the project root, as
+  // the Bash tool's run did: from a worktree under it, session-status could take the worktree for the project.
+  on('tool.call', { tool: 'mcp__session-orchestration__reply' }, async ($, e) => {
+    const { text, to } = e
+    if (typeof text !== 'string' || !text.trim()) return { deny: 'reply needs text.' }
+    const cwd = (await $.session.cwd()).replace(/\/\.claude\/worktrees\/.*$/, '')
+    const names = typeof to === 'string' && to.trim() ? [to.trim()]
+      : (await runStatus($, ['--coordinator'], { cwd, env: { CLAUDE_CODE_SESSION_ID: await $.session.id() } }))
+        .split('\n').filter(n => n && !n.startsWith('failed: '))
+    if (!names.length) return { deny: 'reply: no coordinator of this project is running. Pass to, or the replies file is your report.' }
+    const why: string[] = []
+    for (const name of names) {
+      const sent = await $.session.send({ to: name, text })
+      if (sent.isDelivered) return { result: `Sent to ${name}.` }
+      why.push(`${name}: ${sent.reason}`)
+    }
+    return { deny: `reply: not delivered (${why.join('; ')}). The replies file is your report.` }
   })
 
   // A session's `!` command for the user, into HANDED_DIR for the coordinator pane (any session, any account).
@@ -1179,6 +1238,14 @@ export const register: Register = on => {
       await run('reload-plugins', '', 'Reloading plugins')
     }
     return failed.length ? { ...done, text: [done.text, ...failed].filter(Boolean).join('\n\n') } : done
+  })
+
+  // Another session's message (the main conversation's, mid-turn too; a SendMessage delivery framed as a notification
+  // too): the stamp on which context-watch.sh gives a session without the reply card its card at the next hook. A
+  // failed write never holds the message up.
+  on('session.receive', { origin: { kind: /^peer(-send-message)?$/ } }, async ($, e, next) => {
+    if (e.agentId === undefined) await $.fs.write(`${await stampDir($)}/handoff-${await $.session.id()}.msg`, '').catch(() => undefined)
+    return next(e)
   })
 
   on('tool.call', { tool: 'mcp__session-orchestration__ask_approval' }, async ($, e) => {
@@ -1570,7 +1637,7 @@ export const register: Register = on => {
           ...(o.last ? [detail(accent, '│', <Text dimColor wrap="wrap">{o.last}</Text>)] : []),
           detail(accent, '│', <Text dimColor wrap="truncate-end">{o.command}</Text>),
           ...(o.review ? [link(accent, linkFor(b?.urls ?? '', 'ticket', { key: o.review }), o.review)].filter((l): l is RenderElement => !!l) : []),
-          // Superseded: its task moved on, so Stop (no need to ask, coordinator.md) rather than Compact.
+          // Superseded: its task moved on, so Stop (no need to ask, resuming.md) rather than Compact.
           bar(accent, ...sessActs(o.command, o.name, oa).all,
             o.superseded ? act('s', 'Stop', copy(o.command.replace(/ attach (\S+)$/, ' stop $1'))) : compactAct(oa, o.id),
             ...viewActs(id, o.id, [o.id]),

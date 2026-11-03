@@ -18,7 +18,7 @@ cmd=$(jq -r 'select(.tool_name == "Bash") | .tool_input.command // empty' 2>/dev
 nl=$'\n'
 bare=$(printf '%s' "$cmd" | sed "s/'[^']*'//g") # single-quoted text removed
 unq=$(printf '%s' "$bare" | sed 's/"[^"]*"//g') # double-quoted text removed too
-msg=
+msg= w=${0%/hooks/*}/skills/orchestrating-sessions/worker.md # the hand-over rules the hints name
 case "$bare" in
   *'$('*|*'`'*|*"$nl"*|*'<('*) ;; # <(…) is a subshell too
   *)
@@ -27,11 +27,11 @@ case "$bare" in
       *)
         # `<<` is a heredoc (a newline case) or a here-string; `<` alone feeds a file to stdin
         case "$(printf '%s' "$unq" | sed 's/<<<*//g')" in
-          *'<'*) msg='Background session: this command reads a file on stdin (`<`), and would wait on a permission prompt nobody sees. If the command takes the file as an argument (`jq . f.json`, `wc -l f`), drop the `<` and run that. A script on stdin (`node - < s.js`) cannot be split: hand the command over with the hand_command tool so it shows in the coordinator pane Run box, and put the `! <command>` line in your report (session-orchestration:orchestrating-sessions skill, Handing the user a command).' ;;
+          *'<'*) msg='Background session: this command reads a file on stdin (`<`), and would wait on a permission prompt nobody sees. If the command takes the file as an argument (`jq . f.json`, `wc -l f`), drop the `<` and run that. A script on stdin (`node - < s.js`) cannot be split: hand the command over with the hand_command tool so it shows in the coordinator pane Run box, and put the `! <command>` line in your report ('"$w"', Handing the user a command).' ;;
           *) exit 0 ;;
         esac ;;
     esac ;;
 esac
 [ -n "$msg" ] && { jq -nc --arg m "$msg" '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "deny", message: $m}}}'; exit 0; }
-jq -nc '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "deny",
-  message: "Background session: this compound command (a pipe, ;, &&, ||, $(…), backticks or several lines) would wait on a permission prompt nobody sees, while allow rules match plain commands only. Run each part as its own plain command, one per call (read the output yourself instead of piping it into sed/head/grep; put a value you need from one command into the next by hand). If a plain command still needs the user, hand it over per the session-orchestration:orchestrating-sessions skill (Handing the user a command)."}}}'
+jq -nc --arg w "$w" '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "deny",
+  message: "Background session: this compound command (a pipe, ;, &&, ||, $(…), backticks or several lines) would wait on a permission prompt nobody sees, while allow rules match plain commands only. Run each part as its own plain command, one per call (read the output yourself instead of piping it into sed/head/grep; put a value you need from one command into the next by hand). If a plain command still needs the user, hand it over per \($w) (Handing the user a command)."}}}'

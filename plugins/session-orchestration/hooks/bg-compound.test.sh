@@ -33,8 +33,10 @@ check '' Bash 'ls | head -1' none                   # unknown: never block a use
 check 0 Write 'a | b' none                          # another tool: left alone
 msg=$(jq -nc '{tool_name: "Bash", tool_input: {command: "ls | head"}}' | CLAUDE_CODE_SESSION_ATTENDED=0 bash "$here/bg-compound.sh" | jq -r .hookSpecificOutput.decision.message)
 case "$msg" in *'own plain command, one per call'*) ;; *) echo "FAIL message: $msg"; exit 1 ;; esac
+[ -f "$(grep -oE '/[^ ]*/worker\.md' <<<"$msg")" ] || { echo "FAIL no worker.md path: $msg"; exit 1; }
 msg=$(jq -nc '{tool_name: "Bash", tool_input: {command: "node - < s.js"}}' | CLAUDE_CODE_SESSION_ATTENDED=0 bash "$here/bg-compound.sh" | jq -r .hookSpecificOutput.decision.message)
 case "$msg" in *'drop the `<`'*hand_command*) ;; *) echo "FAIL stdin message: $msg"; exit 1 ;; esac
+[ -f "$(grep -oE '/[^ ]*/worker\.md' <<<"$msg")" ] || { echo "FAIL no worker.md path in stdin message: $msg"; exit 1; }
 msg=$(jq -nc '{tool_name: "Bash", tool_input: {command: "diff <(sort a) b"}}' | CLAUDE_CODE_SESSION_ATTENDED=0 bash "$here/bg-compound.sh" | jq -r .hookSpecificOutput.decision.message)
 case "$msg" in *'own plain command, one per call'*) ;; *) echo "FAIL <( message: $msg"; exit 1 ;; esac
 echo ok

@@ -10,7 +10,8 @@ echo '{"autoCompactWindow": 220000}' > "$CLAUDE_CONFIG_DIR/settings.json"
 fail() { echo "FAIL $*"; exit 1; }
 
 # fire SID PROMPT CTX [EVENT]: the hook's additionalContext for a transcript whose first prompt is PROMPT and whose
-# last request had CTX tokens of context (split over input, cache read and cache write).
+# last request had CTX tokens of context (split over input, cache read and cache write). The reply card is cut from
+# it unless CARD is set.
 fire() {
   local f=$t/$1.jsonl
   { jq -nc --arg p "$2" '{type: "user", message: {role: "user", content: $p}}'
@@ -20,7 +21,8 @@ fire() {
   } > "$f"
   jq -nc --arg s "$1" --arg f "$f" --arg e "${4:-PostToolUse}" --arg c "$t/proj" --argjson x "${EXTRA:-null}" \
     '{session_id: $s, transcript_path: $f, hook_event_name: $e, cwd: $c, source: "compact"} + ($x // {})' |
-    bash "$here/context-watch.sh" | jq -r '.hookSpecificOutput.additionalContext // empty'
+    bash "$here/context-watch.sh" | jq -r '.hookSpecificOutput.additionalContext // empty' |
+    if [ -n "${CARD:-}" ]; then cat; else sed '/^Coordinated session (session-orchestration)/,/^$/d'; fi
 }
 # expect SID PROMPT CTX PATTERN ('' = nothing) [EVENT]
 expect() {
@@ -74,7 +76,7 @@ expect plain 'Fix the bug.' 190000 ''
 chmod 000 "$t/plain.jsonl"
 out=$(jq -nc --arg f "$t/plain.jsonl" '{session_id: "plain", transcript_path: $f, hook_event_name: "PostToolUse", tool_name: "Bash"}' |
   bash "$here/context-watch.sh" 2>&1); chmod 600 "$t/plain.jsonl"; [ -z "$out" ] || fail "keyless session read its transcript: $out"
-# `Work on KEY:` (coordinator.md's launch, a task successor) is a task; a review gets nothing; `Chunk: foo` isn't a chunk.
+# `Work on KEY:` (the coordinator's launch, a task successor) is a task; a review gets nothing; `Chunk: foo` isn't a chunk.
 grep -q 'handoff ready: PROJ-123"' <<<"$(fire work "Work on PROJ-123: fix the bug." 126000)" || fail 'Work on KEY: task'
 expect review 'Session task: PROJ-123 review' 160000 ''
 expect nochunk $'Chunk: foo\nRead the brief.' 160000 ''
@@ -115,6 +117,37 @@ out=$(jq -nc --arg f "$t/mc.jsonl" --arg c "$t/proj" '{session_id: "mc", transcr
   bash "$here/context-watch.sh"); [ -z "$out" ] || fail "stale ctx after /compact: $out"
 expect mc "$task" 130000 'at 130K: hand off'
 
+# The reply card: a keyed task, chunk or review at its first firing, once, its paths filled in; again after a
+# compaction (a chunk's with its compacted text), not after a resume; never a coordinator's. A keyless session gets
+# it at its first message: the module's .msg stamp, or a prompt holding one; not when that call makes it a coordinator.
+c='^Coordinated session \(session-orchestration\)'
+CARD=1 expect card1 "$task" 1000 "$c" UserPromptSubmit
+CARD=1 expect card1 "$task" 1000 ''
+out=$(CARD=1 fire card2 "$chunk" 1000); grep -qF "no such tool: ${here%/hooks}/skills/orchestrating-sessions/worker.md's Replying" <<<"$out" &&
+  grep -qF "${here%/hooks}/skills/orchestrating-sessions/worker.md says" <<<"$out" && ! grep -qF '{dir}' <<<"$out" || fail "card paths: $out"
+CARD=1 expect card3 'Session task: PROJ-123 review' 1000 "$c"
+CARD=1 expect card4 "$coord" 1000 ''
+CARD=1 expect card1 "$task" 1000 "$c" SessionStart
+CARD=1 expect card1 "$task" 1000 ''
+out=$(CARD=1 fire card2 "$chunk" 1000 SessionStart); grep -qE "$c" <<<"$out" && grep -q 'compacted mid-chunk' <<<"$out" || fail "chunk card after compaction: $out"
+EXTRA='{"source": "resume"}' CARD=1 expect card1 "$task" 1000 '' SessionStart
+CARD=1 expect card1 "$task" 1000 ''
+CARD=1 expect card5 'Fix the bug.' 1000 ''
+touch "$t/cache/session-status/handoff-card5.msg"
+CARD=1 expect card5 'Fix the bug.' 1000 "$c"
+CARD=1 expect card5 'Fix the bug.' 1000 ''
+EXTRA='{"prompt": "<cross-session-message from=\"uds:/s\" from-name=\"x-coordinator\">status?</cross-session-message>"}' \
+  CARD=1 expect card6 'Fix the bug.' 1000 "$c" UserPromptSubmit
+touch "$t/cache/session-status/handoff-card7.msg"
+EXTRA='{"tool_name": "mcp__session-orchestration__open_pane", "tool_input": {}}' CARD=1 expect card7 'Fix the bug.' 1000 ''
+# Past the hard stop, a card still due goes out (nothing else does).
+touch "$t/cache/session-status/handoff-card9.msg" "$t/cache/session-status/handoff-card9.hard"
+CARD=1 expect card9 'Fix the bug.' 1000 "$c"
+CARD=1 expect card9 'Fix the bug.' 1000 ''
+# With the soft text in the same firing: both, the card first.
+out=$(CARD=1 fire card8 "$task" 126000); grep -qE "$c" <<<"$out" && grep -q 'at 126K: hand off' <<<"$(sed -n '/^$/,$p' <<<"$out")" ||
+  fail "card with the soft text: $out"
+
 # The project's settings come before the user's.
 echo '{"autoCompactWindow": 180000}' > "$t/proj/.claude/settings.local.json"
 expect pw "$chunk" 126000 'window is 180000 from project; expected 220000'
@@ -146,7 +179,7 @@ jq -nc --arg f "$t/meta.jsonl" --arg c "$t/proj" '{session_id: "meta", transcrip
 # A prompt past line 50 is still found once.
 { cat "$t/meta.jsonl"; jq -nc --arg p "$chunk" '{type: "user", message: {role: "user", content: $p}}'; } > "$t/meta2.jsonl"
 jq -nc --arg f "$t/meta2.jsonl" --arg c "$t/proj" '{session_id: "meta2", transcript_path: $f, hook_event_name: "PostToolUse", cwd: $c}' |
-  bash "$here/context-watch.sh"; grep -q '^chunk PROJ-123 2 ' "$t/cache/session-status/handoff-meta2.kind" || fail 'prompt past line 50 missed'
+  bash "$here/context-watch.sh" >/dev/null; grep -q '^chunk PROJ-123 2 ' "$t/cache/session-status/handoff-meta2.kind" || fail 'prompt past line 50 missed'
 # A keyless session that writes `Session task: KEY`: still keyless until it calls name_session, then that task.
 late='{"type":"assistant","message":{"content":[{"type":"text","text":"Session task: PROJ-9\nOn it."}]}}'
 expect late 'Fix the bug.' 126000 ''

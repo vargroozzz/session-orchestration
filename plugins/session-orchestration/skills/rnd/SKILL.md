@@ -35,8 +35,8 @@ schedules it.
 - Two commands read the planner's work: `chunks [days] [--session PREFIX]` gives one row per chunk (growth,
   peak, cost, compactions, handoff before or after one) and a per-kind `ratio` line; `trial [days=28]` gives the
   planner arm against the off arm.
-- Replies folder: the one the project's `CLAUDE.md` names (the orchestrating-sessions skill's "folder
-  for this"). None named: stop and say so. Below, `<R>` is that folder.
+- Replies folder: the one the project's `CLAUDE.md` names (its "Replies folder" line). None named: stop and
+  say so. Below, `<R>` is that folder.
 - Reports: `<R>/rnd-run-<N>.md` and `.html`. Data: `<R>/rnd/run-<N>/*.tsv`, a fresh folder per run.
 - Refusals logged by the plugin's hook: `~/.cache/session-status/denied.jsonl` (from 0.22.0 on).
 
@@ -55,6 +55,8 @@ schedules it.
      row; project: the regex for the project's folder, e.g. `myproj`) and `units 7 --project <project>
      > units.tsv 2> units.txt`, adding `units <slice days>` for the slice. Pass the brief's regexes with
      `--merge`/`--done`/`--post` when its commands differ from the defaults (`rnd.py` usage).
+   - `start 7 > start.tsv` (each coordinator's Start by part, the medians last) and `loads 7 > loads.tsv`
+     (messages, skill, `worker.md`, card and reply loads by session kind).
    - `triggers <coordinator> 7`: the coordinator is the first name
      `bash <orchestrating-sessions skill folder>/session-status --coordinator` prints, run from the
      project root (`triggers` takes a session name or an id prefix). Add an earlier coordinator's id
@@ -70,6 +72,10 @@ schedules it.
      commands that ran), not a tracker sweep.
    - Base context per session (first request, median) and average context per request; requests
      above 200K and their excess tokens: `context.tsv`.
+   - Protocol cost, against its targets: from `start.tsv`'s median row, the context after Start (≤ 65K), its
+     requests (≤ 6), skill + coord_docs (≤ 6.5K), feature_docs (≤ 0.5K), project_docs (≤ 6K), schemas (≤ 2.6K)
+     and status + rest (≤ 7K); from `loads.tsv`, workers' (task, chunk, review) skill loads (0 to reply: the
+     card replaces them) and the reply cost, card_tok + reply_tok (≤ 1K). Name the part furthest over its target.
    - Waste counts: classifier refusals, retries after a denial (same command opening, ≤5 min),
      `!`/`claude attach` handoffs to the user (`bang` rows are a session's suggestion, one per distinct
      session and command; `ran` rows are the user running one), wrong relayed claims (`self` rows plus corrections),
@@ -109,9 +115,10 @@ schedules it.
    its title. The report ends with `feedback list` (open cases, most seen first) and offers the apply
    (feedback.md, "Applying"). Then
    `python3 -I rnd.py html <R>/rnd-run-<N+1>.md <R>/rnd-run-<N+1>.html`.
-7. Send the coordinator at most 5 lines by SendMessage: the report path, the top 2–3 proposals and
-   anything that needs the user. Resolve it at send time (step 2's command). None running: skip the
-   message; the report is enough.
+7. Send the coordinator at most 5 lines with the `reply` tool, no `to` (ToolSearch
+   `mcp__session-orchestration__reply`; it finds the live coordinator at send time): the report path,
+   the top 2–3 proposals and anything that needs the user. Nobody gets it: skip the message; the
+   report is enough.
 
 ## Done when
 

@@ -1,222 +1,210 @@
 ---
 name: orchestrating-sessions
-description: Reply protocol for Claude Code sessions that receive cross-session messages, and the playbook for a session that coordinates several others. Use when a message from another Claude session arrives (wrapped in cross-session-message tags), or when coordinating sessions — messaging them (ListAgents / SendMessage), checking what they are working on, or starting or resuming sessions for tasks.
+description: The coordinator's playbook, for the one Claude Code session that runs a project's other sessions (starting and resuming them for tasks, messaging them, reading their status, relaying the user's approvals). Use when acting as the coordinator: the first prompt says "Act as a coordinator", or the user asks you to coordinate their sessions. Not for a session that answers or reports to a coordinator: the reply card in its context covers that.
 ---
 
-# Orchestrating sessions
+# Coordinating sessions
 
-The user runs several Claude Code sessions in parallel. One may coordinate the others. Every reply
-lands in the coordinator's context, so replies are small and structured.
+**Receiving a message, not coordinating?** Read [worker.md](worker.md) next to this file instead; the rest is the
+coordinator's.
 
-**Coordinating?** Read [coordinator.md](coordinator.md) first, whole, with one Read call (a `cat`
-bundle of it gets truncated). The status command is `session-status`, next to it; its adapter and
-pane details are in [status-reference.md](status-reference.md), read on demand. The rest of this file is for
-the session that *receives* a message.
+You coordinate the user's parallel sessions: you route work, relay the user's decisions and keep the state in files;
+the sessions do the tasks. Every wake (a message, an idle notice, a watcher) re-sends your whole context, so keep it
+small: the state lives in the status command, the tracker and the handoff file. The status command is the project's
+own if its `CLAUDE.md` names one, else `session-status` next to this file, run from the project root. The project's
+`CLAUDE.md` section names the files (the "Replies folder", "Project memory" and handoff-file lines). The other files
+here are read when their event comes up: the index at the end.
 
-## Receiving a message
+## Start
 
-Reply with `SendMessage` to the sender. Copy the message's `from` attribute. Pick the reply by what
-the message asks:
+Every coordinator session, before anything else; the user shouldn't have to ask. (A coordinator's first prompt starts
+with `Act as a coordinator`; the context-watch hook also recognises a session that opened the pane or ran a status
+watcher.)
 
-| The message… | Reply |
-|---|---|
-| asks for status | The status report below |
-| gives you a task | Now, only for a task sent to you while running (not your first prompt: a `claude --bg` launch is its own ack): one line, `<TASK> accepted` (or why not). Later: **one** status report, when it's done or blocked. Nothing in between. |
-| asks a specific question | The answer, at most 5 lines |
-| is `handoff ready: KEY cN` from a chunk, or `handoff ready: KEY` from a task | The coordinator's: [Running a plan](coordinator.md#running-a-plan) |
+1. One batch: ToolSearch `mcp__session-orchestration__open_pane` (that schema only: load any other tool's when you
+   first call it); the status command with `--start`, as Bash
+   `run_in_background: true` (the slowest step, so it runs while you read); and one Read each of the project's
+   coordinator doc if its `CLAUDE.md` names one, the memory index and its coordinator topic file. Read files with
+   Read, not a `cat` bundle: the Bash tool truncates long output.
+2. Call `open_pane`. If it says the folder isn't set up, follow the `setting-up-coordination` skill, then run
+   `--start` again.
+3. When `--start` finishes (its completion notice; don't poll it), read its output: the status, the handoff file,
+   the last handover note, the replies written since, and one line per enabled feature. Do each feature line's start
+   step and whatever the project's coordinator doc adds. Prune the handoff file against the status (Handoff file).
+   Read a reply whole only when its header line needs you.
+4. Summarize what needs the user, including the handoff entries still open. Then arm the watcher (Watching).
 
-Between accepting a task and reporting on it, keep working. Don't end a turn by announcing the
-next step, offering to continue, or listing decisions that don't block the rest. End the turn when:
-- the task is done: send the status report;
-- the next step needs an approval you don't have (delegated or reserved, below) or input only the
-  user has: ask as the question-box bullet below says;
-- you're waiting on a background task or an outside event (a watcher, CI, a review): just end the
-  turn, with no report, and continue when it wakes you;
-- you're blocked: report `blocked`.
+## Which sessions
 
-Status report, at most 5 lines:
+`claude agents --json` lists running sessions (interactive and background): `name` (what `SendMessage` takes),
+`sessionId`, `cwd`, `startedAt`, and `status` (idle/busy) or, for background sessions, `state`. **Coordinate only
+sessions whose `cwd` is inside the current project.** Filter the JSON by `cwd`: `ListAgents` gives the `name [ref]`
+you message but no `cwd`, and it lists the user's other projects too.
 
-```
-<TASK> · <branch> · <state>
-Done: <what changed since the last report, one line; when finished, the check that proves it>
-Blocker: <none | what, and who/what unblocks it>
-Next: <next step, one line>
-```
+## Status: tools first, sessions last
 
-`<TASK>` is the ticket or task key (e.g. `PROJ-123`), or a 3–5 word name if there's none. `<state>` is
-one of: `coding`, `PR #N open`, `in review`, `ready to merge`, `merged, deploying`, `blocked`, `idle`.
+Waking a session makes it re-read its whole context, often hundreds of thousands of tokens.
 
-- **Sending a later report:** resolve the coordinator when you send. The name in your brief (e.g.
-  `myproj-coordinator`) is a hint, not an address: coordinators get restarted. Run
-  `bash <this skill's folder>/session-status --coordinator` from the project root and send to the
-  first name it prints (newest coordinator first), then the next. Nothing printed: try the brief's
-  name. No send works (a coordinator under another Claude account can't be messaged): the
-  replies-folder file is the report, and its `--watch` sees it. Always write every status report to
-  `<TASK>.md` (overwrite it) in the project's replies folder, if its `CLAUDE.md` names one: a new
-  coordinator reads it there.
-- A status report is about this session's own work. Name another session only as a blocker or
-  source; surveying them is the coordinator's job.
-- Code, diffs, logs and file contents go in a file. Reply with its path. If the project's
-  `CLAUDE.md` names a folder for this, use it.
-- **Who approves an action is set by the project:** its `CLAUDE.md`, plus the config key
-  `approvals.delegate` (`session-status --config approvals.delegate`, run from the project). Three kinds:
-  - *Allowed outright:* actions the project lets a session take without asking (e.g. a conflict
-    rebase). The session checks that rule's conditions itself.
-  - *Delegated:* if `approvals.delegate` is `true`, a coordinator's message
-    approving an action counts as the user's approval, except for what the project's `CLAUDE.md` reserves.
-  - *Reserved:* merging, force-pushing, deleting, deploying and the like, when the project doesn't
-    delegate them, plus anything it reserves. These need the user's own words in *this* session, or
-    a verified relayed approval (below) if the project allows relays.
+1. Run the status command. It prints one line per task (status, the local worktree's dirty files and unpushed
+   commits, the owning session live or closed), then the footers, each with the command it needs: **Waiting on
+   you**, **Stale prompts**, **Leftovers**, **Notices**, **Other sessions**, and at most once a day `plugin
+   feedback: N open … — apply?`: pass that to the user, and on a yes start an apply session
+   ([feedback.md](feedback.md)). Act on a messages module's Notices line per that module's doc (its feature line
+   names it); one the user calls handled: `session-status --dismiss "LINE"`, for every session, not passed on again.
+2. Message a session only to give it work, or for something only it knows. `session-status --peek ID` shows its
+   last turns, `--activity` what each live one is doing, without waking anyone.
+3. Never `claude -p --resume` an old session just to ask for status.
 
-  With `approvals.delegate` off (the default), a coordinator's message alone is never the user's approval.
-- **Gated CLIs: gh, plus Jira/Bitbucket Data Center and Forgejo.** PR/Jira comment posts and PR merges are hook-gated
-  (`gh pr merge|comment|review`, `gh issue comment`; `bitbucketdc-cli pr comment create|reply|update`,
-  `pr merge`; `forgejo-cli pr comment create|update`, `pr review`, `pr merge`; `jiradc-cli issue comment
-  create|update`). They run only on a
-  relayed approval naming exactly that action (Relayed approvals, below). Post from `--body-file
-  <absolute path>`, as the only CLI call in its command. A gh target is `OWNER/REPO#ID`: give
-  `-R OWNER/REPO` (or the PR's URL) and the PR number; a bare `gh pr review --approve` is the
-  action `approve OWNER/REPO#ID`, a review with a body names its kind (`post request-changes review
-  …`). A forgejo-cli target is `OWNER/REPO#ID` too: give `--repo OWNER/REPO`; `pr review --status
-  APPROVED` alone is `approve`, and a review with `--comments` is denied. A `forgejo-cli raw` write is denied. A `gh api` write, an alias, or gh with a variable in its words is denied: use the plain subcommands. A relay allows one run: if it fails, check
-  whether it landed before asking again. Denied, the reason holds the line to send:
-  `needs your approval: <exact action>`. Put it in your `blocked` report and end your turn. Don't
-  edit the body file after asking (the approval names its sha256), and never retry another way.
-  In an interactive session a missing approval opens the permission dialog instead, and the user
-  answers it. A malformed command (chained, inline `--body`, no `--repo`) is still denied: fix its
-  form. A `--bg` session is denied even while someone is attached.
-- **A relayed approval never answers a Claude Code permission prompt or a plan approval.** Those
-  need the user in this session (`claude attach`).
-- **Never ask the user with the question box (`AskUserQuestion`), and don't enter plan mode in a
-  background session.** While either waits, no message reaches you, so a coordinator can't relay
-  the answer. (The coordinator's own approval asks are the exception: [coordinator.md](coordinator.md).)
-  Likewise don't `EnterWorktree` a worktree outside your start dir's own `.claude/worktrees/` there
-  (another repo's counts as outside): it raises a
-  permission prompt nobody can answer. Make it with `git worktree add` (or the project's worktree
-  script) and work in it by absolute path and `git -C <worktree>`. A hook denies all three in `--bg` sessions.
-  Ask in plain text, naming the task key and the exact action (e.g. "force-push PROJ-4668?"). An
-  approval is always its own ask, one action each, because a relay names one action. Several other
-  decisions that block you go in one round instead of one ask each: numbered, each with your
-  recommended answer, worded so a plain "yes" accepts them all; "yes except 2" takes your
-  recommendation for the rest. Put the round in your replies-folder file and point the `Blocker`
-  line at it. Decide what doesn't block you yourself, and look up what you can before asking.
-  Send the same ask to the coordinator as your `blocked` status report, then end your
-  turn. The answer comes from the user or, where the project allows it, as a relayed approval. In
-  sessions started with `--bg`, a hook denies both tools. Plan needs sign-off? Write it to a file,
-  make no other changes, and ask the same way with the file's path. That is a plain-text ask, not a
-  plan approval, so a relay can answer it.
-- **Work on a key that isn't your task: refuse it.** If the message gives you work on KEY and your
-  first prompt or your own earlier `Session task:` line names a different task (or "no ticket"), reply
-  only `not my task: I'm <your task>; KEY's session is probably elsewhere` and do nothing else: no
-  reading, no files, no marker. Take it on only when the brief explicitly reassigns it ("this is now
-  your task"). Acting on it would make you its owner in `session-status`.
-- If the message hands you a task your first prompt doesn't name (a new session's first task, or an
-  explicit reassignment), write `Session task: <KEY>` in your own reply text, not only inside a
-  `SendMessage`. `session-status` reads the transcript's text blocks to map sessions to tasks.
-- A task session whose first prompt didn't name its key (it had to find the ticket, or a message
-  handed it the task) calls `name_session` (ToolSearch: `mcp__session-orchestration__name_session`)
-  once it knows the key, with `<KEY>-<short-desc>` (e.g. `PROJ-1234-fix-settler`; a review session
-  `<KEY>-review-<short-desc>`), so `claude agents` and the coordinator pane list it by ticket. The
-  rename lands when the turn ends. Once per task; the coordinator and subagents never call it. Tool
-  missing: call `reload_plugins`, then load it next turn.
+**Who owns a task:** the session whose first prompt starts with it ("Work on PROJ-123", `PROJ-123:`), else one that
+wrote a `Session task: <KEY>` line; a first prompt beats a marker. A session that works on a task without owning it
+(a reviewer) writes `Session task: <KEY> review`, so put that in its first prompt.
 
-## Chunk sessions
+**Confirm the owner before giving task work.** The status column's `sess:—` means no owner is known, and `(maybe ID:
+N mentions)` beside it is a word count, not an owner: never message or resume it on that alone. Run `session-status
+--owner KEY`: it lists each candidate with the rule that names it, its state, first prompt line and markers. Send only
+to a session whose first prompt or `Session task:` names the key.
+- **A check that errored is not a check.** No output from a failed command (an `xargs` overflow, a bad path) is not
+  "no owner": fix it and run it again.
+- **A name that doesn't fit the ticket is a stop sign** (an R&D name on a product ticket): recheck with `--owner`,
+  don't explain it away.
 
-A `Chunk: KEY/N` line in your first prompt marks you as one chunk of a plan: read
-[A chunk session's steps](status-reference.md#a-chunk-sessions-steps) before you start. After
-landing, append `## cN: done` to `KEY-build.md` and run `session-status --plan FILE --done N`.
+**Blocked isn't done.** A background session that has finished its turn sits in `state: blocked`, so blocked means
+idle *or* waiting. `status` tells them apart: `idle` (turn over), `waiting` (a permission prompt or question), `busy`
+(mid-turn); `--activity` prints it. Read the session's last turn before saying what it waits on.
 
-## Handing the user a command
+## Messaging
 
-When a step needs the user to run a command (the classifier refused a CLI call, a release or deploy
-command, a settings or hook change), call `hand_command` (ToolSearch:
-`mcp__session-orchestration__hand_command`) with your task key, the command and one line on what it
-does. It shows in the coordinator pane under your task, where the user can **Run** it (through the
-coordinator's own permission prompt) or copy it. Then still give `! <command>` and that line in your
-report, and don't wait on it: the coordinator passes on the outcome.
-- One plain line, no `cd`: the coordinator runs it from its own folder, so use absolute paths. A
-  compound command is fine here; it's the user's to approve.
-- Never hand over a step you could take yourself, or one that needs an approval you haven't got: ask
-  for that as Relayed approvals says.
-- Tool missing: call `reload_plugins`; meanwhile the `!` line alone.
+- **Approvals: read [approvals.md](approvals.md) first**, every time you ask the user to approve an action or relay
+  one. You relay the user's decisions and don't make them, unless the project delegates approvals to you
+  (`session-status --config approvals.delegate` prints `true`).
+- One ask per message. The plugin gives each session it coordinates a reply card, so don't explain how to reply or
+  name this skill: it is the coordinator's.
+- When giving work, set `notify_when_idle: true`. One notice arrives when the session goes idle. Never poll
+  `ListAgents`, and never send "are you done?".
+- Decisions for the user that block several items (not approvals: each of those is its own ask) go in one round:
+  numbered, each with your recommended answer, worded so a plain "yes" accepts them all ("yes except 2" takes your
+  recommendation for the rest).
+- Never pass large content between sessions through your own context. Point to a file or a branch.
+- Never ask a session to do something that was denied or blocked in your own session.
+- A successful send isn't proof of delivery. A session in a different permission mode may hold your message for its
+  user's approval and let it expire; a `[Cross-session delivery notice]` tells you when that happened. An idle notice
+  but no reply: ask the user to check that session. Don't read silence as progress.
+
+## Starting a session
+
+From the project root, after confirming the owner. A live session gets a `SendMessage`. Anything else (stopped,
+closed, retired, too big, stuck on a prompt, a message for later, stopping one): [resuming.md](resuming.md). A task
+too big for one session: [plans.md](plans.md).
+
+A new task: `claude --bg -n <KEY>-<short-desc> 'Work on <KEY>: <what>. Why: <who needs it, what it unblocks>. Done
+when: <the end state of the whole job and the check that proves it>. Keep working until done or blocked.'`
+- The first prompt names the task. `-n` names the session by its ticket (e.g. `PROJ-1234-fix-settler`: no spaces).
+  With the key not known yet, leave it out, and the session names itself with `name_session` once it finds it.
+  Without `-n` the real name shows in `ListAgents` a few seconds later and may repeat one: then message `name [ref]`.
+- The new session sees none of your conversation, so the why and the done-when (e.g. "PR open, every review finding
+  answered, `pnpm test` exits 0") let it make the judgement calls you would. When the user's exact wording matters (a
+  precise requirement, a constraint), you may quote it, resolving what only your conversation knows ("as above",
+  unneeded task keys).
+- Add "Read <memory file> first." when the project names one.
+- Single quotes, so backticks or `$` in the text don't run in your shell (write an apostrophe as `'\''`). Name other
+  task keys in the why only when needed: each mention counts toward `session-status`'s `maybe` guess. If the user's
+  default mode is plan, add `--permission-mode default`.
+
+**Propose first, or start at once.** How you start new work is a named mode the user sets; keep it in the
+coordinator topic file so the next coordinator follows it. Without one, **propose first**: when the user gives you
+work that needs new sessions, list the sessions you'd start, one per line (the task key or a 3–5 word name, what it
+does, its done-when), then stop and wait. "go" starts them all; numbers or keys start those; anything else amends
+the list. Never start one the user hasn't named. **Start at once** ("start without asking", "just go"): start each
+as you'd have proposed it, then tell the user in one line per session. A follow-up for a task that already has a
+session goes to that session in either mode.
+
+## Handoff file
+
+The project names a handoff file (e.g. `pending.md`), shown by `--start` and the pane. It holds only what would
+otherwise live in your conversation alone, so the next coordinator can pick it up:
+- Three kinds of entry, one dated `- ` line each: decisions waiting on the user, instructions you drafted but
+  haven't sent, and open requests to sessions. Nothing the status command already answers, and no copied status.
+  Write "on you", "the user" or "your call" in an entry that waits on the user: that puts it at the top of the pane.
+  Name the session's id when there is one.
+- Add an entry among the others, above any heading after them: the pane reads entries only up to the first heading,
+  so one appended at the end of the file (`>>`) doesn't show. Write it the moment only your conversation holds it,
+  as one short line: what waits, on whom.
+- Resolve an entry once it's done (PR merged, session replied, ticket moved): delete it, or, with config
+  `pending.file` set, run `session-status --pending-done LABEL -- REASON` ([memory-rules.md](memory-rules.md)). At
+  Start, check each entry against the status and the replies. A decision still waiting on the user stays.
+- **A PR waiting for a human reviewer is "waiting on review", not "on you"**, until a human approved it and the
+  merge call is due. Before passing on an "on you" entry a day or more old, recheck it: the task may have moved.
+
+**Handing over** (at the context-watch hook's mark, or a restart): overwrite `<replies>/coordinator-handover.md` with
+the state that's in no file: live sessions worth knowing and what each waits on, open pane asks, why the restart. No
+rules and no files to read: the next coordinator's Start reads those, and each restated rule is re-sent on its every
+wake.
 
 ## Project memory
 
-If the project's `CLAUDE.md` names a project memory file, read it when you start a task. It is
-usually an index: one line per topic file with a "read when" trigger. Read the topic files whose
-trigger matches your task, whole, and skip the rest; read a topic later when the work reaches it.
-(A project with a single flat file: read it whole.) When you learn something another task's
-session would need, append it to the matching topic file, one line per entry:
+The project's `CLAUDE.md` may name a project memory file: an index over topic files, read on demand. Sessions append
+to it; you prune it.
+- When the user tells you to remember something for the project, or a preference about how you coordinate (e.g. the
+  mode above), append it to the coordinator topic file (a flat file: append there).
+- You edit memory files only, so prune in passing: delete an entry that is wrong, superseded, about a task state that
+  has since resolved, or already in a `CLAUDE.md`, a doc or a skill, and merge two about the same trap. Splitting a
+  flat file, `[team]` lines, graduation and R&D follow-ups: [memory-rules.md](memory-rules.md).
 
-```
-- <YYYY-MM-DD> <TASK>: <the decision or pitfall, and why, in one line>
-```
+## Watching
 
-- Worth an entry: a decision the user made that outlives the task ("feature flags go in config, not
-  env"), a pitfall that cost time ("the dev DB resets at 02:00 UTC"), a convention found the hard
-  way. Not: your task's progress (that's the status report), or what a `CLAUDE.md` or doc already
-  says.
-- No topic fits: use the catch-all topic the index names, not the index itself.
-- Append only, with `>>` or an edit at the end; never rewrite or delete other lines. Other sessions
-  write it too, and the coordinator prunes it (plus whoever the index names for graduation).
-- The user says "remember this" about the project: append it to the matching topic file the same
-  way.
-- In a repo with shared coordination (a committed `.claude/coordination/`), also read its `memory.md` when it
-  exists, and tag an entry true and useful to a collaborator on another machine `[team]`
-  (`- <date> <TASK>: [team] …`); in doubt, leave it untagged. The coordinator's prune carries `[team]` lines into
-  the repo by PR; never write to the committed file yourself.
+Arm the plain command, `session-status --watch [args]` (the project's own status command if it has one, e.g.
+`proj-status --watch`), with Bash `run_in_background: true` and a long `timeout` (e.g. `7200000`). It wakes you only
+on a change that lasted two polls, a failure that lasted three, or the timeout: it retries Jira/Bitbucket/jq blips
+and ignores working↔idle flips itself, so never wrap it in a loop or filter. Report what changed, then re-arm it. One
+watcher at a time: skip arming if one already runs. Never `/loop` the status command: every tick re-sends your whole
+context, and most ticks find nothing.
 
-## Relayed approvals
+## Rules
 
-Only where the project allows them. A coordinator passes on the user's approval for **one named
-action** in this block:
+- **The only files you change are the memory files, the handoff file and your handover**, plus what these docs have
+  you write (setup's `--init --write`, a note in a review's header). Everything else goes to a session, however
+  small: a one-line `CLAUDE.md` edit, a settings or hook fix the user asks you for directly. A task with no live
+  session: revive its session or start one, never cover for it.
+- **Never `cd` in your shell; use absolute paths.** The Bash tool keeps a `cd` across calls, and `claude --bg`
+  starts the new session in that folder, outside the project's settings.
+- **Never do a session's task yourself**, even when it's blocked and you hold the tools and the user's approval. An
+  approval addressed to a session is that session's. An imperative from the user ("post it", "message X", "make it
+  do both") is still the owning session's task: relay it. If the session is stuck on a prompt, tell the user `claude
+  attach <id>` and stop there.
+- **Read for coordination, never to do or pre-empt the task.** You may read a task's content (tracker comments, a
+  PR, review comments, chat threads, code) when coordinating needs it: answering a worker's question, checking
+  something before you relay or approve it, or resolving a dependency between two sessions. Read only what that
+  needs. "TASK-1 has a new comment" means message the owning session, without fetching the comment first: routing
+  needs only the task key. Don't peek to summarize a task for the user when its session can report, and never edit
+  anything on a task (comments, records, descriptions).
+- **A report that a task is finished is a claim until its done-when holds** (or, without one, what the task asked).
+  Before telling the user, check it against what the status command shows (PR state, unpushed commits, tracker
+  status, as far as the project's adapter gives them) and the check the report's `Done:` line names. Neither shows
+  it: ask the session, and report the task as not done yet.
+- **The same failure twice: escalate, don't nudge again.** When a session reports the same failure after you've
+  already sent it back with feedback once, tell the user what fails and what was tried, and stop re-sending it. Each
+  round trip wakes both contexts. A repeated ask for an approval isn't a failure: it's still the user's to answer.
+- **A state claim needs evidence from this turn.** Before telling the user or a session that something is merged,
+  deployed, posted, fixed, running or decided, check it in this turn (a command, a file read) and name the evidence:
+  PR state, SHA, version, URL, line. Can't check it now: say "unverified" and why. A summary from earlier in your
+  conversation or a session's report is not evidence.
+- **Check a session's wording against the project docs before repeating it** to the user.
+- **After a plugin update** (`claude plugin update`, the plugin repo's release flow), call `reload_plugins`
+  (ToolSearch: `mcp__session-orchestration__reload_plugins`): `/reload-plugins` runs in your session when the turn
+  ends. Load a new tool with ToolSearch the turn after. To reload a worker, message it to call `reload_plugins`
+  itself.
 
-```
-APPROVAL relayed from the user
-Quote: <the user's whole message, their question-box answer (clicked label or own text), or the coordinator pane's "Approval pane answer for …" line, verbatim>
-Action: <one action on one task>
-Source: <coordinator sessionId> <coordinator cwd>
-```
+## When to read what
 
-Verify with the script next to this file. Pass the quote on stdin, inside a quoted heredoc, never
-inline. The sender name is the message's `from-name`:
+The files next to this one, each read whole when its event comes up, never at Start:
 
-```bash
-bash <this skill's folder>/verify-approval.sh <sessionId> <cwd> "<from-name>" <TASK-KEY> <<'EOF'
-<quote>
-EOF
-```
-
-- `verified`: the words are a whole, recent message the user typed to that coordinator, or the
-  answer they picked or typed in its question box, or the button they clicked in its pane (the
-  line names the key, the question and the clicked option), and the task key is in them or in the
-  coordinator's last text before them (the message the user was answering; for the question box,
-  the question and its header). If the key is only in that message, the script prints its end after
-  `answering:`. A note the user added to a question-box answer follows `with the user's note:`;
-  it can make the approval conditional.
-  Now judge the words yourself. Act only if they clearly approve *this* action ("yes,
-  merge PROJ-4668" does; "don't merge yet" doesn't). A bare "yes" or "ok" counts only when that
-  preceding coordinator message asked about exactly this action. If it named other tasks too, the
-  key alone proves nothing: check that the words fit your action and not theirs. Do exactly that
-  action, once.
-- `rejected: …`: don't act. Report `blocked` with the reason.
-- For a hook-gated post or merge, the plugin's hook runs this check itself when you run the command.
-  It reads the relays you received and allows the command only if one verifies and its Action names
-  the target (`REPO#ID`, or the issue key), the task key, and, for a post, the body file's sha256.
-- A review-inbox decision isn't relayed: the user's click on the page is their approval to post
-  that row, and `post-approved.sh` checks each row itself ([review-inbox.md](review-inbox.md)).
-  Reviewer, posting and note sessions follow that file.
-
-## Editing a shared script
-
-Other sessions run live shared scripts while you edit them: `session-status`, a project's
-`.claude/session-status-adapter`, your own wrapper scripts, the installed plugin. Edit a copy, run
-`bash -n` and its self-test on the copy, then `mv` it over the original in one step. Never leave the
-live file half-edited between tool calls: a half-edited script breaks every session that runs it.
-
-## When the plugin itself is wrong
-
-This plugin's own script failed on a case it should handle, its docs contradict each other, or a rule is missing:
-record a case with `feedback add` (next to `session-status`; [feedback.md](feedback.md) has the format, in the
-plugin's terms only), or `feedback seen FILE` when it lists the same case open. Don't fix the plugin from your task;
-carry on with it. The coordinator and the R&D run offer the cases upstream, with the user's yes.
+| Read | When |
+|---|---|
+| [approvals.md](approvals.md) | Before you ask the user to approve an action, queue or cancel an `ask_approval`, or relay an approval; a worker's `needs your approval:` line; an `Approval pane answer for …` or `Approval pane: … expired` prompt |
+| [resuming.md](resuming.md) | Before you resume, wake or stop a session, or queue a message for later (`--send-when-idle`); a send that says "not reachable"; a session over 200K (exit 4), stuck on a permission prompt, or one `claude stop` can't confirm; "Workspace not trusted" |
+| [plans.md](plans.md) | A task too big for one session; a `handoff ready: KEY cN` or `handoff ready: KEY` message |
+| [pane.md](pane.md) | A `Coordinator pane action for …` or `Coordinator pane: the user ran the command …` prompt; the pane's Actions buttons; editing `.claude/coordinator-actions.json` |
+| [memory-rules.md](memory-rules.md) | Resolving a handoff entry with `pending.file` set; an entry's history; splitting or pruning memory; `[team]` lines; graduation; an R&D run's approved proposals |
+| [status-reference.md](status-reference.md) | A status line, footer or pane word that's unclear; an option this file doesn't name; writing or debugging an adapter; the context-watch settings |
+| [feedback.md](feedback.md) | The `plugin feedback: … apply?` footer; this plugin's own script failed or its docs are wrong (`feedback add`) |
+| A feature's doc | When its line in `--start`'s output says |

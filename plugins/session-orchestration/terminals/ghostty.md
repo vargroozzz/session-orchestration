@@ -1,5 +1,8 @@
 # Terminal: ghostty
 
+> **Start**: nothing to do.
+> **Read when**: you hand the user a running view (`session-status --open`), or Attach in tab or Logs in split fails.
+
 On when `terminal` is `ghostty` in `.claude/coordination.local.json` (a person key). Setup proposes it when it runs
 inside Ghostty (`TERM_PROGRAM=ghostty`); `session-status --init --check` names it while it is unset there. macOS only:
 it drives Ghostty through AppleScript (`osascript`).

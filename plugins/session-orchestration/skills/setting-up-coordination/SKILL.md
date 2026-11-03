@@ -13,8 +13,12 @@ coordinator has nothing to read. `open_pane` checks (`session-status --init --ch
 
 `session-status --init --check`, from the folder: one line, exit 0 configured, 1 unconfigured or partial, 3 covered
 by a parent. Configured adds:
-- `active: tracker=… host=… delegate=on|off terminal=… messages=… features=…|none → read <doc>, …`: the config in
-  effect, and the doc to read for the terminal, the messages module and each feature that's on (the coordinator reads them at start);
+- `active: tracker=… host=… delegate=on|off terminal=… messages=… features=…|none`: the config in effect, then an
+  indented line per doc of the terminal, the messages module and each feature that's on: `  <name>: <start step> Read
+  <doc> when <events>`, from the doc's `> **Start**:` and `> **Read when**:` lines (`  <name>: read <doc> now` when
+  it has none). `session-status --start` shows them to the coordinator. With review_inbox on, `  review_inbox url:
+  <url>` follows: this account's inbox (the one URL the docs name, else the one on the line naming this account's
+  config dir), which open_pane watches;
 - `detected <terminal>: run setup to record it (…)` when it runs in a terminal it has a module for and `terminal` is
   unset;
 - `second account found, accounts off: run setup (session-status --init --write)` when another Claude account shares

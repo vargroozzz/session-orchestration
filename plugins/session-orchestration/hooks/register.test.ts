@@ -1,4 +1,4 @@
-import type { On } from 'claude-code'
+import type { On, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { HIDDEN_BY_MARKDOWN, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, usageName } from './register'
@@ -75,6 +75,40 @@ test('open_pane names the coordinator <project>-coordinator', async ($, on) => {
   await $.turn.complete(end)
   await $.turn.complete({ ...end, turnId: 't2' })
   expect(renamed).toEqual(['myproj-coordinator']) // once
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  await ui.press({ key: 'refresh' }) // joins the sweep the open started
+  await ui.unmount()
+})
+
+test('open_pane watches the review inbox once and says whether its decisions wake the session', async ($, on) => {
+  mock.clock(on)
+  let url = 'https://claude.ai/artifact/Inbox_1'
+  const check = () => `configured: /work/p (p-coordinator)\nactive: tracker=none host=github delegate=off\n  review_inbox: start step\n  review_inbox url: ${url}\n`
+  on('process.run', async (_, e) => ({ value: {
+    exitCode: 0, stdout: e.argv.includes('--check') ? check() : e.argv.includes('--root') ? '/work/p' : '',
+    stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('turn.complete', async () => ({ text: '' }))
+  const calls: unknown[] = []
+  let answer: ToolCallResult<'ArtifactComments'> = { result: { watch: { url, watching: true, outcome: 'armed', auto_reply: 'armed' } } }
+  on('tool.call', { tool: 'ArtifactComments' }, async (_, e) => {
+    calls.push([e.action, e.url])
+    return answer
+  })
+  const open = async () => (await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })).result
+  const head = 'Coordinator pane open. This session becomes "p-coordinator" when this turn ends: put that name in briefs. Coordination config: active: tracker=none host=github delegate=off.'
+  expect(await open()).toBe(`${head} Review inbox watched: its decisions wake you.`)
+  expect(await open()).toBe(head) // a reopen: watched already
+  expect(calls).toEqual([['watch', url]])
+  url = 'https://claude.ai/artifact/Inbox_2'
+  answer = { result: { watch: { url, watching: true, outcome: 'watching' } } } // a link the user didn't give: not armed
+  expect(await open()).toBe(`${head} Review inbox watched but not armed, so its comments don't wake you: ask the user to paste ${url} once, then ArtifactComments watch it.`)
+  url = 'https://claude.ai/artifact/Inbox_3'
+  answer = { deny: 'refused' }
+  expect(await open()).toBe(`${head} Review inbox not watched (refused): ArtifactComments watch ${url} yourself.`)
+  expect(await open()).toBe(`${head} Review inbox not watched (refused): ArtifactComments watch ${url} yourself.`) // tried again
+  expect(calls.slice(2)).toEqual([['watch', url], ['watch', url]])
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
   await ui.press({ key: 'refresh' }) // joins the sweep the open started
   await ui.unmount()
@@ -451,7 +485,7 @@ test('a task card offers the fixes that apply and sends them through the coordin
   await ui.press({ key: 'task-PROJ-4157' })
   expect(await ui.find({ type: 'Button', key: 'act-o' })).toBeUndefined() // no conflict: no Resolve conflicts
   await ui.press({ key: 'act-f' })
-  expect(submitted).toEqual(['Coordinator pane action for PROJ-4157: tell the session that owns it to fix the failing CI build (app#76). Relay it per coordinator.md (Card actions).'])
+  expect(submitted).toEqual(['Coordinator pane action for PROJ-4157: tell the session that owns it to fix the failing CI build (app#76). Relay it per pane.md (Card actions).'])
   // Resolved: its count, its items only once pressed.
   expect((await ui.find({ type: 'Button', key: 'sec-Resolved (idle a week)' }))?.text).toMatch(/RESOLVED \(IDLE A WEEK\) 1 ▸/)
   expect(await ui.find({ type: 'Text', text: /18a61163/ })).toBeUndefined()
@@ -658,7 +692,7 @@ test('a review finding ask unanswered for 24h comes back to the coordinator once
   await merge('PROJ-10')
   await clock.advance(60_000)
   expect(tries).toHaveLength(2)
-  expect(tries[1]).toBe(`Approval pane: review finding asks expired unanswered after 24h (coordinator.md, Messaging). Re-ask each once, the same ask with its question starting "Reminder: ": PROJ-7 (id 1) post issue comment /tmp/c.md on app#2 (sha256 ${sha}).`)
+  expect(tries[1]).toBe(`Approval pane: review finding asks expired unanswered after 24h (approvals.md). Re-ask each once, the same ask with its question starting "Reminder: ": PROJ-7 (id 1) post issue comment /tmp/c.md on app#2 (sha256 ${sha}).`)
   await clock.advance(120_000)
   expect(tries).toHaveLength(2) // announced once
 
@@ -668,7 +702,7 @@ test('a review finding ask unanswered for 24h comes back to the coordinator once
   await clock.advance(12 * H)
   await clock.advance(180_000)
   expect(tries).toHaveLength(3)
-  expect(tries[2]).toBe(`Approval pane: review finding asks expired unanswered after 24h (coordinator.md, Messaging). These reminders expired too, so they are dropped: record each in its review file's header and tell its reviewer session: PROJ-9 (id 3) Reminder: post issue comment /tmp/c.md on app#2 (sha256 ${sha}).`)
+  expect(tries[2]).toBe(`Approval pane: review finding asks expired unanswered after 24h (approvals.md). These reminders expired too, so they are dropped: record each in its review file's header and tell its reviewer session: PROJ-9 (id 3) Reminder: post issue comment /tmp/c.md on app#2 (sha256 ${sha}).`)
   release()
   await clock.advance(120_000)
   expect(tries).toHaveLength(3)
@@ -729,4 +763,64 @@ test('usage names: fixed words lib.sh usage accepts', () => {
   const names = [...Object.values(BUILTIN_KEYS), ...USAGE_EXTRA].map(usageName)
   expect(usageName('Attach in tab')).toBe('attach-in-tab')
   expect(names.every(n => /^[a-z0-9-]{1,40}$/.test(n))).toBe(true)
+})
+
+test('a message from another session stamps .msg for the reply card; an agent\'s does not', async ($, on) => {
+  mock.env(on, { HOME: '/h' })
+  on('session.id', async () => ({ value: 'sess-1' }))
+  on('session.receive', async (_, e) => ({ text: e.text }))
+  const wrote: string[] = []
+  on('fs.write', async (_, e) => {
+    wrote.push(e.path)
+    return { value: undefined }
+  })
+  const r = await $.session.receive({ origin: { kind: 'peer' }, text: 'status?' })
+  expect(r).toEqual({ text: 'status?' })
+  await $.session.receive({ origin: { kind: 'peer' }, text: 'stop', agentId: 'a1' })
+  await $.session.receive({ origin: { kind: 'bridge' }, text: 'hi' })
+  expect(wrote).toEqual(['/h/.cache/session-status/handoff-sess-1.msg'])
+  await $.session.receive({ origin: { kind: 'peer-send-message' }, text: 'report?' }) // SendMessage's notification form
+  expect(wrote).toEqual(['/h/.cache/session-status/handoff-sess-1.msg', '/h/.cache/session-status/handoff-sess-1.msg'])
+})
+
+test('the .msg stamp follows XDG_CACHE_HOME, and a failed write still delivers', async ($, on) => {
+  mock.env(on, { HOME: '/h', XDG_CACHE_HOME: '/c' })
+  on('session.id', async () => ({ value: 'sess-2' }))
+  on('session.receive', async (_, e) => ({ text: e.text }))
+  const wrote: string[] = []
+  on('fs.write', async (_, e) => {
+    wrote.push(e.path)
+    throw new Error('read-only')
+  })
+  expect(await $.session.receive({ origin: { kind: 'peer' }, text: 'go' })).toEqual({ text: 'go' })
+  expect(wrote).toEqual(['/c/session-status/handoff-sess-2.msg'])
+})
+
+test('reply answers the from it is given, else tries the live coordinators the project root lists, newest first', async ($, on) => {
+  on('session.cwd', async () => ({ value: '/work/proj/.claude/worktrees/PROJ-1/sub' }))
+  on('session.id', async () => ({ value: 'sess-3' }))
+  let coords = 'proj-coordinator\nold-coordinator\n'
+  const ran: unknown[] = []
+  on('process.run', async (_, e) => {
+    ran.push([e.argv.slice(2), e.init?.cwd, e.init?.env?.CLAUDE_CODE_SESSION_ID])
+    return { value: { exitCode: 0, stdout: coords, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  let live = ['old-coordinator', 'uds:/tmp/w.sock']
+  const sent: string[] = []
+  on('session.send', async (_, e) => {
+    sent.push(`${e.to}: ${e.text}`)
+    return live.includes(e.to) ? { isDelivered: true } : { isDelivered: false, reason: 'no session by that name' }
+  })
+  const reply = (input: Record<string, unknown>) => $.tool.call({ tool: 'mcp__session-orchestration__reply', ...input })
+  expect((await reply({ text: ' ' })).deny).toBe('reply needs text.')
+  expect((await reply({ text: 'PROJ-1 accepted', to: 'uds:/tmp/w.sock' })).result).toBe('Sent to uds:/tmp/w.sock.')
+  expect(ran).toEqual([]) // an answer needs no lookup
+  expect((await reply({ text: 'PROJ-1 · b · coding' })).result).toBe('Sent to old-coordinator.')
+  expect(ran).toEqual([[['--coordinator'], '/work/proj', 'sess-3']]) // the worker itself left out
+  live = []
+  expect((await reply({ text: 'PROJ-1 · b · blocked' })).deny).toBe('reply: not delivered (proj-coordinator: no session by that name; old-coordinator: no session by that name). The replies file is your report.')
+  coords = ''
+  expect((await reply({ text: 'PROJ-1 · b · idle' })).deny).toBe('reply: no coordinator of this project is running. Pass to, or the replies file is your report.')
+  expect(sent).toEqual(['uds:/tmp/w.sock: PROJ-1 accepted', 'proj-coordinator: PROJ-1 · b · coding', 'old-coordinator: PROJ-1 · b · coding',
+    'proj-coordinator: PROJ-1 · b · blocked', 'old-coordinator: PROJ-1 · b · blocked'])
 })

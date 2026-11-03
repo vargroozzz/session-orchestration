@@ -32,5 +32,5 @@ case "$1" in
     reason="This session started in the background: EnterWorktree on a path outside this session's own .claude/worktrees/ (under the directory it started in) raises a permission prompt no coordinator can answer, and the session sits blocked. Don't enter it: create the worktree with \`git worktree add\` (or the script the project's CLAUDE.md names for it), then work in it by absolute path with the file tools and \`git -C <worktree>\` in Bash. If that is refused too: $how" ;;
   *) reason="This session started in the background: the question box would block it, and no cross-session message (such as a relayed approval) reaches it while it waits. $how" ;;
 esac
-jq -nc --arg r "$reason Full rule: the session-orchestration:orchestrating-sessions skill, Receiving a message." \
+jq -nc --arg r "$reason Full rule: ${0%/hooks/*}/skills/orchestrating-sessions/worker.md, Asking the user." \
   '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'

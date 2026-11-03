@@ -281,6 +281,50 @@ grep -q $'^hroot\topen\tOPEN-1\t2026-10-10\t\t3.1\tuser decision\t1\t1\t\t8\t[0-
   fail "handoff rows" "$out"
 grep -q "'recurring': 2" "$tmp/handoff.err" && grep -q $'^history read\t2 entries' "$tmp/handoff.err" || fail "handoff totals" "$(cat "$tmp/handoff.err")"
 
+# start and loads: a coordinator's Start (the skill: 6000; the --start digest and approvals.md, 4 and 12 chars: 3900
+# split 1:3; a project doc; a schema load; the watcher, whose request after it ends Start, before the typed prompt;
+# output 500 is rest), and a review worker with a card after its first request, a message at a turn's start and one
+# mid-turn, a reply schema load and call, and a worker.md read.
+p=/home/u/.claude/plugins/cache/session-orchestration/session-orchestration/1.0.0/skills/orchestrating-sessions
+cat > "$a/ssssssss-1111.jsonl" <<EOF
+{"type":"user","timestamp":"2026-10-12T17:00:00.000Z","message":{"content":"Act as a coordinator"}}
+{"type":"assistant","timestamp":"2026-10-12T17:00:01.000Z","requestId":"s1","message":{"usage":{"input_tokens":40000,"output_tokens":100},"content":[{"type":"tool_use","id":"s1a","name":"Skill","input":{"skill":"session-orchestration:orchestrating-sessions"}}]}}
+{"type":"user","timestamp":"2026-10-12T17:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"s1a","content":""}]}}
+{"type":"user","isMeta":true,"timestamp":"2026-10-12T17:00:02.000Z","message":{"content":[{"type":"text","text":"Base directory for this skill: $p\n# Coordinating"}]}}
+{"type":"assistant","timestamp":"2026-10-12T17:00:03.000Z","requestId":"s2","message":{"usage":{"input_tokens":46100,"output_tokens":100},"content":[{"type":"tool_use","id":"s2a","name":"Bash","input":{"command":"session-status --start"}},{"type":"tool_use","id":"s2b","name":"Read","input":{"file_path":"$p/approvals.md"}}]}}
+{"type":"user","timestamp":"2026-10-12T17:00:04.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"s2a","content":"AAAA"},{"type":"tool_result","tool_use_id":"s2b","content":[{"type":"text","text":"BBBBBBBBBBBB"}]}]}}
+{"type":"assistant","timestamp":"2026-10-12T17:00:05.000Z","requestId":"s3","message":{"usage":{"input_tokens":50100,"output_tokens":100},"content":[{"type":"tool_use","id":"s3a","name":"Read","input":{"file_path":"/home/u/proj/docs/claude/orchestration/coordinator.md"}}]}}
+{"type":"user","timestamp":"2026-10-12T17:00:06.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"s3a","content":"x"}]}}
+{"type":"assistant","timestamp":"2026-10-12T17:00:07.000Z","requestId":"s4","message":{"usage":{"input_tokens":52200,"output_tokens":100},"content":[{"type":"tool_use","id":"s4a","name":"ToolSearch","input":{"query":"select:SendMessage"}}]}}
+{"type":"user","timestamp":"2026-10-12T17:00:08.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"s4a","content":[{"type":"tool_reference","tool_name":"SendMessage"}]}]}}
+{"type":"attachment","timestamp":"2026-10-12T17:00:08.000Z","attachment":{"type":"deferred_tools_record","entries":[{"name":"SendMessage","description":"Send a message"}]}}
+{"type":"assistant","timestamp":"2026-10-12T17:00:09.000Z","requestId":"s5","message":{"usage":{"input_tokens":53300,"output_tokens":100},"content":[{"type":"tool_use","id":"s5a","name":"Bash","input":{"command":"session-status --watch","run_in_background":true}}]}}
+{"type":"user","timestamp":"2026-10-12T17:00:10.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"s5a","content":"Command running in background with ID: w1"}]}}
+{"type":"assistant","timestamp":"2026-10-12T17:00:11.000Z","requestId":"s6","message":{"usage":{"input_tokens":53900,"output_tokens":50}}}
+{"type":"user","timestamp":"2026-10-12T17:05:00.000Z","message":{"content":"what's next?"}}
+{"type":"assistant","timestamp":"2026-10-12T17:05:01.000Z","requestId":"s7","message":{"usage":{"input_tokens":60000,"output_tokens":50}}}
+EOF
+cat > "$a/rrrrrrrr-1111.jsonl" <<EOF
+{"type":"user","timestamp":"2026-10-12T18:00:00.000Z","message":{"content":"Session task: PROJ-5 review\nReview it."}}
+{"type":"assistant","timestamp":"2026-10-12T18:00:01.000Z","requestId":"v1","message":{"usage":{"input_tokens":30000}}}
+{"type":"attachment","timestamp":"2026-10-12T18:00:02.000Z","attachment":{"type":"hook_additional_context","content":["Coordinated session (session-orchestration): answer with the reply tool."]}}
+{"type":"assistant","timestamp":"2026-10-12T18:00:03.000Z","requestId":"v2","message":{"usage":{"input_tokens":30800}}}
+{"type":"user","timestamp":"2026-10-12T18:10:00.000Z","message":{"content":"Another Claude session sent a message:\n<cross-session-message from=\"c\">go</cross-session-message>"}}
+{"type":"assistant","timestamp":"2026-10-12T18:10:01.000Z","requestId":"v3","message":{"usage":{"input_tokens":31000},"content":[{"type":"tool_use","id":"v3a","name":"ToolSearch","input":{"query":"select:mcp__session-orchestration__reply"}}]}}
+{"type":"user","timestamp":"2026-10-12T18:10:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"v3a","content":[{"type":"tool_reference","tool_name":"mcp__session-orchestration__reply"}]}]}}
+{"type":"attachment","timestamp":"2026-10-12T18:10:02.000Z","attachment":{"type":"deferred_tools_record","entries":[{"name":"mcp__session-orchestration__reply","description":"Reply"}]}}
+{"type":"assistant","timestamp":"2026-10-12T18:10:03.000Z","requestId":"v4","message":{"usage":{"input_tokens":31300},"content":[{"type":"tool_use","id":"v4a","name":"mcp__session-orchestration__reply","input":{"message":"accepted"}},{"type":"tool_use","id":"v4b","name":"Read","input":{"file_path":"$p/worker.md"}}]}}
+{"type":"attachment","timestamp":"2026-10-12T18:10:04.000Z","attachment":{"type":"queued_command","prompt":"<cross-session-message from=\"c\">also</cross-session-message>"}}
+{"type":"user","timestamp":"2026-10-12T18:10:04.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"v4a","content":"sent"},{"type":"tool_result","tool_use_id":"v4b","content":"w"}]}}
+{"type":"assistant","timestamp":"2026-10-12T18:10:05.000Z","requestId":"v5","message":{"usage":{"input_tokens":31500}}}
+EOF
+out=$(rnd start 7)
+[ "$(grep -v '^session' <<<"$out")" = $'ssssssss\t2026-10-12T17:00\t6\t40000\t53900\t6000\t2925\t0\t2000\t1000\t1475\t500\nmedian\tn=1\t6\t40000\t53900\t6000\t2925\t0\t2000\t1000\t1475\t500' ] ||
+  fail "start: the coordinator's Start by part, ended by the watcher" "$out"
+out=$(rnd loads 7)
+grep -q $'^review\t1\t1\t2\t1\t0\t0\t1\t1\t0\t1\t0\t1\t-\t800\t300$' <<<"$out" &&
+  grep -q $'^coordinator\t1\t0\t0\t0\t1\t0\t0\t0\t1\t0\t0\t0\t6000\t-\t-$' <<<"$out" || fail "loads: per kind" "$out"
+
 printf '#!/bin/sh\necho "$@" > %q\n' "$tmp/claude.args" > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"
 out=$(HOME=$tmp RND_LOG=$tmp/log "$here/rnd-weekly" "$tmp" --dry-run)
 grep -q 'claude --bg -n rnd-weekly-' <<<"$out" && [ ! -e "$tmp/claude.args" ] || fail "rnd-weekly --dry-run starts nothing" "$out"

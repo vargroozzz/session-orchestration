@@ -24,9 +24,8 @@ bash "$SS" >> "$out" 2>&1 || fail "status: $(tail -3 "$out")"
 bash "$SS" --config terminal >> "$out" 2>&1
 
 # Everything the coordinator reads: the command output, what setup wrote, the skill docs it reads at start, and
-# the docs the check line names (`→ read …`).
-docs=("$P/skills/orchestrating-sessions/SKILL.md" "$P/skills/orchestrating-sessions/coordinator.md"
-  "$P/skills/orchestrating-sessions/status-reference.md" "$P/skills/setting-up-coordination/SKILL.md" "$P/README.md")
+# the docs the check's feature lines name (`  <name>: … Read <doc> when …`).
+docs=("$P/skills/orchestrating-sessions/"*.md "$P/hooks/reply-card.txt" "$P/skills/setting-up-coordination/SKILL.md" "$P/README.md")
 while IFS= read -r d; do docs+=("$(find "$P" -path "*/$d" | head -1)"); done < <(grep -oE '[a-z-]+/[a-z-]+\.md' <<<"$c")
 written=$(git ls-files -o --exclude-standard; git ls-files -o -i --exclude-standard)
 deny='eduard|btigroup|sdm-|@first/|~/bin|(^|[^[:alnum:]_])(vpn|greg|ghostty)([^[:alnum:]_]|$)'

@@ -1,7 +1,7 @@
 # Messages: Microsoft Teams and Outlook (msgraph)
 
-> **Read when**: you're the coordinator and the check's `active:` line names this file: at start, and before
-> acting on a Notices line.
+> **Start**: nothing to do: the sweep's Notices footer carries its lines.
+> **Read when**: you act on a Notices line from it (`teams …`, `mail …`), or one says `(failed)`.
 
 With `"messages": "msgraph"` in `.claude/coordination.local.json`, the sweep's **Notices** footer gets one line per
 Teams or mail item that needs you, through a Microsoft Graph CLI. Its calls are GETs: nothing is sent, reacted to or

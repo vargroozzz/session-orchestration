@@ -1,5 +1,12 @@
 # Feature: accounts
 
+> **Start**: nothing to do. Workers you start or resume run under your account (don't set or unset
+> `CLAUDE_CONFIG_DIR`); keep them there unless the user names another: you can't message a session under another
+> account. Before resuming a closed session, ask the user to confirm it isn't running under another account.
+> **Read when**: a session under another account needs a message, resume, wake, stop or follow-up; a `Reports:` line
+> shows; a command was handed over under another account; `claude --bg` says "Workspace not trusted"; or the review
+> inbox's watch says "no live-channel credential".
+
 On when `features.accounts` is `true` in `.claude/coordination.local.json` (a person key: the repo file can't set
 it). Setup turns it on when it finds a second Claude account sharing this one's transcripts, and `session-status
 --init --check` warns when one appears while it is off. Off, everything asks only the current account.
@@ -14,7 +21,7 @@ approval verifies from a worker under another account. The list comes from `feat
 ## Coordinating across accounts
 
 `claude --bg` and `--resume` run from your Bash tool inherit your `CLAUDE_CONFIG_DIR`, so workers you start or
-resume run under your account; don't set or unset it. That is what lets them `SendMessage` you. If `claude --bg`
+resume run under your account; don't set or unset it. That is what lets them message you. If `claude --bg`
 fails with "Workspace not trusted", ask the user to run `claude` there once under your account's
 `CLAUDE_CONFIG_DIR` (if it isn't the default) and accept the trust prompt; don't start the worker under another
 account to get around it.
@@ -36,8 +43,8 @@ session under another account.
   resumes applies (read its `ctx` first).
 - **Waking or stopping** a session under another account (a retired one, a `claude stop` that can't confirm):
   run the command under that account's prefix, as `session-status` prints it.
-- **A worker under another account** (one the user started there) finds no coordinator in `ListAgents` and can't
-  `SendMessage` it: it writes its report to the replies folder only. `session-status --changes` (so `--watch`)
+- **A worker under another account** (one the user started there) finds no coordinator (`reply` delivers nothing) and
+  can't message it: it writes its report to the replies folder only. `session-status --changes` (so `--watch`)
   lists each `<KEY>.md` written there in the last day under `Reports:` (not a key a session of your account works
   on: that one messages), so a new one wakes you; read it there.
 - **A command handed over under another account** (the pane's "Handed over under X"): it runs under yours, so

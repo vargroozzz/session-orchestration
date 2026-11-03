@@ -71,6 +71,8 @@ declare module 'claude-code' {
       handedResult: ActionResult | null
       // The configured terminal (session-status --config terminal), read each sweep: plain shows no tab or split.
       terminal: string
+      // The review inbox open_pane watched in this session: a reopen doesn't watch it again (or repeat its line).
+      inboxWatched: string | null
     }
   }
 }

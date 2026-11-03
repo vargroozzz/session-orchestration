@@ -32,6 +32,15 @@ Waiting on you:
 EOF
 ABC-12    -              wt dirty:1 unpushed:? | sess:"fix it" blocked
 EOF2
+# A last turn that asks only in what it sent the coordinator (a reply's text, a SendMessage summary) asks too.
+cp "$proj/$sid.jsonl" "$tmp/t.keep"
+sent() { sed '$d' "$tmp/t.keep" > "$proj/$sid.jsonl"; run | grep -c 'Waiting on you'
+  echo "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"r1\",\"name\":\"$1\",\"input\":$2}]}}" >> "$proj/$sid.jsonl"
+  run | grep -c 'Waiting on you'; }
+[ "$(sent mcp__session-orchestration__reply '{"text":"ABC-12 · b · blocked\nBlocker: A or B? your call"}')" = "$(printf '0\n1')" ] &&
+  [ "$(sent SendMessage '{"to":"c","summary":"A or B?","message":"x"}')" = "$(printf '0\n1')" ] &&
+  [ "$(sent mcp__session-orchestration__reply '{"text":"ABC-12 · b · coding"}')" = "$(printf '0\n0')" ] || { echo "an ask in a reply failed"; exit 1; }
+mv "$tmp/t.keep" "$proj/$sid.jsonl"
 
 # Notices: a new one is a change, one going away isn't; a failure keeps the last good ones; exit 2 = unsupported.
 mkdir -p "$root/.claude"; cat > "$root/.claude/session-status-adapter" <<EOF
@@ -426,6 +435,22 @@ echo brief > "$root/replies/ABC-41-c1.md"; [ "$(run --changes)" = "no changes" ]
 echo report > "$root/replies/ABC-41.md"; out=$(run --changes)
 rm "$root/replies/ABC-41.md" "$root/replies/ABC-41-c1.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
 grep -q '^now:   \* report written: ABC-41.md (' <<<"$out" || { echo "a report didn't wake --changes: $out"; exit 1; }
+# --start: the status, the handoff file, the last handover note, the replies written since it with their first
+# lines, and the config, under ## headers; the status's exit code, args passed on (the adapter here lists only the
+# keys given). An old handover still marks what the last coordinator saw; with none, the last day's replies.
+echo old > "$root/replies/ABC-48.md"; echo 'Live: none.' > "$root/replies/coordinator-handover.md"
+touch -t 202601010000 "$root/replies/ABC-48.md"; sleep 1; printf 'ABC-49 · proj · done\nmore\n' > "$root/replies/ABC-49.md"
+out=$(run --start ABC-12) && [ "$(grep '^## ' <<<"$out" | sed 's/ (.*//')" = "$(printf '## Status\n## Handoff file\n## Handover\n## Replies written since the handover\n## Coordination config')" ] &&
+  grep -q '^ABC-12 ' <<<"$out" && grep -qx '(none: the adapter gives no pending text)' <<<"$out" && grep -qx 'Live: none.' <<<"$out" &&
+  [ "$(grep -A9 '^## Replies' <<<"$out" | grep -c '\.md: ')" = 1 ] && grep -qx '[0-9-]* [0-9:]*  ABC-49.md: ABC-49 · proj · done' <<<"$out" &&
+  grep -A1 '^## Coordination config' <<<"$out" | grep -q '^active: ' || { echo "--start: $out"; exit 1; }
+touch -t 202601010000 "$root/replies/coordinator-handover.md"; touch -t 202601020000 "$root/replies/ABC-48.md"; out=$(run --start)
+grep -qx "## Replies written since the handover ($root/replies), newest first" <<<"$out" && grep -q 'ABC-49.md: ' <<<"$out" && grep -q 'ABC-48.md: ' <<<"$out" ||
+  { echo "--start, an old handover: $out"; exit 1; }
+rm "$root/replies/coordinator-handover.md"; out=$(run --start)
+grep -qx "## Replies written in the last day ($root/replies), newest first" <<<"$out" && grep -q 'ABC-49.md: ' <<<"$out" && ! grep -q 'ABC-48' <<<"$out" ||
+  { echo "--start, no handover: $out"; exit 1; }
+rm "$root/replies/ABC-48.md" "$root/replies/ABC-49.md"
 setacct cfg "$(sess "$hid" "fix it" idle 1)"; calls >/dev/null
 out=$(run --handover "$hid" -- 'Do X.') && rc=0 || rc=$?
 [ "$rc" = 2 ] && [ "$out" = 'no replies/ABC-40.md: ask "fix it" for a status report first, or write one' ] && ! calls | grep -q 'stop\|--bg' ||
@@ -681,7 +706,7 @@ out=$(init "$a") && grep -q '^1\. Task keys: ACME-123 (in 66% ' <<<"$out" && gre
   grep -q '^3\. Files: CLAUDE.local.md, .claude/session-status-adapter, ' <<<"$out" || { echo "init (a) failed: $out"; exit 1; }
 init "$a" --check >/dev/null && { echo "init (a) --check exited 0 before --write"; exit 1; }
 out=$(init "$a" --write) && [ "$(init "$a" --check)" = "$(printf 'configured: %s (acme-coordinator)\nactive: tracker=jira host=github delegate=off terminal=plain messages=none features=none' "$a")" ] && [ -z "$(git -C "$a" status --short)" ] &&
-  grep -q '^- Replies folder (the plugin.s "folder for this"): `/[^`]*/session-orchestration/replies/[^`]*-init-acme/`\.$' "$a/CLAUDE.local.md" &&
+  grep -q '^- Replies folder (status reports, plans, review reports): `/[^`]*/session-orchestration/replies/[^`]*-init-acme/`\.$' "$a/CLAUDE.local.md" &&
   grep -qF '`approvals.delegate` in' "$a/CLAUDE.local.md" && [ "$(jq -c . "$a/.claude/coordination.local.json")" = '{"features":{"accounts":false},"approvals":{"delegate":false}}' ] &&
   [ "$(jq -c . "$a/.claude/coordination/coordination.json")" = '{"tracker":"jira","host":"github","features":{"review_inbox":false}}' ] && [ "$(cd "$a" && .claude/session-status-adapter urls)" = 'pr https://github.com/acme/{repo}/pull/{id}' ] &&
   [ "$(init "$a" | sed -n '1p;2p;3s/:.*//p;4s/:.*//p')" = "$(printf 'This folder is set up for coordination already (%s, acme-coordinator): nothing to propose.\nOptional, on request (session-status --init --write FLAG):\n  --review-brief\n  --rnd-brief' "$a")" ] ||
@@ -729,7 +754,8 @@ init "$a" --write --delegate >/dev/null && [ "$(cfg "$a/sub" approvals.delegate)
 # repo file can't set it.
 cp "$a/.claude/coordination.local.json" "$tmp/person.json"
 jq '.messages = "msgraph"' "$tmp/person.json" > "$a/.claude/coordination.local.json"
-grep -x "active: .* messages=msgraph features=none → read $(cd "$here/../.." && pwd)/messages/msgraph.md" <<<"$(init "$a" --check)" >/dev/null &&
+c=$(init "$a" --check); grep -x 'active: .* messages=msgraph features=none' <<<"$c" >/dev/null &&
+  grep -x "  messages msgraph: nothing to do: .* Read $(cd "$here/../.." && pwd)/messages/msgraph.md when you act on a Notices line .*" <<<"$c" >/dev/null &&
   jq '.messages = "irc"' "$tmp/person.json" > "$a/.claude/coordination.local.json" &&
   [ "$(cfg "$a" messages 2>&1)" = "$(printf 'warning: config messages=irc is not valid (no messages/irc.sh found): using the default\nnone')" ] &&
   cp "$tmp/person.json" "$a/.claude/coordination.local.json" && cp "$a/.claude/coordination/coordination.json" "$tmp/cfg.json" &&
@@ -759,13 +785,27 @@ mkdir -p "$tmp/.claude-work" && ln -s "$tmp/cfg/projects" "$tmp/.claude-work/pro
 echo '{"features":{"accounts":false}}' > "$a/.claude/coordination.local.json"
 grep -F 'second account found, accounts off: set features.accounts to true' <<<"$(init "$a" --check)" >/dev/null || { echo "check second account: $(init "$a" --check)"; exit 1; }
 echo '{"features":{"accounts":true}}' > "$a/.claude/coordination.local.json"
-grep -x "active: .* features=accounts → read $(cd "$here/../.." && pwd)/features/accounts.md" <<<"$(init "$a" --check)" >/dev/null &&
+# Its doc's start step and when to read it, the wrapped lines of each joined.
+c=$(init "$a" --check); grep -x 'active: .* features=accounts' <<<"$c" >/dev/null &&
+  grep -x "  accounts: nothing to do\. Workers .* another account\. Before resuming .* Read $(cd "$here/../.." && pwd)/features/accounts.md when a session under .* \"no live-channel credential\"\." <<<"$c" >/dev/null &&
   ! grep -q 'second account' <<<"$(init "$a" --check)" || { echo "check accounts on: $(init "$a" --check)"; exit 1; }
 b=$(mkdir -p "$tmp/init/bb" && cd "$tmp/init/bb" && pwd -P); git -C "$b" init -q && git -C "$b" remote add origin ssh://git@bitbucket.example.com/x/y.git
 echo 'Review inbox: https://claude.ai/artifact/abc' > "$b/CLAUDE.md"
 init "$b" --write >/dev/null && [ "$(jq -c .features "$b/.claude/coordination/coordination.json"):$(jq -c .features "$b/.claude/coordination.local.json")" = '{"review_inbox":true}:{"accounts":true}' ] &&
-  grep -x 'active: .* features=accounts,review_inbox → read .*/features/accounts.md, .*/features/review-inbox.md' <<<"$(init "$b" --check)" >/dev/null ||
+  c=$(init "$b" --check) && grep -x 'active: .* features=accounts,review_inbox' <<<"$c" >/dev/null &&
+  [ "$(grep '^  ' <<<"$c" | cut -d: -f1)" = "$(printf '  accounts\n  review_inbox\n  review_inbox url')" ] &&
+  grep -x '  review_inbox: .* Read .*/features/review-inbox.md when .*' <<<"$c" >/dev/null &&
+  grep -x '  review_inbox url: https://claude.ai/artifact/abc' <<<"$c" >/dev/null ||
   { echo "init features: $(init "$b" --check)"; exit 1; }
+# Two inboxes: this account's is on the line naming its config dir (~/cfg here), as ~/… or in full; ~/cfg-old isn't it.
+inbox_of() { printf 'Review inbox (`~/cfg-old`): https://claude.ai/artifact/old\nReview inbox (%s): https://claude.ai/artifact/%s\n' "$1" "$2" > "$b/CLAUDE.local.md"; init "$b" --check | sed -n 's/^  review_inbox url: //p'; }
+[ "$(inbox_of '`~/cfg`' mine):$(inbox_of "$tmp/cfg/" full):$(inbox_of '~/.claude-work' other)" = "https://claude.ai/artifact/mine:https://claude.ai/artifact/full:" ] ||
+  { echo "check inbox per account: $(inbox_of '`~/cfg`' mine) / $(init "$b" --check)"; exit 1; }
+# One inbox: its URL, unless its line names another account's config dir.
+cp "$b/CLAUDE.md" "$b/CLAUDE.md.x"; { grep -v 'artifact/abc' "$b/CLAUDE.md.x" || :; } > "$b/CLAUDE.md"
+one() { printf 'Review inbox (%s): https://claude.ai/artifact/one\n' "$1" > "$b/CLAUDE.local.md"; init "$b" --check | sed -n 's/^  review_inbox url: //p'; }
+[ "$(one '`~/.claude-work`'):$(one '`~/cfg`')" = ":https://claude.ai/artifact/one" ] || { echo "check one inbox: $(one '`~/.claude-work`'):$(one '`~/cfg`') / $(init "$b" --check)"; exit 1; }
+mv "$b/CLAUDE.md.x" "$b/CLAUDE.md"; rm "$b/CLAUDE.local.md"
 echo 'Review inbox: https://claude.ai/artifact/abc' >> "$a/CLAUDE.local.md"; rm "$a/.claude/coordination/coordination.json"
 grep -F 'review inbox found: off, it needs host=bitbucket' <<<"$(init "$a")" >/dev/null || { echo "init inbox on github: $(init "$a")"; exit 1; }
 jq '.features.review_inbox = false' "$b/.claude/coordination/coordination.json" > "$b/x" && mv "$b/x" "$b/.claude/coordination/coordination.json"
@@ -791,7 +831,9 @@ T_PROG=ghostty init "$a" | grep -F 'terminal=ghostty' >/dev/null &&
   T_PROG=ghostty init "$a" --check | grep -xF 'detected ghostty: run setup to record it (session-status --init --write adds terminal=ghostty)' >/dev/null &&
   ! init "$a" --check | grep -q 'detected' || { echo "init terminal detected: $(T_PROG=ghostty init "$a" --check)"; exit 1; }
 T_PROG=ghostty init "$a" --write >/dev/null && [ "$(jq -r .terminal "$a/.claude/coordination.local.json")" = ghostty ] &&
-  grep -x "active: .* terminal=ghostty messages=none features=accounts → read $(cd "$here/../.." && pwd)/terminals/ghostty.md, .*/features/accounts.md" <<<"$(T_PROG=ghostty init "$a" --check)" >/dev/null &&
+  c=$(T_PROG=ghostty init "$a" --check) && grep -x 'active: .* terminal=ghostty messages=none features=accounts' <<<"$c" >/dev/null &&
+  [ "$(grep '^  ' <<<"$c" | cut -d: -f1)" = "$(printf '  terminal ghostty\n  accounts')" ] &&
+  grep -x "  terminal ghostty: nothing to do\. Read $(cd "$here/../.." && pwd)/terminals/ghostty.md when .*" <<<"$c" >/dev/null &&
   ! T_PROG=ghostty init "$a" --check | grep -q detected || { echo "init terminal recorded: $(T_PROG=ghostty init "$a" --check)"; exit 1; }
 else ! T_PROG=ghostty init "$a" --check | grep ghostty >/dev/null || { echo "init ghostty proposed off macOS"; exit 1; }; fi
 T_MUX=/tmp/tmux-1/default init "$g" | grep -F 'terminal=plain (host=none: GitLab support is a TODO) (tmux found: no tmux terminal yet, so plain)' >/dev/null ||
@@ -800,6 +842,10 @@ echo '{"terminal":"wezterm"}' > "$a/.claude/coordination.local.json"
 mkdir -p "$a/.claude/coordination.local/terminals" && echo 'open_view() { :; }' > "$a/.claude/coordination.local/terminals/wezterm.sh"
 init "$a" --check | grep -xF 'warning: terminals/wezterm.sh: no open_split, using the default' >/dev/null ||
   { echo "check own terminal module: $(init "$a" --check)"; exit 1; }
+# A doc without the start and read-when lines is read whole at start.
+printf '# Terminal: wezterm\n\n> A note.\n' > "$a/.claude/coordination.local/terminals/wezterm.md"
+init "$a" --check | grep -x '  terminal wezterm: read /.*/terminals/wezterm\.md now' >/dev/null ||
+  { echo "check doc without a start line: $(init "$a" --check)"; exit 1; }
 # Shared mode. (s1) a repo that isn't yours, whose exclude hides .claude/* (SAIL's): setup writes nothing tracked;
 # --shared makes the repo file visible to commit, with a negation.
 s=$(mkdir -p "$tmp/init/sail" && cd "$tmp/init/sail" && pwd -P); git -C "$s" init -q && git -C "$s" remote add origin https://github.com/o/sail.git

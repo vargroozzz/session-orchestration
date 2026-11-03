@@ -3,7 +3,7 @@
 What one task learned that another needs: decisions, pitfalls, conventions. Read this index when you start a task,
 then the topic file whose trigger matches your work, whole. Append one line to that file's end
 (`- YYYY-MM-DD KEY: …`, the rule first, then the incident); none fits: `misc.md`. Never add entries here. Only the
-coordinator deletes, merges or moves entries (session-orchestration `coordinator.md`, "Project memory").
+coordinator deletes, merges or moves entries (session-orchestration's coordinator skill, "Project memory").
 
 | Topic file (`memory/`) | Read when |
 |------------------------|-----------|

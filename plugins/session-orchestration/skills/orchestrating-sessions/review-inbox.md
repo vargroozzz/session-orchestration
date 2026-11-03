@@ -65,7 +65,7 @@ above is the guard.
 ## Posting
 
 A fresh session, started for the job (`claude --bg 'Post the approved review-inbox rows for <project>
-<repo> #<pr>: <inbox url>. Per the session-orchestration skill, review-inbox.md (Posting).'`):
+<repo> #<pr>: <inbox url>. Per <this skill's folder>/review-inbox.md (Posting).'`, the folder as an absolute path):
 
 1. `ArtifactData` `query` on `findings`, `where` `[["status","==","approved"],["project","==","<project>"],["repo","==","<repo>"],["pr","==",<pr>]]`,
    with a **new, empty** `out_dir` each run: `/tmp/review-inbox-<your session id's first 8>-<unix
@@ -99,7 +99,7 @@ user attaches and allows it.
 A row with status `noted` carries a question or an instruction. It never goes back to the
 reviewer (its context is 100k+ tokens). The coordinator starts a fresh session per PR:
 `claude --bg 'Answer the review-inbox notes for <repo> #<pr>: <inbox url>. Read only <report file>
-and the noted rows. Per the session-orchestration skill, review-inbox.md (Notes).'` It reads that
+and the noted rows. Per <this skill's folder>/review-inbox.md (Notes).'` It reads that
 report and the rows, may read the PR's diff for the lines in question, and per row:
 - writes `answer` (a short reply to the note) and `answeredNote` (the note), and when the note asks
   for different text, a new `draft`;

@@ -3,8 +3,9 @@
 # No model call, no tracker call: everything comes from the folder, its git repos and their remotes.
 #   session-status --init --check   one line, exit 0 configured, 1 unconfigured or partial, 3 covered by a parent;
 #                                   configured adds the active line (`active: tracker=… host=… delegate=…
-#                                   terminal=… messages=… features=…`, naming the terminal's, the messages module's
-#                                   and each enabled feature's doc) and
+#                                   terminal=… messages=… features=…`), under it one indented line per doc of the
+#                                   terminal, the messages module and each enabled feature (its start step and when to
+#                                   read it) and
 #                                   a line per warning (a config value not valid, a module that doesn't load whole,
 #                                   delegation still in CLAUDE.md, a second account with features.accounts off, a
 #                                   terminal detected but not recorded)
@@ -109,9 +110,20 @@ accounts_n=$( . "$LIB_DIR/features/accounts.sh" && list_accounts | grep -c .)
 # A review inbox the project names already: "Review inbox" and a claude.ai page on one line of one of its docs.
 inbox= o=.claude/orchestration; [ -d "$root/docs/claude" ] && o=docs/claude/orchestration
 case $replies in ''|*/session-orchestration/replies/*) ;; *) o=$(dirname "${replies%/}") ;; esac; o=${mem:-$o}
-for f in CLAUDE.md CLAUDE.local.md "$o/memory.md" "$o/coordinator.md"; do
-  grep -qiE 'review inbox.*claude\.ai/(code/)?artifact/' "$root/$f" 2>/dev/null && inbox=1
-done
+inbox_lines=$(cd "$root" && grep -hiE 'review inbox.*claude\.ai/(code/)?artifact/' CLAUDE.md CLAUDE.local.md "$o/memory.md" "$o/coordinator.md" 2>/dev/null)
+[ -z "$inbox_lines" ] || inbox=1
+# inbox_url: this account's review inbox: the one URL those lines name when they name no `/.claude…` dir (another
+# account is only ever ~/.claude or ~/.claude-*, as list_accounts finds it), else the one on the line naming this
+# account's config dir (CLAUDE_CONFIG_DIR, else ~/.claude; as ~/… or in full, a / after it or not, not as the start of
+# a longer path), so another account's inbox is never watched.
+inbox_url() {
+  local all c t; all=$(grep -oE 'https://claude\.ai/(code/)?artifact/[A-Za-z0-9_-]+' <<<"$inbox_lines" | sort -u)
+  [ "$(grep -c . <<<"$all")" -gt 1 ] || grep -q '/\.claude' <<<"$inbox_lines" || { echo "$all"; return; }
+  c=${CLAUDE_CONFIG_DIR:-$HOME/.claude}; c=${c%/}; t="~${c#"$HOME"}"; [ "$t" != "~$c" ] || t=$c
+  awk -v c="$c" -v t="$t" '
+    function names(s, p,   i, r) { while ((i = index(s, p))) { r = substr(s, i + length(p)); sub(/^\//, "", r); if (r !~ /^[A-Za-z0-9_.\/-]/) return 1; s = substr(s, i + 1) } return 0 }
+    names($0, c) || names($0, t) { if (match($0, /https:\/\/claude\.ai\/(code\/)?artifact\/[A-Za-z0-9_-]+/)) { print substr($0, RSTART, RLENGTH); exit } }' <<<"$inbox_lines"
+}
 # The terminal this runs in: Ghostty by TERM_PROGRAM, on macOS (its module drives AppleScript); tmux has no module
 # yet (plain, with a note). Plain isn't written, so a later run in Ghostty can still record it.
 term_found=plain term_note=
@@ -124,6 +136,17 @@ elif [ -n "$adapter$replies$noexec" ]; then state=partial
 else state=unconfigured; fi
 
 if [ "$mode" = check ]; then
+  # doc_line NAME DOC: `  NAME: <start step> Read DOC when <events>`, from the `> **Start**:` and `> **Read when**:`
+  # lines under DOC's title (each may wrap), so a coordinator reads the doc on its event, not at Start. A doc without
+  # both is read whole now.
+  doc_line() {
+    awk -v n="$1" -v d="$2" '
+      /^> / { s = substr($0, 3)
+              if (s ~ /^\*\*Start\*\*: /) { k = "s"; s = substr(s, 12) } else if (s ~ /^\*\*Read when\*\*: /) { k = "r"; s = substr(s, 16) }
+              if (k != "") v[k] = v[k] (v[k] == "" ? "" : " ") s; next }
+      k != "" { exit }
+      END { if (v["s"] == "" || v["r"] == "") print "  " n ": read " d " now"; else print "  " n ": " v["s"] " Read " d " when " v["r"] }' "$2"
+  }
   case $state in
     configured) w=; [ -z "$parent" ] || w="; its own adapter wins over the one in $parent"
                 echo "configured: $root (${name}-coordinator)$w"
@@ -140,13 +163,15 @@ if [ "$mode" = check ]; then
                 sort -u "$wf"; rm -f "$wf"   # the warnings
                 [ "${#review[@]}" = 0 ] || echo "committed code new or changed upstream: ${review[*]%@*}: run setup to review it"
                 [ "$d" = true ] && d=on || d=off
-                f= docs=
+                f= docs=()
                 # A module's doc: the .md beside the file found (terminals/ghostty.md).
-                [ "$te" = plain ] || { md=$(find_module terminals "$te") && md=${md%.sh}.md && [ -f "$md" ] && docs=$md; }
-                [ "$m" = none ] || { md=$(find_module messages "$m") && md=${md%.sh}.md && [ -f "$md" ] && docs=${docs:+$docs, }$md; }
-                [ "$a" != true ] || { md=$(find_module features accounts) && md=${md%.sh}.md && [ -f "$md" ] && docs=${docs:+$docs, }$md; f=accounts; }
-                [ "$r" != true ] || f=${f:+$f,}review_inbox docs=${docs:+$docs, }$LIB_DIR/features/review-inbox.md
-                echo "active: tracker=$t host=$h delegate=$d terminal=$te messages=$m features=${f:-none}${docs:+ → read $docs}"
+                [ "$te" = plain ] || { md=$(find_module terminals "$te") && md=${md%.sh}.md && [ -f "$md" ] && docs+=("terminal $te" "$md"); }
+                [ "$m" = none ] || { md=$(find_module messages "$m") && md=${md%.sh}.md && [ -f "$md" ] && docs+=("messages $m" "$md"); }
+                [ "$a" != true ] || { md=$(find_module features accounts) && md=${md%.sh}.md && [ -f "$md" ] && docs+=(accounts "$md"); f=accounts; }
+                [ "$r" != true ] || { f=${f:+$f,}review_inbox; docs+=(review_inbox "$LIB_DIR/features/review-inbox.md"); }
+                echo "active: tracker=$t host=$h delegate=$d terminal=$te messages=$m features=${f:-none}"
+                for ((i = 0; i < ${#docs[@]}; i += 2)); do doc_line "${docs[i]}" "${docs[i+1]}"; done
+                [ "$r" != true ] || { u=$(inbox_url); [ -z "$u" ] || echo "  review_inbox url: $u"; }   # open_pane watches it
                 [ -n "$term_set" ] || [ "$term_found" = plain ] || echo "detected $term_found: run setup to record it (session-status --init --write adds terminal=$term_found)"
                 [ "$a" = true ] || [ "$accounts_n" -lt 2 ] || echo "second account found, accounts off: set features.accounts to true in .claude/coordination.local.json (session-status --init --write adds it when unset)"
                 dh=$(detect_host . 2>/dev/null); [ "$dh" = none ] || [ "$dh" = "$h" ] ||
