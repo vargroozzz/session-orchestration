@@ -132,6 +132,32 @@ test('a queued approval becomes buttons; a click submits the answer once and cle
   expect(await again.find({ type: 'Text', text: 'PENDING TEXT' })).toBeDefined()
 })
 
+test('an ask answered in the user\'s own words submits them as the answer', async ($, on) => {
+  mock.clock(on)
+  const submitted: string[] = []
+  on('prompt.submit', async (_, e) => {
+    submitted.push(e.text)
+    return { text: e.text }
+  })
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  let said = 'No, delete the old comment instead'
+  on('tool.call', { tool: 'AskUserQuestion' }, async (_, e) => (said
+    ? { result: { questions: e.questions, answers: Object.fromEntries(e.questions.map(q => [q.question, said])) } }
+    : { deny: 'dismissed' }))
+  await $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'ABC-2', question: 'Post the ABC-2 comment?', options: ['Yes, post it', 'No'] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  await ui.press({ key: 'ask-1-words' })
+  expect(submitted).toEqual(['Approval pane answer for ABC-2: No, delete the old comment instead. Asked: Post the ABC-2 comment?'])
+  await ui.unmount()
+  said = ''
+  await $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'ABC-3', question: 'Merge ABC-3?', options: ['Yes', 'No'] })
+  const again = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  await again.press({ key: 'ask-2-words' })
+  expect(submitted).toHaveLength(1) // dismissed or empty: nothing sent, the ask stays
+  expect(await again.find({ type: 'Button', text: 'Yes' })).toBeDefined()
+})
+
 const STATUS = `PROJ-4157  Code Review    app#76 OPEN no-human-approval  | wt dirty:0 unpushed:0 | sess:— | Race to settle
 PROJ-4679  In Development app#236 OPEN CONFLICT  | wt dirty:2 unpushed:1 | sess:"pr review proj-4679" blocked | Decisive automap
 PROJ-4842  Code Review    app#258 OPEN  | no-wt | sess:e9d81c83 closed 26h | Extend settler

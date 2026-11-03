@@ -1074,7 +1074,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'ask_approval',
-      description: 'Coordinator only: queue a reserved approval as buttons in the coordinator pane instead of the question box. Returns at once; the user\'s click arrives later as a prompt "Approval pane answer for <KEY>: <option>. Asked: <question>", which is the Quote for a relayed approval. Unanswered asks expire after 24h; an expired one with a kind (a review finding) comes back to you as a prompt: re-ask it once with the question starting "Reminder: "; an expired reminder is dropped (record it and tell the reviewer). Keep the question one line; put what the user should read in details (markdown), target, and for a comment post body_file (the body file, written first: the pane shows its text and sha256). Use it only for an action the project reserves for the user, one action per ask; ask anything else in plain text, or in the question box when the answer needs the user\'s own words (coordinator.md, Messaging).',
+      description: 'Coordinator only: queue a reserved approval as buttons in the coordinator pane instead of the question box. Returns at once; the user\'s click arrives later as a prompt "Approval pane answer for <KEY>: <option>. Asked: <question>" (<option> may be the user\'s own words, typed in the pane\'s question dialog), which is the Quote for a relayed approval. Unanswered asks expire after 24h; an expired one with a kind (a review finding) comes back to you as a prompt: re-ask it once with the question starting "Reminder: "; an expired reminder is dropped (record it and tell the reviewer). Keep the question one line; put what the user should read in details (markdown), target, and for a comment post body_file (the body file, written first: the pane shows its text and sha256). Use it only for an action the project reserves for the user, one action per ask; ask anything else in plain text, or in the question box when the answer needs the user\'s own words (coordinator.md, Messaging).',
       inputSchema: ASK_SCHEMA,
     })
     await $.tool.register({
@@ -1339,6 +1339,13 @@ export const register: Register = on => {
         throw err
       }
       await dropAsks($, x => x.id === a.id)
+    }
+    // A conditional or redirected answer ("no, delete the old one instead") in one round: the question dialog, its
+    // options plus Other for the user's own words, submitted like a click. Dismissed: nothing is sent.
+    const answerInWords = (a: Ask) => async () => {
+      const said = await $.ui.ask(`${oneLine(a.question).replace(/\?*$/, '')}?`, { options: a.options, header: 'Approval' }).catch(() => '')
+      const words = oneLine(clean(said)).trim()
+      if (words) await answer(a, words)()
     }
 
     // Item actions.
@@ -1743,6 +1750,8 @@ export const register: Register = on => {
               {a.options.map((o, i) => (
                 <Button key={`ask-${a.id}-${i}`} label={o} onPress={answer(a, o)} />
               ))}
+              {/* shortcut: the dialog takes 2-4 options, so an ask with 5-6 has no own-words button; add one if they get used */}
+              {a.options.length <= 4 && <Button key={`ask-${a.id}-words`} label="In your own words…" onPress={answerInWords(a)} />}
             </Box>
           )}
         </Box>

@@ -258,7 +258,8 @@ worker's append is lost.
     config and restart the frontend" / "No, leave PROJ-4172 as is"). One question per action. It returns
     at once and the buttons wait in the pane, so you keep receiving worker messages. When the user
     clicks, the answer arrives as your next prompt, `Approval pane answer for <KEY>: <option>.
-    Asked: <question>`. That whole line is the Quote. It verifies for 24h, and only from this
+    Asked: <question>`; from **In your own words…**, the user's typed text stands in for `<option>`
+    (a conditional yes, or a different action): act only on what those words approve. That whole line is the Quote. It verifies for 24h, and only from this
     plugin's click, so a typed copy doesn't count. An unanswered ask leaves the pane after 24h. One
     with a `kind` (a review finding) comes back as a prompt, `Approval pane: … expired unanswered
     after 24h: <KEY> (id N) <question>`, so a review post can't sit unseen: queue it again once, the
@@ -426,7 +427,8 @@ A multi-step task becomes chunks run by separate sessions, so none outgrows its 
 
 1. **Split.** One chunk per step with a done-when, an est and a clean stop point (everything committed, nothing running).
    The est is growth in context, kept within `handoff.at.chunk` − ~60K; a chunk with more than 3 separate pieces is split.
-   Size classes: S ≤ 22K, M ≤ 43K, L ≤ 65K.
+   Size classes: S ≤ 22K, M ≤ 43K, L ≤ 65K. Multiply a `build` chunk's first guess by 1.35 (measured: build chunks
+   grew 1.35× their est, n=8); other kinds stay at 1.0 until `rnd.py chunks` has enough samples to say otherwise.
 2. **Write the plan** as a table under `## Plan` in `<replies>/PROJ-123.md`, and run `session-status --plan FILE --check`.
    Write one brief per chunk, `<replies>/PROJ-123-cN.md`, from `--plan FILE --brief N`, plus a shared
    `PROJ-123-chunk-rules.md` (paths, setup, interface, checks, landing by fast-forward). Keep plans in the replies folder.
