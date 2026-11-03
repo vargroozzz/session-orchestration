@@ -849,3 +849,58 @@ test('reply answers the from it is given, else tries the live coordinators the p
   expect(sent).toEqual(['uds:/tmp/w.sock: PROJ-1 accepted', 'proj-coordinator: PROJ-1 · b · coding', 'old-coordinator: PROJ-1 · b · coding',
     'proj-coordinator: PROJ-1 · b · blocked', 'old-coordinator: PROJ-1 · b · blocked'])
 })
+
+test('a done reply is sent only once its kind holds: clean, pushed, a PR on the board without failing checks; a report\'s files exist', async ($, on) => {
+  on('session.cwd', async () => ({ value: '/work/proj/.claude/worktrees/PROJ-1' }))
+  on('session.id', async () => ({ value: 'sess-3' }))
+  let porcelain = { exitCode: 0, stdout: ' M a.ts\n?? b.ts\n' }
+  let ahead = { exitCode: 0, stdout: '0\n' }
+  const row = (extra: string, title = 'Fix', status = 'In review') => `PROJ-1    ${status.padEnd(14)} ${extra} | wt dirty:0 unpushed:0 | sess:"x" working | ${title}\n`
+  let board = row('-')
+  const ran: unknown[] = []
+  let checked: string[] = []
+  on('process.run', async (_, e) => {
+    const a = e.argv
+    ran.push([a[0] === 'bash' && a[1] !== '-c' ? a.slice(2) : a.slice(0, 3), e.init?.cwd])
+    if (a[1] === '-c') checked = a.slice(4)
+    const r = a[0] === 'git' ? (a[1] === 'status' ? porcelain : ahead)
+      : a[1] === '-c' ? { exitCode: 0, stdout: a.slice(4).filter(p => p.includes('gone')).map(p => `${p}\n`).join('') }
+      : { exitCode: 0, stdout: a.includes('--coordinator') ? 'proj-coordinator\n' : board }
+    return { value: { ...r, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const sent: string[] = []
+  on('session.send', async (_, e) => { sent.push(e.text); return { isDelivered: true } })
+  const reply = (input: Record<string, unknown>) => $.tool.call({ tool: 'mcp__session-orchestration__reply', ...input })
+  expect((await reply({ text: 'PROJ-1 · b · done', done: 'yes' })).deny).toBe('reply: done is pr, pushed, report.')
+  expect((await reply({ text: 'PROJ-1 · b · done', done: 'pr' })).deny).toBe('reply: not sent, done pr doesn\'t hold yet: 2 uncommitted file(s) in /work/proj/.claude/worktrees/PROJ-1: commit them; done pr needs key: the task key whose PR the board shows. Fix that and reply again (worker.md, Done).')
+  porcelain = { exitCode: 0, stdout: '' }
+  ahead = { exitCode: 0, stdout: '2\n' }
+  expect((await reply({ text: 'PROJ-1 · b · done', done: 'pushed' })).deny).toBe('reply: not sent, done pushed doesn\'t hold yet: 2 commit(s) not pushed: push them. Fix that and reply again (worker.md, Done).')
+  expect(ran).toContainEqual([['git', 'rev-list', '--count'], '/work/proj/.claude/worktrees/PROJ-1']) // on no remote, not @{u}
+  ahead = { exitCode: 0, stdout: '0\n' }
+  expect((await reply({ text: 'PROJ-1 · b · done', done: 'pushed' })).result).toBe('Sent to proj-coordinator.')
+  expect((await reply({ text: 'PROJ-1 · b · done', done: 'pr', key: 'PROJ-1' })).deny).toContain('the board shows no PR for PROJ-1 (session-status PROJ-1)')
+  expect(ran).toContainEqual([['PROJ-1'], '/work/proj']) // the board from the project root
+  // worktree: git runs there, for a session whose cwd isn't the task's worktree
+  ran.length = 0
+  await reply({ text: 'PROJ-1 · b · done', done: 'pushed', worktree: '/work/proj/.worktrees/PROJ-1' })
+  expect(ran[0]).toEqual([['git', 'status', '--porcelain'], '/work/proj/.worktrees/PROJ-1'])
+  board = row('app#3 OPEN CI-FAILED CONFLICT')
+  expect((await reply({ text: 'PROJ-1 · b · done', done: 'pr', key: 'PROJ-1' })).deny).toBe('reply: not sent, done pr doesn\'t hold yet: its PR\'s checks are failing: fix them and push; its PR has a merge conflict: rebase and push. Fix that and reply again (worker.md, Done).')
+  board = row('app#3 OPEN CI-FAILED (PRs as of 10:15)')
+  expect((await reply({ text: 'PROJ-1 · b · done', done: 'pr', key: 'PROJ-1' })).deny).toContain('fix them and push (the board\'s PR words are from 10:15: if fixed since, say so and reply without done)')
+  // The words count only in EXTRA (not the title), a merged PR's are past, and a board without an adapter shows no PR.
+  for (const b of [row('app#3 OPEN no-human-approval', 'Fix CONFLICT and CI-FAILED words'), row('app#3 MERGED CI-FAILED'), row('', 'Fix', '-')]) {
+    board = b
+    expect((await reply({ text: 'PROJ-1 · b · PR #3 open', done: 'pr', key: 'PROJ-1' })).result).toBe('Sent to proj-coordinator.')
+  }
+  // A report: no git, only the files it names (with an extension; a :LINE dropped), checked from the project root.
+  porcelain = { exitCode: 128, stdout: '' }
+  expect((await reply({ text: 'spike · - · idle\nDone: /home/u/replies/spike.md:12 and /home/u/replies/gone.md.', done: 'report' })).deny).toBe('reply: not sent, done report doesn\'t hold yet: /home/u/replies/gone.md doesn\'t exist. Fix that and reply again (worker.md, Done).')
+  expect(ran.at(-1)).toEqual([['bash', '-c', 'for p; do [ -e "${p/#\\~/$HOME}" ] || echo "$p"; done'], '/work/proj'])
+  expect(checked).toEqual(['/home/u/replies/spike.md', '/home/u/replies/gone.md'])
+  expect((await reply({ text: 'spike · - · idle\nDone: run /reload-plugins, GET /api/v1/users, see https://x.io/a.md and ~/r/spike.md, and/or ask.', done: 'report' })).result).toBe('Sent to proj-coordinator.')
+  expect(checked).toEqual(['~/r/spike.md'])
+  expect((await reply({ text: 'PROJ-1 · b · done', done: 'pushed' })).deny).toContain('isn\'t a git worktree: pass worktree')
+  expect(sent.length).toBe(6)
+})

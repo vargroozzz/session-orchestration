@@ -803,13 +803,54 @@ const NAME_SCHEMA = {
   properties: { name: { type: 'string', pattern: SESSION_NAME, maxLength: 64, description: 'The new name: <KEY>-<short-desc>, e.g. PROJ-1234-fix-settler' } },
   required: ['name'],
 }
+const DONE_KINDS = ['pr', 'pushed', 'report']
 const REPLY_SCHEMA = {
   type: 'object',
   properties: {
     text: { type: 'string', minLength: 1, description: 'The message: your report, answer or question' },
     to: { type: 'string', description: 'A received message\'s `from`, or a session name. Left out: this project\'s coordinator' },
+    done: { type: 'string', enum: DONE_KINDS, description: 'Only on the report that says the task is done; the reply is sent once what this kind needs holds, else it comes back with what is missing. pr: the worktree is clean, its commits are on the remote, the board shows a PR for key with no failing checks or conflict. pushed: clean and pushed, no PR (a branch someone else releases). report: no code; every file path the text names exists' },
+    key: { type: 'string', description: 'With done pr: the task key whose PR the board shows' },
+    worktree: { type: 'string', description: 'With done pr or pushed: the task\'s worktree (absolute path), when it isn\'t this session\'s cwd' },
   },
   required: ['text'],
+}
+
+// The done gate (worker.md, Done): what contradicts a `done` reply of this kind, one line each. git runs in the
+// task's worktree, the board (session-status KEY) in the project root. What it can't see (no adapter, a failed
+// lookup) it doesn't hold against the reply.
+async function doneGaps($: EngineInterface, done: string, key: unknown, text: string, wt: string, root: string) {
+  const run = (argv: string[], cwd = wt) => $.process.run(argv, { cwd, timeoutMs: 30_000 }).catch(() => undefined)
+  if (done === 'report') {
+    // A file: an absolute or ~/ path with an extension, a `:LINE` after it dropped (a slash command or route has none).
+    const paths = [...new Set([...text.matchAll(/(?<![\w.~/:-])(~?\/[\w.~/-]*\.\w+)(?::\d+)*/g)].map(m => m[1] ?? ''))]
+    if (!paths.length) return []
+    const r = await run(['bash', '-c', 'for p; do [ -e "${p/#\\~/$HOME}" ] || echo "$p"; done', '_', ...paths], root)
+    if (r?.exitCode !== 0) return [`the named files couldn't be checked (${r ? `exit ${r.exitCode}` : 'no run'})`]
+    return r.stdout.split('\n').filter(Boolean).map(p => `${p} doesn't exist`)
+  }
+  const gaps: string[] = []
+  const st = await run(['git', 'status', '--porcelain'])
+  if (st?.exitCode !== 0) return [`${wt} isn't a git worktree: pass worktree, the task's worktree`]
+  const dirty = st.stdout.split('\n').filter(Boolean).length
+  if (dirty) gaps.push(`${dirty} uncommitted file(s) in ${wt}: commit them`)
+  // On no remote branch at all: an upstream can be origin/main, which counts every commit of the branch.
+  const ahead = (await run(['git', 'rev-list', '--count', 'HEAD', '--not', '--remotes']))?.stdout.trim()
+  if (Number(ahead) > 0) gaps.push(`${ahead} commit(s) not pushed: push them`)
+  if (done !== 'pr') return gaps
+  const k = typeof key === 'string' ? key.trim() : ''
+  if (!k) return [...gaps, 'done pr needs key: the task key whose PR the board shows']
+  const t = parseStatus(await runStatus($, [k], { cwd: root })).tasks.find(x => x.key === k)
+  if (!t?.status) return gaps // no adapter (status '-'), a failed lookup or no row: the board can't show a PR
+  const prs = prsOf(t)
+  if (!prs.length) return [...gaps, `the board shows no PR for ${k} (session-status ${k}): open one, or a task without one replies done pushed`]
+  if (!prs.some(p => p.state === 'OPEN')) return gaps // merged: its checks and conflicts are past
+  const stale = /PRs as of (\S+)\)/.exec(t.extra)
+  const asOf = stale ? ` (the board's PR words are from ${stale[1]}: if fixed since, say so and reply without done)` : ''
+  const fixes = facts(t).map(f => f.fix)
+  if (fixes.includes('ci')) gaps.push(`its PR's checks are failing: fix them and push${asOf}`)
+  if (fixes.includes('conflict')) gaps.push(`its PR has a merge conflict: rebase and push${asOf}`)
+  return gaps
 }
 
 async function runStatus($: EngineInterface, args: string[], init: { cwd?: string, env?: Record<string, string> } = {}) {
@@ -1275,9 +1316,16 @@ export const register: Register = on => {
   // coordinators (session-status --coordinator, newest first) until one takes it. That runs from the project root, as
   // the Bash tool's run did: from a worktree under it, session-status could take the worktree for the project.
   on('tool.call', { tool: 'mcp__session-orchestration__reply' }, async ($, e) => {
-    const { text, to } = e
+    const { text, to, done, key, worktree } = e
     if (typeof text !== 'string' || !text.trim()) return { deny: 'reply needs text.' }
-    const cwd = (await $.session.cwd()).replace(/\/\.claude\/worktrees\/.*$/, '')
+    const here = await $.session.cwd()
+    const cwd = here.replace(/\/\.(claude\/)?worktrees\/.*$/, '')
+    if (done !== undefined) {
+      if (typeof done !== 'string' || !DONE_KINDS.includes(done)) return { deny: `reply: done is ${DONE_KINDS.join(', ')}.` }
+      const wt = typeof worktree === 'string' && worktree.startsWith('/') ? worktree : here
+      const gaps = await doneGaps($, done, key, text, wt, cwd)
+      if (gaps.length) return { deny: `reply: not sent, done ${done} doesn't hold yet: ${gaps.join('; ')}. Fix that and reply again (worker.md, Done).` }
+    }
     const names = typeof to === 'string' && to.trim() ? [to.trim()]
       : (await runStatus($, ['--coordinator'], { cwd, env: { CLAUDE_CODE_SESSION_ID: await $.session.id() } }))
         .split('\n').filter(n => n && !n.startsWith('failed: '))

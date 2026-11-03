@@ -36,6 +36,18 @@ Next: <next step, one line>
 `coding`, `PR #N open`, `in review`, `ready to merge`, `merged, deploying`, `blocked`, `idle`. A status report is
 about this session's own work: name another session only as a blocker or source.
 
+**Done.** The report that says the task is finished passes `done` to `reply`, and the tool sends it only once
+what that kind needs holds; otherwise it comes back unsent with what's missing. Fix that and reply again, the
+same way a hook's exit 2 sends you back. The kinds:
+- `pr` (with `key`): the task's worktree has no uncommitted files, every commit of its branch is on the remote,
+  and the board (`session-status KEY`) shows a PR for the key; an open one without `CI-FAILED` or a conflict.
+- `pushed`: clean and pushed, no PR (a branch someone else lands, e.g. by a release command you hand over).
+- `report`: research or a report, no code: every file path the text names (`/…` or `~/…` with an extension) exists.
+
+git runs in the session's cwd; pass `worktree` (absolute) when the task's worktree is elsewhere. What the board can't
+show (no adapter, a failed lookup) isn't held against you. If a check is still wrong (the board's PR words are
+stale), say so in the report and send it without `done`.
+
 Always write every status report to `<TASK>.md` (overwrite it) in the project's replies folder, if its `CLAUDE.md`
 names one: a new coordinator reads it there. Anything else you write to that file (a `## Handoff`, a round of
 questions, a log entry) updates the status report at its top in the same write: a reader takes the top as the state. A report you send unasked: `reply` without `to`. It sends to this
