@@ -1,6 +1,6 @@
 ---
 name: setting-up-coordination
-description: Sets a project folder up for coordinated Claude Code sessions (one coordinator, task sessions in parallel) — detects the tracker, code host and task keys, asks the few questions it can't detect, and writes the adapter, the CLAUDE.md section and the config. Use when asked to "coordinate this project", set up or check coordination, when open_pane says the folder isn't set up, or to change a coordination config value (tracker, host, key_pattern, approvals.delegate, terminal, features.accounts, features.review_inbox).
+description: Sets a project folder up for coordinated Claude Code sessions (one coordinator, task sessions in parallel) — detects the tracker, code host and task keys, asks the few questions it can't detect, and writes the adapter, the CLAUDE.md section and the config. Use when asked to "coordinate this project", set up or check coordination, when open_pane says the folder isn't set up, or to change a coordination config value (tracker, host, key_pattern, approvals.delegate, terminal, features.accounts, features.review_inbox, features.notify).
 ---
 
 # Setting up coordination
@@ -83,8 +83,9 @@ walk, so a subproject never reads its parent's), merged key by key (the person's
 below reads the project's:
 - `.claude/coordination/coordination.json`, the repo's: `tracker`, `host`, `key_pattern`, `features.review_inbox`;
 - `.claude/coordination.local.json`, the person's: `approvals.delegate`, `terminal`, `messages` and its module's block
-  (e.g. `msgraph`), `features.accounts`, `trusted`, `team`, `feedback` (ignored in the repo file: a committed file never
-  delegates or trusts for anyone, and the terminal, messages, accounts and feedback are the person's own);
+  (e.g. `msgraph`), `features.accounts`, `features.notify`, `trusted`, `team`, `feedback` (ignored in the repo file: a
+  committed file never delegates or trusts for anyone, and the terminal, messages, accounts, notifications and feedback
+  are the person's own);
 - below both, `${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json`, the person's for every project:
   any key but `team` (the project's file only), meant for the person-wide ones (`feedback`, `telemetry`). Setup
   doesn't write it.
@@ -106,6 +107,7 @@ Both are excluded from git, the repo file until shared mode commits it. `session
 | `messages` | `none`, `msgraph` (Teams and Outlook; its config block and routing in `messages/msgraph.md`) or your own messages module (status-reference.md, Modules) | `none`; setup doesn't write it: set it by hand per the module's doc |
 | `features.accounts` | `true` \| `false`: ask every Claude account sharing this one's transcripts (`features/accounts.md`) | `false`; setup writes `true` when it finds a second account |
 | `features.review_inbox` | `true` \| `false`: PR findings go to the review inbox page (`features/review-inbox.md`); Bitbucket or Forgejo, GitHub is a TODO | `false`; setup writes `true` when the project's docs name an inbox URL and the host is Bitbucket or Forgejo |
+| `features.notify` | integer minutes, `0` = off: an ask left unseen on the pane that long shows one local macOS notification with a count only (`features/notify.md`) | `0`; person-only; setup doesn't write it |
 | `feedback.mode` | `auto` \| `pr` \| `fork-pr` \| `issue` \| `local`: how plugin feedback cases are sent (`../orchestrating-sessions/feedback.md`) | `auto`: `pr` with `feedback.repo_dir` set, else `fork-pr` when `gh` is signed in, else `issue`; setup doesn't write it |
 | `feedback.repo_dir` | a clone of the plugin repo you can push to (`~` expanded) | unset; setup doesn't write it |
 | `feedback.project_dir` | where this project's own feedback cases go (`feedback add --project`; `~` expanded, relative to the root; keep it out of git). A project key: never in the person-wide config.json | unset: `${XDG_STATE_HOME:-~/.local/state}/session-orchestration/feedback-projects/<root, encoded>`; setup doesn't write it |

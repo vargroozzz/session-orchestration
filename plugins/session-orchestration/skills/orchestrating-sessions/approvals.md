@@ -59,6 +59,8 @@ gave you in one of the ways below, naming the task key or answering your last me
     check the action still applies (the PR or ticket may have moved). When the decision no longer applies (a PR
     merged first, the task closed), cancel it, and for a review finding note `Dropped` in the review's file header
     and tell the reviewer session.
+  - `features.notify` (`../../features/notify.md`) may show a local "N decisions waiting" notification for asks left
+    unseen; the answer is still the pane click. Ask the same way either way.
   - Plain text only when the pane isn't on screen (the tool says so: a narrow terminal, the agent view, a background
     session). Then each decision is still its own message, recommended answer first.
 - **Resuming after a restart is one ask for the whole list**, not one per session: when `--start` lists sessions

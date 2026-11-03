@@ -7,7 +7,7 @@
 #   .claude/coordination/coordination.json   repo keys: tracker, host, key_pattern, features.review_inbox
 #                                            (excluded from git until shared mode commits it; read from the team
 #                                            repo's when the person file names one, see shared_dir)
-#   .claude/coordination.local.json          person keys: approvals.delegate, features.accounts, terminal, messages
+#   .claude/coordination.local.json          person keys: approvals.delegate, features.accounts, features.notify, terminal, messages
 #                                            (and its module's block, e.g. msgraph), trusted, team, feedback.mode,
 #                                            feedback.repo_dir, feedback.project_dir, telemetry, handoff.*, compact.window (always excluded;
 #                                            the repo file can't set them)
@@ -52,7 +52,7 @@ coord_json() {
   for f in "$(user_config)" "${p:-}"; do
     [ -n "$f" ] && [ -f "$f" ] && j=$(jq -r '.messages // empty | strings' "$f" 2>/dev/null) && [ -n "$j" ] && m=$j
   done
-  drop="del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact$( [[ ${m:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$m\"]")) | if .features | type == \"object\" then del(.features.accounts) else . end"
+  drop="del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact$( [[ ${m:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$m\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.notify) else . end"
   s=$(shared_dir 2>/dev/null) && s=$s/coordination.json
   # Lowest first: the person's file for every project (person-wide keys such as feedback.*), the repo file, the
   # project's person file.
@@ -135,6 +135,8 @@ detect_host() {
 #                                                                       default false
 #   features.review_inbox  true | false: PR findings go to the review inbox page (features/review-inbox.md);
 #                       Bitbucket or Forgejo (TODO: GitHub support)     default false
+#   features.notify     integer minutes, 0 = off: one local macOS notification when an ask has waited unseen this
+#                       long (features/notify.md; person only)          default 0
 #   terminal            plain | ghostty | your own module's name (find_module terminals NAME): where the pane's
 #                       Attach in tab and Logs in split open             default plain
 #   messages            none | msgraph | your own module's name (find_module messages NAME): the chat and mail
@@ -164,10 +166,10 @@ model_ok() { [[ $1 =~ ^[a-z][a-z0-9.-]*$ && $1 != *fable* ]] && { [ $# = 1 ] || 
 config() {
   local key=${1:-} v ok=
   case $key in
-    tracker|host|key_pattern|approvals.delegate|features.accounts|features.review_inbox|terminal|messages|feedback.mode|feedback.repo_dir|feedback.project_dir|telemetry|pending.file) ;;
+    tracker|host|key_pattern|approvals.delegate|features.accounts|features.review_inbox|features.notify|terminal|messages|feedback.mode|feedback.repo_dir|feedback.project_dir|telemetry|pending.file) ;;
     plan.enabled|plan.max_parallel|plan.models.design|plan.models.build|plan.models.mechanical|plan.models.review|plan.models.release|plan.models.scan) ;;
     handoff.at.chunk|handoff.at.task|handoff.at.coordinator|handoff.hard_after|handoff.stop_room|compact.window) ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate features.accounts features.review_inbox terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window)" >&2; return 2 ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate features.accounts features.review_inbox features.notify terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
@@ -187,6 +189,7 @@ config() {
     plan.max_parallel) [[ $v =~ ^[1-9][0-9]{0,2}$ ]] && ok=1 ;;
     plan.models.*) [[ $v == */* ]] && model_ok "${v%%/*}" "${v#*/}" && ok=1 ;;
     handoff.*|compact.window) [[ $v =~ ^(0|[1-9][0-9]{0,6})$ ]] && ok=1 ;;
+    features.notify) [[ $v =~ ^(0|[1-9][0-9]{0,2})$ ]] && ok=1 ;;
     feedback.repo_dir) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [ -d "$v" ] && ok=1 ;;
     feedback.project_dir) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [[ $v != *$'\n'* ]] && ok=1 ;;
   esac
@@ -194,7 +197,7 @@ config() {
   local kind=; [ "$key" = terminal ] && kind=terminals; [ "$key" = messages ] && kind=messages
   [ -z "$v" ] || echo "warning: config $key=$v is not valid${kind:+ (no $kind/$v.sh found)}: using the default" >&2
   case $key in
-    tracker) echo none ;; host) detect_host ;; key_pattern) ;; approvals.delegate|features.*) echo false ;; terminal) echo plain ;; messages) echo none ;;
+    tracker) echo none ;; host) detect_host ;; key_pattern) ;; features.notify) echo 0 ;; approvals.delegate|features.*) echo false ;; terminal) echo plain ;; messages) echo none ;;
     feedback.mode) echo auto ;; feedback.repo_dir|feedback.project_dir|pending.file) ;; telemetry) echo off ;;
     plan.enabled) echo true ;; plan.max_parallel) echo 3 ;;
     plan.models.design|plan.models.review) echo opus/xhigh ;; plan.models.build) echo opus/medium ;;

@@ -5,8 +5,8 @@
 #                                   configured adds the active line (`active: tracker=… host=… delegate=…
 #                                   terminal=… messages=… features=…`), under it one indented line per doc of the
 #                                   terminal, the messages module and each enabled feature (its start step and when to
-#                                   read it) and
-#                                   a line per warning (a config value not valid, a module that doesn't load whole,
+#                                   read it), the indented value lines open_pane reads (`review_inbox url: URL`,
+#                                   `notify after: N min`), and a line per warning (a config value not valid, a module that doesn't load whole,
 #                                   delegation still in CLAUDE.md, a second account with features.accounts off, a
 #                                   terminal detected but not recorded)
 #   session-status --init           the proposal: what it found and what it would write, numbered for one reply
@@ -154,7 +154,7 @@ if [ "$mode" = check ]; then
                 wf=$(mktemp) || exit 1
                 t=$(config tracker 2>>"$wf") h=$(config host 2>>"$wf") d=$(config approvals.delegate 2>>"$wf")
                 a=$(config features.accounts 2>>"$wf") r=$(config features.review_inbox 2>>"$wf")
-                te=$(config terminal 2>>"$wf") m=$(config messages 2>>"$wf")
+                te=$(config terminal 2>>"$wf") m=$(config messages 2>>"$wf") no=$(config features.notify 2>>"$wf")
                 # The modules in use, loaded as they will be: a syntax error, a missing function or a shadowed
                 # plugin module shows here.
                 [ "$te" = plain ] || ( load_terminal ) 2>>"$wf"
@@ -169,6 +169,7 @@ if [ "$mode" = check ]; then
                 [ "$m" = none ] || { md=$(find_module messages "$m") && md=${md%.sh}.md && [ -f "$md" ] && docs+=("messages $m" "$md"); }
                 [ "$a" != true ] || { md=$(find_module features accounts) && md=${md%.sh}.md && [ -f "$md" ] && docs+=(accounts "$md"); f=accounts; }
                 [ "$r" != true ] || { f=${f:+$f,}review_inbox; docs+=(review_inbox "$LIB_DIR/features/review-inbox.md"); }
+                [ "$no" = 0 ] || { f=${f:+$f,}notify; docs+=(notify "$LIB_DIR/features/notify.md"); }
                 echo "active: tracker=$t host=$h delegate=$d terminal=$te messages=$m features=${f:-none}"
                 for ((i = 0; i < ${#docs[@]}; i += 2)); do doc_line "${docs[i]}" "${docs[i+1]}"; done
                 if [ "$a" = true ]; then   # each account's weekly use (features/accounts.md, Weekly limits)
@@ -179,6 +180,7 @@ if [ "$mode" = check ]; then
                   echo "  accounts weekly use: $u"; w=$(weekly_warn "$wu"); [ -z "$w" ] || echo "  accounts weekly limit: $w"
                 fi
                 [ "$r" != true ] || { u=$(inbox_url); [ -z "$u" ] || echo "  review_inbox url: $u"; }   # open_pane watches it
+                [ "$no" = 0 ] || echo "  notify after: $no min"   # the pane's ask check reads it
                 [ -n "$term_set" ] || [ "$term_found" = plain ] || echo "detected $term_found: run setup to record it (session-status --init --write adds terminal=$term_found)"
                 [ "$a" = true ] || [ "$accounts_n" -lt 2 ] || echo "second account found, accounts off: set features.accounts to true in .claude/coordination.local.json (session-status --init --write adds it when unset)"
                 dh=$(detect_host . 2>/dev/null); [ "$dh" = none ] || [ "$dh" = "$h" ] ||

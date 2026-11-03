@@ -757,6 +757,26 @@ export const queuedText = (as: Ask[], now: number) => as.length
   ? ` Queued in the pane (${as.length}): ${as.map(a => `${a.key} (id ${a.id}${isOld(a, now) ? `, queued ${ago(now - a.at)}` : ''}) ${shortShas(oneLine(a.question))}`).join('; ')}.`
   : ''
 
+// features.notify (features/notify.md): minutes an ask waits unseen before one local macOS notification, 0 = off;
+// initCheck reads it. The text is a count only: nothing about the ask, and nothing leaves the machine.
+let notifyMin = 0
+// The asks notified, as id@at (another coordinator may reuse an id once the store empties), live ones only.
+// shortcut: in memory, so a reload or a second coordinator can notify an ask once more; store it on the ask if that annoys.
+const notified = new Set<string>()
+export const overdueAsks = (as: Ask[], now: number, min: number) => (min > 0 ? as.filter(a => !a.seen && now - a.at >= min * 60_000) : [])
+async function notifyWaiting($: EngineInterface) {
+  if (!notifyMin) return
+  const live = await liveAsks($)
+  const tag = (a: Ask) => `${a.id}@${a.at}`
+  const tags = new Set(live.map(tag))
+  for (const t of notified) if (!tags.has(t)) notified.delete(t)
+  const due = overdueAsks(live, await $.clock.now(), notifyMin)
+  if (!due.some(a => !notified.has(tag(a)))) return
+  for (const a of due) notified.add(tag(a))
+  const text = `${due.length} decision${due.length === 1 ? '' : 's'} waiting`
+  await $.process.run(['osascript', '-e', `display notification "${text}" with title "Coordinator"`], { timeoutMs: 10_000 }).catch(() => undefined)
+}
+
 const ASK_SCHEMA = {
   type: 'object',
   properties: {
@@ -1087,6 +1107,7 @@ async function nameCoordinator($: EngineInterface) {
 // result, so the coordinator proposes the setup without having to remember to check. Set up, it gives the config in
 // effect and its warnings instead.
 async function initCheck($: EngineInterface): Promise<{ setUp: boolean, text: string, inbox?: string }> {
+  notifyMin = 0 // on only while this folder's config says so
   try {
     const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--init', '--check'], { timeoutMs: 30_000 })
     const line = oneLine(r.stdout)
@@ -1096,6 +1117,7 @@ async function initCheck($: EngineInterface): Promise<{ setUp: boolean, text: st
     // feature's start step) are session-status --start's to show
     const rest = r.stdout.split('\n').slice(1).filter(l => !l.startsWith('  ')).map(l => l.trim()).filter(Boolean).join('; ')
     const inbox = /^ {2}review_inbox url: (https:\/\/claude\.ai\/\S+)$/m.exec(r.stdout)?.[1]
+    notifyMin = Number(/^ {2}notify after: (\d{1,3}) min$/m.exec(r.stdout)?.[1] ?? 0)
     return { setUp: true, text: rest && ` Coordination config: ${rest}.`, inbox }
   } catch {
     return { setUp: true, text: '' }
@@ -1220,7 +1242,7 @@ async function open($: EngineInterface) {
     timer = $.clock.every(600_000, () => void refresh($))
     $.clock.every(60_000, () => void refreshActivity($))
     // Another coordinator's asks and answers (a handover's overlap) reach this pane within a minute.
-    $.clock.every(60_000, () => void loadAsks($).catch(() => undefined))
+    $.clock.every(60_000, () => void loadAsks($).then(() => notifyWaiting($)).catch(() => undefined))
     void loadAsks($).catch(() => undefined)
     void refresh($)
   }

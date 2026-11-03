@@ -922,6 +922,17 @@ grep -F 'host=bitbucket, but the origin remote is on forgejo (moved?)' <<<"$(ini
 git -C "$b" remote set-url origin ssh://git@bitbucket.example.com/x/y.git
 echo '{"tracker":"jira","features":true}' > "$b/.claude/coordination/coordination.json"
 [ "$(cfg "$b" tracker 2>/dev/null)" = jira ] || { echo "config: non-object features dropped the repo file"; exit 1; }
+# notify: minutes from the person's file, with its doc line and the minutes open_pane reads; off by default, a bad
+# value warns and is off, and the repo file can't turn it on.
+[ "$(cfg "$a" features.notify)" = 0 ] && ! grep -qE 'features=.*notify|^  notify' <<<"$(init "$a" --check)" || { echo "notify default: $(init "$a" --check)"; exit 1; }
+echo '{"features":{"accounts":true,"notify":10}}' > "$a/.claude/coordination.local.json"
+c=$(init "$a" --check); grep -x 'active: .* features=accounts,notify' <<<"$c" >/dev/null &&
+  grep -x "  notify: nothing to do: the pane notifies by itself\. Read $(cd "$here/../.." && pwd)/features/notify.md when .*" <<<"$c" >/dev/null &&
+  grep -x '  notify after: 10 min' <<<"$c" >/dev/null || { echo "check notify on: $c"; exit 1; }
+echo '{"features":{"notify":"soon"}}' > "$a/.claude/coordination.local.json"
+[ "$(cfg "$a" features.notify 2>&1)" = "$(printf 'warning: config features.notify=soon is not valid: using the default\n0')" ] || { echo "notify bad value: $(cfg "$a" features.notify 2>&1)"; exit 1; }
+echo '{"features":{"notify":5}}' > "$b/.claude/coordination/coordination.json"
+[ "$(cfg "$b" features.notify)" = 0 ] || { echo "config: the repo file set features.notify"; exit 1; }
 # terminal: Ghostty found by TERM_PROGRAM is proposed, named by --check until recorded, then active with its doc; tmux
 # is noted and plain.
 echo '{"features":{"accounts":true}}' > "$a/.claude/coordination.local.json"

@@ -1,7 +1,7 @@
 import type { On, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HIDDEN_BY_MARKDOWN, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, usageName } from './register'
+import { HIDDEN_BY_MARKDOWN, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, usageName } from './register'
 
 test('status rows parse whatever the columns hold', async () => {
   const pad = (k: string, st: string) => `${k.padEnd(9)} ${st.padEnd(14)} `
@@ -649,6 +649,57 @@ test('cancel_approval removes asks by key, by id or by question, and a stale cli
   expect(await ui.find({ type: 'Button', key: 'ask-8-0' })).toBeDefined()
   expect(submitted).toEqual([])
   await ui.unmount()
+})
+
+test('features.notify: an ask waiting unseen N minutes shows one local notification, a count only', async ($, on) => {
+  const t0 = 100 * 3600_000
+  const clock = mock.clock(on, { now: t0 })
+  mock.env(on, { HOME: '/h' })
+  let store: string | undefined
+  on('fs.read', async () => {
+    if (store === undefined) throw new Error('ENOENT')
+    return { value: store }
+  })
+  on('fs.write', async (_, e) => {
+    store = e.text
+    return { value: undefined }
+  })
+  const shown: string[][] = []
+  let check = 'configured: /work (work-coordinator)\nactive: tracker=none host=github delegate=off features=notify\n  notify: nothing to do.\n  notify after: 5 min\n'
+  on('process.run', async (_, e) => {
+    if (e.argv[0] === 'osascript') shown.push(e.argv)
+    const stdout = e.argv.includes('--check') ? check : e.argv.includes('--root') ? '/work' : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  const ask = (key: string, question: string) => $.tool.call({
+    tool: 'mcp__session-orchestration__ask_approval', key, question, options: [`Yes, ${question}`, `No, ${key}`],
+  })
+  const note = (n: string) => ['osascript', '-e', `display notification "${n}" with title "Coordinator"`]
+  await ask('PROJ-1', 'merge PROJ-1 app#1')
+  await clock.advance(4 * 60_000)
+  expect(shown).toEqual([])
+  await clock.advance(60_000)
+  expect(shown).toEqual([note('1 decision waiting')])
+  // Once per ask; a newer overdue one counts every unseen ask still waiting.
+  await clock.advance(3 * 60_000)
+  await ask('PROJ-2', 'merge PROJ-2 app#2')
+  await clock.advance(4 * 60_000)
+  expect(shown).toHaveLength(1)
+  await clock.advance(60_000)
+  expect(shown).toEqual([note('1 decision waiting'), note('2 decisions waiting')])
+  expect(shown.flat().join(' ')).not.toMatch(/PROJ|app#/)
+  // A seen ask, or the feature off, notifies nothing.
+  const a = { id: '1', key: 'PROJ-1', question: 'q', options: ['Yes', 'No'], at: t0 }
+  expect(overdueAsks([a, { ...a, id: '2', seen: true }], t0 + 5 * 60_000, 5).map(x => x.id)).toEqual(['1'])
+  expect(overdueAsks([a], t0 + 99 * 60_000, 0)).toEqual([])
+  // Off (no notify line on reopen): a new ask never notifies.
+  check = 'configured: /work (work-coordinator)\nactive: tracker=none host=github delegate=off\n'
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  await ask('PROJ-3', 'merge PROJ-3 app#3')
+  await clock.advance(30 * 60_000)
+  expect(shown).toHaveLength(2)
 })
 
 test('queued asks live in a store per project root: a new coordinator finds them, a re-queue replaces, an old ask is drawn as old and still answers', async ($, on) => {
