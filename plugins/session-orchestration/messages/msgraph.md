@@ -19,6 +19,11 @@ mail      <sender>: <subject>                    unread inbox mail from the last
 tasks the whole message refers to (keys, and PR links mapped to their tasks), and in ` — <why>`: the triage's
 reason.
 
+A mail line stays while Outlook has it unread (Graph's `isRead`), for its whole week: one read only in Jira or
+another client that doesn't sync the flag keeps coming back. When the user says it's handled, hide it for every
+session with `session-status --dismiss "LINE"` (the pane's Dismiss does it too) rather than passing it on again: its
+message gets an action:false verdict in `dismissed/` (30 days), which beats the triage's; a new message with the same words still shows.
+
 ## The config
 
 The person's file only (the repo file can't set `messages` or `msgraph`):
@@ -71,7 +76,7 @@ has answered in the chat is dropped. A failed call keeps the lines (rule C: only
 you; mail: only from a person) and asks again next run.
 
 Cache, per project, in `~/.cache/session-status/<project>.messages/`: `notices.jsonl` (below), `people.json` (who's
-who, a day), `bodies/` and `triage/` (a week), `prs.tsv` (a PR's tasks, decided once), `dropped.jsonl` (what the
+who, a day), `bodies/` and `triage/` (a week), `dismissed/` (30 days), `prs.tsv` (a PR's tasks, decided once), `dropped.jsonl` (what the
 triage dropped, with why), `ooo-accepted.log`, `mine`.
 
 ## Routing a line to a task session

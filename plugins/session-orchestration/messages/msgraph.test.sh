@@ -78,6 +78,13 @@ grep -q '"line":"teams ?   Team · Tim: deploy done' "$tmp/cache/dropped.jsonl" 
 # A half-written verdict file beside them is skipped, not the ones read after it.
 printf %s '{"action":tr' > "$tmp/cache/triage/0-half"
 [ "$(run)" = "$want" ] && [ "$(grep -c . "$F/calls")" = 1 ] || { echo "second run differs or called the triage"; exit 1; }
+# A dismissed line (the mail still unread in Outlook) stays out of later runs; its message id, not its text, is kept.
+dismiss() { NOTICE_DIR=$tmp/cache messages_dismiss "$1"; }
+# Matched with whitespace runs collapsed; it beats a verdict written after it (a sweep judging meanwhile).
+dismiss 'mail Acc: Invoice ' && ! dismiss 'mail      Nobody: x' && [ "$(run)" = "$(grep -v 'Acc: Invoice' <<<"$want")" ] &&
+  dismiss 'mail      Lee: Question on PROJ-7 [PROJ-7] — asks about PROJ-7' && touch "$tmp/cache/triage/mail-a4" &&
+  [ "$(run)" = "$(grep -v 'Acc: Invoice\|Lee: Question' <<<"$want")" ] && [ -f "$tmp/cache/dismissed/mail-a2" ] ||
+  { echo "dismiss failed: $(run)"; exit 1; }
 # A failed Graph call: exit 1 and one reason line.
 rm "$tmp/cache/people.json"; printf '#!/bin/sh\necho %s >&2; exit 1\n' "'{\"error\":{\"type\":\"auth_error\"}}'" > "$tmp/bin/graph"
 out=$(run) && { echo "a failure exited 0"; exit 1; }

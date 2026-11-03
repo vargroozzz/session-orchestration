@@ -188,7 +188,7 @@ function sweep(on: On, status = STATUS) {
   on('process.run', async (_, e) => {
     runs.push(e.argv.slice(2))
     const arg = e.argv[2]
-    const stdout = arg === '--pending' ? PENDING : arg === '--urls' ? URLS : arg === '--agents' ? AGENTS : arg === 'PROJ-4679' ? ROW_4679 : status
+    const stdout = arg === '--dismiss' ? '' : arg === '--pending' ? PENDING : arg === '--urls' ? URLS : arg === '--agents' ? AGENTS : arg === 'PROJ-4679' ? ROW_4679 : status
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('ui.open', async () => ({ value: { isPlaced: true } }))
@@ -263,17 +263,24 @@ test('a selected task shows its details and actions: attach, links, refresh, ask
 
 test('a notice can be dismissed; a leftover\'s command copied', async ($, on) => {
   mock.clock(on)
-  sweep(on, `${STATUS}${LEFTOVER}`)
+  const runs = sweep(on, `${STATUS}${LEFTOVER}`)
   const copied: string[] = []
   on('ui.copy', async (_, e) => {
     copied.push(e.text)
     return { value: { isCopied: true } }
+  })
+  const toasts: string[] = []
+  on('ui.toast', async (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
   })
   await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
   await ui.press({ key: 'refresh' })
   await ui.press({ key: 'Notices-mail      Accountant: pay the levy' })
   await ui.press({ key: 'act-x' })
+  expect(runs).toContainEqual(['--dismiss', 'mail      Accountant: pay the levy']) // kept on disk, for every session
+  expect(toasts).toEqual([]) // silent when it's kept
   expect(await ui.find({ type: 'Text', text: /pay the levy/ })).toBeUndefined()
   expect(await ui.find({ type: 'Button', key: 'sec-Notices' })).toBeUndefined()
   await ui.press({ key: 'Leftovers (task finished)-PROJ-4177 Done — session "old": claude stop 18a61163' })

@@ -1365,6 +1365,11 @@ export const register: Register = on => {
     const dismiss = (text: string) => async () => {
       await update($, dismissed, l => [...l, text])
       await update($, selected, () => null)
+      // A message line (the messages module's): on disk, so later sweeps and other sessions hide it too. Silent on
+      // success. ponytail: an adapter's or a failure line stays hidden in this pane only.
+      if (!Object.values(SOURCE).includes(notice(text).label)) return
+      const r = await runStatus($, ['--dismiss', text])
+      if (r) $.ui.toast(`Hidden in this pane only: ${oneLine(r)}`)
     }
     const refreshRow = (key: string) => async () => {
       let taken = false // checked and marked in one write: a second press before the redraw finds it busy

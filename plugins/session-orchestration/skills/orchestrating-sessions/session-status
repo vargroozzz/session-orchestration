@@ -458,6 +458,20 @@ PENDING=$(config pending.file 2>/dev/null)
 [ "${1:-}" = --urls ] && { adapter urls 2>/dev/null; exit; }
 [ "${1:-}" = --agents ] && { cat ~/.cache/session-status/"$ENC".agents 2>/dev/null; exit; }
 [ "${1:-}" = --messages-file ] && { echo ~/.cache/session-status/"$ENC".messages/notices.jsonl; exit; }
+# --dismiss LINE: the messages module's messages_dismiss hides the message behind that Notices line (a leading "* "
+# dropped) from every later sweep, any session's: a dismissal held only in one pane came back in the next coordinator.
+# It leaves the last good lines too, shown when a run fails. Exit 1 = no current message line is LINE.
+if [ "${1:-}" = --dismiss ]; then
+  [ -n "${2:-}" ] || { echo "usage: session-status --dismiss 'NOTICE LINE'"; exit 2; }
+  l=${2#"${2%%[! ]*}"}; l=${l#\* }; MSG=$(config messages 2>/dev/null)
+  load_module messages "${MSG:-none}" messages_dismiss 2>/dev/null || { echo "dismiss: the messages module (${MSG:-none}) can't dismiss"; exit 2; }
+  NOTICE_DIR=~/.cache/session-status/$ENC.messages messages_dismiss "$l" || { echo "dismiss: no current message notice is that line"; exit 1; }
+  good=~/.cache/session-status/$ENC.notices.messages
+  # ENVIRON, not -v: -v would turn a backslash in the line into an escape
+  [ ! -f "$good" ] || { L=$l awk 'function t(s) { gsub(/[ \t]+/, " ", s); gsub(/^ | $/, "", s); return s }
+    t($0) != t(ENVIRON["L"])' "$good" > "$good.$$" && mv "$good.$$" "$good"; }
+  exit 0
+fi
 # killtree PID: PID and everything below it (a notices source's CLI or triage two levels down), leaves first. One ps
 # snapshot and no bash subshell: once a reader closed stdout (`| head`), bash 3.2's $(…) hands back the unsent output,
 # which a $(pgrep -P) recursion took for pids, forever.

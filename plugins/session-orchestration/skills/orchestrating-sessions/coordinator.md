@@ -98,7 +98,8 @@ rest asking nothing shows idle), **Stale prompts** (prompts unanswered 6h+, with
 answer or stop), **Leftovers** (sessions and
 worktrees of finished tasks, with the stop/remove command; one idle a week whose removal loses
 nothing moves to **Resolved**), **Notices** (from the messages module, then the adapter; act on a message line
-per the module's doc, which the check's `active:` line names) and **Other sessions** (live sessions
+per the module's doc, which the check's `active:` line names; a message line the user calls handled: `session-status
+--dismiss "LINE"`, for every session, not passed on again) and **Other sessions** (live sessions
 that own no task, e.g. a reviewer: `· reviews KEY`), and last, at most once a day, `plugin feedback: N open (M seen
 ≥2×) — apply?`: pass it to the user, and on a yes start an apply session ([feedback.md](feedback.md)). It asks `claude agents --json` of your account (with
 `features.accounts`, every account sharing your transcripts: `features/accounts.md`). The footers' exact rules, every option in full, the adapter interface

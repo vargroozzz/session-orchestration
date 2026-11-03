@@ -81,6 +81,18 @@ echo "chat: ping" > "$tmp/msg"; echo 0 > "$tmp/msgrc"; echo "DM from Ann: hi" > 
   [ "$(run | sed -n '/^Notices:/,$p')" = "$(printf 'Notices:\n  * chat: ping\n  * (failed) graph down\n  * DM from Ann: hi')" ] &&
   [ "$(cat "$tmp/mine.seen")" = ABC-12 ] && [ "$(run --messages-file)" = "$tmp/.cache/session-status/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root").messages/notices.jsonl" ] ||
   { echo "messages module failed: $(run | sed -n '/^Notices:/,$p')"; exit 1; }
+# --dismiss hands the line (the footer's "* " dropped) to the module's messages_dismiss, for every later sweep, and
+# takes it out of the last good lines, which a failed run shows. A module without it, or no such line: refused.
+[ "$(run --dismiss 'chat: ping')" = "dismiss: the messages module (fake) can't dismiss" ] || { echo "--dismiss without the module's: $(run --dismiss x)"; exit 1; }
+cat >> "$root/.claude/coordination.local/messages/fake.sh" <<EOF
+messages_dismiss() { [ "\$1" != 'DM from Ann: hi' ] && printf '%s\n' "\$1" > $tmp/dismissed; }
+EOF
+sed -i.bak 's/^chat: ping$/chat: ping \\t/' "$tmp/.cache/session-status/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root").notices.messages"
+run --dismiss '  * chat:  ping \t' && [ "$(cat "$tmp/dismissed")" = 'chat:  ping \t' ] &&
+  [ "$(run | sed -n '/^Notices:/,$p')" = "$(printf 'Notices:\n  * (failed) graph down\n  * DM from Ann: hi')" ] &&
+  [ "$(run --dismiss 'DM from Ann: hi')" = "dismiss: no current message notice is that line" ] &&
+  [ "$(run --dismiss)" = "usage: session-status --dismiss 'NOTICE LINE'" ] ||
+  { echo "--dismiss failed: $(run | sed -n '/^Notices:/,$p')"; exit 1; }
 rm -r "$root/.claude/coordination.local.json" "$root/.claude/coordination.local"; : > "$tmp/notices"
 
 # A `fix:` line from tasks follows the rows, not parsed as one; --root names the project root.

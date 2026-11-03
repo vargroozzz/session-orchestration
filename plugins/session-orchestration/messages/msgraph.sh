@@ -10,6 +10,21 @@
 # NOTICE_DIR/notices.jsonl gets one object per line printed: line, chat, chatId, id, from, time, text, mine (the
 # line's tags that are in NOTICE_MINE), why (the triage's reason).
 
+# messages_dismiss LINE (session-status --dismiss): the messages behind that line in notices.jsonl get an action:false
+# verdict in dismissed/, read after triage/ so it wins over a verdict a running sweep writes later, and kept 30 days
+# (a DM stays unread past the mail's week). By id, not text: a new message with the same words still shows. The line
+# is matched with its whitespace runs collapsed. Exit 1 = no current line is LINE.
+messages_dismiss() {
+  local D=$NOTICE_DIR id n=0
+  mkdir -p "$D/dismissed"
+  for id in $(jq -r --arg l "$1" 'def t: gsub("\\s+"; " ") | gsub("^ | $"; ""); select(.line | t == ($l | t)) | .id' "$D/notices.jsonl" 2>/dev/null); do
+    # written whole (mv), from outside the folder a sweep reads, under a name of its own: another dismiss may be writing
+    echo '{"action":false,"to":"other","ticket":null,"why":"dismissed by the user"}' > "$D/.dismiss.$$" &&
+      mv "$D/.dismiss.$$" "$D/dismissed/$id" && n=$((n + 1))
+  done
+  [ "$n" -gt 0 ]
+}
+
 # msgraph_conf JQ: the person file's msgraph block (read once per run into $T/conf) through JQ (raw output).
 msgraph_conf() { jq -r "$1" "$T/conf"; }
 
@@ -248,12 +263,13 @@ JQ
   # with why; the rest go to dropped.jsonl. Verdicts are kept a week by message id. A failed or slow call passes
   # the lines as they are (fail open) and they're judged again next run.
   local tri=$D/triage v end me who
-  mkdir -p "$tri"; find "$tri" -type f -mtime +7 -delete 2>/dev/null
+  mkdir -p "$tri" "$D/dismissed"; find "$tri" -type f -mtime +7 -delete 2>/dev/null; find "$D/dismissed" -type f -mtime +30 -delete 2>/dev/null
   # The verdicts in, by id, into $T/verdicts: one awk and one jq for all of them, not a fork per item. A file per
   # line, read on its own (awk, not one jq stream), so a bad or half-written one is skipped, not the rest with it.
   # The files are read with getline, not as awk's input: BSD awk stops at a file it can't open (one mv'd away
   # meanwhile), dropping the rest; getline just returns -1.
-  verdicts() { find "$tri" -type f -size +0 -exec awk 'BEGIN { for (a = 1; a < ARGC; a++) { f = ARGV[a]; n = f; sub(/.*\//, "", n)
+  # dismissed/ (messages_dismiss) after triage/: `add` keeps the last, so a dismissal beats Haiku's verdict.
+  verdicts() { find "$tri" "$D/dismissed" -type f -size +0 -exec awk 'BEGIN { for (a = 1; a < ARGC; a++) { f = ARGV[a]; n = f; sub(/.*\//, "", n)
       while ((getline l < f) > 0) print n "\t" l; close(f) } }' {} + |
     jq -Rn '[inputs | index("\t") as $i | (try (.[$i + 1:] | fromjson) catch null) as $v
       | select($v | type == "object") | {(.[:$i]): $v}] | add // {}' > "$T/verdicts"; }
