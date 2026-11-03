@@ -14,7 +14,7 @@
 // for what was worked on since the last working day (session-status --yesterday), for the daily standup, written as
 // a few spoken sentences by a small model (standup-summary), the raw list one key away.
 import { atom, read, update } from 'claude-code'
-import type { Color, EngineInterface, Register, RenderElement, RenderNode, ToolCallResult, UiPressArgument } from 'claude-code'
+import type { Color, EngineInterface, Register, RenderElement, RenderNode, SessionRateLimit, ToolCallResult, UiPressArgument } from 'claude-code'
 
 import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek } from '../types'
 
@@ -911,6 +911,13 @@ const handedDir = ($: EngineInterface) => homePath($, HANDED_DIR)
 // context-watch.sh's stamps, ${XDG_CACHE_HOME:-$HOME/.cache}/session-status: an empty XDG_CACHE_HOME is unset there (||).
 const stampDir = async ($: EngineInterface) => `${(await $.env.get('XDG_CACHE_HOME').catch(() => undefined)) ||
   `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/.cache`}/session-status`
+let lastWeekly: string | undefined // the line this session last wrote
+// The usage file's line, "PERCENT<TAB>RESETS" (epoch s), from the seven_day window; undefined without one that resets.
+export function weeklyLine(limits: SessionRateLimit[]): string | undefined {
+  const w = limits.find(l => l.kind === 'seven_day')
+  const resets = Date.parse(w?.resetsAt ?? '')
+  return w && Number.isFinite(resets) ? `${w.percentUsed}\t${Math.floor(resets / 1000)}\n` : undefined
+}
 // What's wrong with a hand_command call, or undefined. One line, no control or bidi character: the pane shows it
 // whole and Run runs exactly what it shows.
 export function handedProblem(key: unknown, command: unknown, what: unknown): string | undefined {
@@ -1305,6 +1312,19 @@ export const register: Register = on => {
     }
     await $.fs.write(`${await handedDir($)}/${h.id}.json`, JSON.stringify(h))
     return { result: `Handed to the user in the coordinator pane under ${h.key} (id ${h.id}). Also give them \`! ${h.command}\` in your report. Don't wait on it or run it yourself.` }
+  })
+
+  // Each account's 7-day reading, for session-status's weekly use and warning (lib.sh weekly_use): any session on
+  // the account keeps it current. A failed write only leaves the last reading.
+  on('session.measure', async ($, e, next) => {
+    const done = await next(e)
+    const line = e.changed.includes('rateLimits') ? weeklyLine(e.rateLimits) : undefined
+    if (line && line !== lastWeekly) { // a five_hour move alone rewrites nothing
+      const dir = (await accountOf($)) || `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/.claude`
+      // shortcut: keyed by the config dir's name (list_accounts finds only ~/.claude and ~/.claude-*); a full-path key if that changes.
+      await $.fs.write(`${await stampDir($)}/usage/${dir.replace(/\/+$/, '').split('/').at(-1)}`, line).then(() => { lastWeekly = line }, () => undefined)
+    }
+    return done
   })
 
   // The commands a tool call queued for the turn's end: /rename (open_pane, name_session), then /reload-plugins (reload_plugins).

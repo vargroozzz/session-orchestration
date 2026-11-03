@@ -337,6 +337,32 @@ list_sessions() {
   done < <(list_accounts) | awk -F'\t' '!s[$1]++'
 }
 
+# weekly_use: "CONFIG_DIR<TAB>PERCENT<TAB>RESETS" (whole percent, epoch s) per account list_accounts names, the current
+# one first, from the last 7-day reading any of its sessions took (register.tsx's session.measure hook writes
+# usage/<config dir's name> under the stamp folder). PERCENT and RESETS are empty with no reading, or once it reset.
+weekly_use() {
+  local d p r now; now=$(date +%s)
+  while IFS=$'\t' read -r d _; do
+    p= r=; IFS=$'\t' read -r p r 2>/dev/null < "${XDG_CACHE_HOME:-$HOME/.cache}/session-status/usage/${d##*/}"
+    [[ $p =~ ^[0-9]+(\.[0-9]+)?$ && $r =~ ^[0-9]+$ ]] && [ "$r" -gt "$now" ] || p= r=
+    printf '%s\t%s\t%s\n' "$d" "${p%.*}" "$r"
+  done < <(list_accounts)
+}
+# weekly_warn [WEEKLY_USE]: one line when this account is past 90% of its weekly limit and another is under it (the
+# first listed, not the least used: that one would flip between polls), naming both; nothing otherwise. Stable while
+# it holds, so --changes reports it once.
+weekly_warn() {
+  local d p r cur= cp= cr= best=
+  while IFS=$'\t' read -r d p r; do
+    if [ -z "$cur" ]; then cur=$d cp=$p cr=$r
+    elif [ -z "$best" ] && [ -n "$p" ] && [ "$p" -lt 90 ]; then best=$d
+    fi
+  done <<<"${1-$(weekly_use)}"
+  [ -n "$cp" ] && [ "$cp" -ge 90 ] && [ -n "$best" ] || return 0
+  printf '%s is past 90%% of its weekly limit (resets %s), %s is under it: hand over to a coordinator under %s (features/accounts.md, Weekly limits)\n' \
+    "${cur/#$HOME/~}" "$(epochfmt "$cr" '%m-%d %H:%M')" "${best/#$HOME/~}" "${best/#$HOME/~}"
+}
+
 # activity_of TRANSCRIPT: session-activity.jq's line (doing, since, last text line, …); last_text: its last text line.
 activity_of() { tail -n 2000 "$1" | jq -rRn -f "$LIB_DIR/skills/orchestrating-sessions/session-activity.jq" 2>/dev/null; }
 last_text() { activity_of "$1" | cut -f3; }

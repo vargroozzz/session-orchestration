@@ -4,8 +4,8 @@
 > `CLAUDE_CONFIG_DIR`); keep them there unless the user names another: you can't message a session under another
 > account. Before resuming a closed session, ask the user to confirm it isn't running under another account.
 > **Read when**: a session under another account needs a message, resume, wake, stop or follow-up; a `Reports:` line
-> shows; a command was handed over under another account; `claude --bg` says "Workspace not trusted"; or the review
-> inbox's watch says "no live-channel credential".
+> shows; a `Weekly limit:` line or "past 90% of its weekly limit" shows; a command was handed over under another
+> account; `claude --bg` says "Workspace not trusted"; or the review inbox's watch says "no live-channel credential".
 
 On when `features.accounts` is `true` in `.claude/coordination.local.json` (a person key: the repo file can't set
 it). Setup turns it on when it finds a second Claude account sharing this one's transcripts, and `session-status
@@ -52,6 +52,25 @@ session under another account.
   section below it disagree, the later of the two is the state.
 - **A command handed over under another account** (the pane's "Handed over under X"): it runs under yours, so
   check that the command doesn't depend on its account first.
+
+## Weekly limits
+
+An account at its weekly limit freezes every session on it until the window resets, days later. Each session records
+its account's 7-day use as it goes (the plugin's `session.measure` hook, into `usage/` in the stamp folder), and
+`session-status --init --check` (so `--start`) prints `accounts weekly use:` per account. When yours is past 90% and
+another is under it, it adds `accounts weekly limit:` "`<yours>` is past 90% of its weekly limit (resets …), `<other>`
+is under it: hand over to a coordinator under `<other>`", and `--watch` wakes you with it under `Weekly limit:`, once.
+Then:
+- Start no new task session: it would run under your account.
+- Write your handover (the coordinator skill's Handing over), saying the move is why, and ask the user to start the
+  next coordinator under that account (their usual command with its `CLAUDE_CONFIG_DIR`; plain `claude` with it unset
+  for `~/.claude`), then stop this one.
+- The next coordinator moves the workers it still needs to its account (`--send-when-idle --here`, above); one left
+  where it is freezes at the limit. A `--handover` successor starts under the caller's account, unless that one is
+  past 90% and the old session's is under it.
+
+No reading for an account (none of its sessions has measured since its window reset) says `no reading` and never counts
+as headroom: a session started there takes one on its first turn.
 
 ## Review inbox, one per account
 

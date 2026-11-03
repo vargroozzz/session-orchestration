@@ -2,7 +2,7 @@
 # Self-check for session-status without an adapter: a throwaway repo with one worktree, a worker and a coordinator
 # transcript, and a stubbed `claude agents`. Also --coordinator, --watch, an adapter's notices in --changes, and
 # --changes skipping a session that only started working. Run: bash session-status.test.sh  (prints "ok" or the diff).
-set -euo pipefail; unset XDG_CONFIG_HOME   # the person-wide config.json: never the real one
+set -euo pipefail; unset XDG_CONFIG_HOME XDG_CACHE_HOME   # the person-wide config.json and stamps: never the real ones
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT; trap 'echo "failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 root=$(mkdir -p "$tmp/proj" && cd "$tmp/proj" && pwd -P)
@@ -448,6 +448,19 @@ echo brief > "$root/replies/ABC-41-c1.md"; [ "$(run --changes)" = "no changes" ]
 echo report > "$root/replies/ABC-41.md"; out=$(run --changes)
 rm "$root/replies/ABC-41.md" "$root/replies/ABC-41-c1.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
 grep -q '^now:   \* report written: ABC-41.md (' <<<"$out" || { echo "a report didn't wake --changes: $out"; exit 1; }
+# Weekly limit (accounts on): this account past 90% while the other is under it wakes --changes once, and goes
+# quietly; --init --check (so --start) names each account's use. A reading whose window has reset is none.
+echo '{"features":{"accounts":true}}' > "$root/.claude/coordination.local.json"; run --changes >/dev/null
+u=$tmp/.cache/session-status/usage; mkdir -p "$u"; later=$(( $(date +%s) + 86400 ))
+printf '92.5\t%s\n' "$later" > "$u/cfg"; printf '40\t%s\n' "$later" > "$u/.claude-work"
+out=$(run --changes); c=$(run --init --check)
+grep -q '^now:   \* ~/cfg is past 90% of its weekly limit (resets [0-9-]* [0-9:]*), ~/.claude-work is under it: hand over to a coordinator under ~/.claude-work ' <<<"$out" &&
+  [ "$(run --changes)" = "no changes" ] && grep -q '^  accounts weekly use: ~/cfg 92% (resets [0-9-]* [0-9:]*), ~/.claude-work 40% (resets ' <<<"$c" &&
+  grep -q '^  accounts weekly limit: ~/cfg is past 90%' <<<"$c" || { echo "weekly limit: $out / $c"; exit 1; }
+printf '40\t1\n' > "$u/.claude-work"; c=$(run --init --check)
+[ "$(run --changes)" = "no changes" ] && grep -q ', ~/.claude-work no reading$' <<<"$c" && ! grep -q 'accounts weekly limit' <<<"$c" ||
+  { echo "weekly limit, a reset reading: $c"; exit 1; }
+rm -r "$u" "$root/.claude/coordination.local.json"; run --changes >/dev/null
 # --start: the status, the handoff file, the last handover note, the replies written since it with their first
 # lines, and the config, under ## headers; the status's exit code, args passed on (the adapter here lists only the
 # keys given). An old handover still marks what the last coordinator saw; with none, the last day's replies.
@@ -478,6 +491,23 @@ setacct cfg "$(sess "$hid" "fix it" idle 1)"
 [ "$(run --handover "${hid:0:8}" -- 'Do X.')" = 'handed ABC-40 over: "fix it" (88888888) stopped, superseded by "ABC-40-fix-it" (abcdef12)' ] &&
   [ "$(calls | grep -v ' agents ')" = "$(printf 'cfg stop 88888888\ncfg --bg -n ABC-40-fix-it Work on ABC-40: continue from replies/ABC-40.md. Do X. Supersedes: %s (transcript %s; read only the parts you need, never whole).' "$hid" "$proj/$hid.jsonl")" ] ||
   { echo "handover failed"; calls; exit 1; }
+# One under the other account is stopped there, and its successor starts under this one (that one may be at its
+# weekly limit, and only this account's sessions can message the coordinator).
+oid=bbbbbbbb-2222-3333-4444-555555555555
+echo '{"type":"user","message":{"content":"Work on ABC-43"}}' > "$proj/$oid.jsonl"; echo report > "$root/replies/ABC-43.md"
+echo '{"features":{"accounts":true}}' > "$root/.claude/coordination.local.json"
+setacct cfg ""; setacct .claude-work "$(sess "$oid" "ABC-43-x" idle 1)"; calls >/dev/null
+out=$(run --handover "$oid" -- 'Do Y.') && [ "$(calls | grep -v ' agents ' | cut -d' ' -f1-4)" = "$(printf '.claude-work stop bbbbbbbb\ncfg --bg -n ABC-43-x')" ] ||
+  { echo "handover from the other account: $out"; calls; exit 1; }
+# Unless this account is past 90% of its weekly limit and the old one's is under it: the successor stays there.
+oid2=cccccccc-2222-3333-4444-555555555555; u=$tmp/.cache/session-status/usage; mkdir -p "$u"; later=$(( $(date +%s) + 86400 ))
+printf '95\t%s\n' "$later" > "$u/cfg"; printf '40\t%s\n' "$later" > "$u/.claude-work"
+echo '{"type":"user","message":{"content":"Work on ABC-44"}}' > "$proj/$oid2.jsonl"; echo report > "$root/replies/ABC-44.md"
+setacct .claude-work "$(sess "$oid2" "ABC-44-x" idle 1)"; calls >/dev/null
+out=$(run --handover "$oid2" -- 'Do Z.') && [ "$(calls | grep -v ' agents ' | cut -d' ' -f1-4)" = "$(printf '.claude-work stop cccccccc\n.claude-work --bg -n ABC-44-x')" ] ||
+  { echo "handover, this account full: $out"; calls; exit 1; }
+rm -r "$u" "$proj/$oid2.jsonl" "$root/replies/ABC-44.md"
+setacct .claude-work ""; rm "$proj/$oid.jsonl" "$root/replies/ABC-43.md" "$root/.claude/coordination.local.json"
 # The new session owns ABC-40, even after the old one is resumed (its transcript newest); the old one shows under
 # Other sessions as superseded, not as a leftover or an owner.
 echo '{"type":"user","message":{"content":"Work on ABC-40: continue from replies/ABC-40.md. Do X. Supersedes: '"$hid"' (transcript x)"}}' > "$proj/$nid.jsonl"
@@ -807,7 +837,7 @@ b=$(mkdir -p "$tmp/init/bb" && cd "$tmp/init/bb" && pwd -P); git -C "$b" init -q
 echo 'Review inbox: https://claude.ai/artifact/abc' > "$b/CLAUDE.md"
 init "$b" --write >/dev/null && [ "$(jq -c .features "$b/.claude/coordination/coordination.json"):$(jq -c .features "$b/.claude/coordination.local.json")" = '{"review_inbox":true}:{"accounts":true}' ] &&
   c=$(init "$b" --check) && grep -x 'active: .* features=accounts,review_inbox' <<<"$c" >/dev/null &&
-  [ "$(grep '^  ' <<<"$c" | cut -d: -f1)" = "$(printf '  accounts\n  review_inbox\n  review_inbox url')" ] &&
+  [ "$(grep '^  ' <<<"$c" | cut -d: -f1)" = "$(printf '  accounts\n  review_inbox\n  accounts weekly use\n  review_inbox url')" ] &&
   grep -x '  review_inbox: .* Read .*/features/review-inbox.md when .*' <<<"$c" >/dev/null &&
   grep -x '  review_inbox url: https://claude.ai/artifact/abc' <<<"$c" >/dev/null ||
   { echo "init features: $(init "$b" --check)"; exit 1; }
@@ -846,7 +876,7 @@ T_PROG=ghostty init "$a" | grep -F 'terminal=ghostty' >/dev/null &&
   ! init "$a" --check | grep -q 'detected' || { echo "init terminal detected: $(T_PROG=ghostty init "$a" --check)"; exit 1; }
 T_PROG=ghostty init "$a" --write >/dev/null && [ "$(jq -r .terminal "$a/.claude/coordination.local.json")" = ghostty ] &&
   c=$(T_PROG=ghostty init "$a" --check) && grep -x 'active: .* terminal=ghostty messages=none features=accounts' <<<"$c" >/dev/null &&
-  [ "$(grep '^  ' <<<"$c" | cut -d: -f1)" = "$(printf '  terminal ghostty\n  accounts')" ] &&
+  [ "$(grep '^  ' <<<"$c" | cut -d: -f1)" = "$(printf '  terminal ghostty\n  accounts\n  accounts weekly use')" ] &&
   grep -x "  terminal ghostty: nothing to do\. Read $(cd "$here/../.." && pwd)/terminals/ghostty.md when .*" <<<"$c" >/dev/null &&
   ! T_PROG=ghostty init "$a" --check | grep -q detected || { echo "init terminal recorded: $(T_PROG=ghostty init "$a" --check)"; exit 1; }
 else ! T_PROG=ghostty init "$a" --check | grep ghostty >/dev/null || { echo "init ghostty proposed off macOS"; exit 1; }; fi

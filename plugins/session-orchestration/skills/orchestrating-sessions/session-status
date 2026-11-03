@@ -165,10 +165,14 @@ fi
 # chunk line; it prints the line or why nothing was logged.
 # bg_cmd PREFIX: `PREFIX --bg`, plus ` --permission-mode default` when that account's settings default to plan mode
 # (--handover and --plan --next start sessions with it).
-bg_cmd() {
+# pre_dir PREFIX: the config dir a command prefix runs under, no trailing slash.
+pre_dir() {
   local cfg
   case $1 in claude) cfg=${CLAUDE_CONFIG_DIR:-$HOME/.claude} ;; 'env -u CLAUDE_CONFIG_DIR claude') cfg=$HOME/.claude ;; *) cfg=${1#CLAUDE_CONFIG_DIR=}; cfg=${cfg% claude}; cfg=${cfg/#\~/$HOME} ;; esac
-  printf '%s --bg' "$1"; [ "$(jq -r '.permissions.defaultMode // empty' "${cfg%/}/settings.json" 2>/dev/null)" != plan ] || printf ' --permission-mode default'
+  printf '%s' "${cfg%/}"
+}
+bg_cmd() {
+  printf '%s --bg' "$1"; [ "$(jq -r '.permissions.defaultMode // empty' "$(pre_dir "$1")/settings.json" 2>/dev/null)" != plan ] || printf ' --permission-mode default'
 }
 if [ "${1:-}" = --plan ]; then
   models=; for k in design build mechanical review release scan; do models+="$k=$(config "plan.models.$k") "; done
@@ -445,6 +449,8 @@ if [ "${1:-}" = --changes ]; then
     done < <(find "$rd" -maxdepth 1 -type f -name '*.md' -mtime -1 -print0 2>/dev/null)
     [ ${#r[@]} = 0 ] || new+=$'\nReports:'$(mtime_named "${r[@]}" | sort -rn |
       while read -r m f; do printf '\n  * report written: %s (%s)' "${f##*/}" "$(epochfmt "$m" '%m-%d %H:%M:%S')"; done)
+    # This account past 90% of its weekly limit while another has headroom: wake the coordinator once to move.
+    w=$(weekly_warn); [ -z "$w" ] || new+=$'\nWeekly limit:\n  * '"$w"
   fi
   if [ -f "$last" ]; then
     # A notice going away (read, answered) isn't news: removed notice lines don't count. Nor does a session
@@ -478,7 +484,7 @@ if [ "${1:-}" = --changes ]; then
         /^was:   ".*" \(.*attach [0-9a-f]+\)( — blocked: .*)?$/ { match($0, /attach [0-9a-f]+\)/); id = substr($0, RSTART + 7, RLENGTH - 8)
           if (id in live && live[id] != "done") drop[NR] }
         END {
-          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Reports:)?$/ || line[i] == "was: Leftovers (task finished):") drop[i]
+          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Reports:|Weekly limit:)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
           for (i = 1; i <= NR; i++) if (!(i in drop)) print line[i] }' | grep . || echo "no changes"
   else
     echo "$new"
@@ -895,7 +901,7 @@ fi
 # has none; a task with no key at all uses its session name as KEY when NAME.md is there), its state is in the replies folder (the project CLAUDE.md's "Replies folder … `PATH`") as KEY.md.
 # Refused while it is mid-turn or waits on a prompt (a stop would drop that turn), with no KEY.md, or when it is
 # superseded already (a retry would start a second successor). Then: stopped (checked), and `claude --bg -n NAME`
-# in the project root, same account (plus --permission-mode default where that account defaults to plan), with a
+# in the project root, under the caller's account (plus --permission-mode default where it defaults to plan), with a
 # brief naming KEY.md, WHAT NEXT and a `Supersedes: ID` line (the owner mapping reads it). NAME: the old name if
 # it starts with KEY (any case), else KEY-<old name>; the old one is stopped, so the names don't clash live.
 # --model M / --effort E go onto the `claude --bg` line (none: the daemon's defaults). A chunk session (a `Chunk:
@@ -981,7 +987,13 @@ if [ -n "$HANDOVER" ]; then
     hist=; [ -z "$PENDING" ] || hist=$(bash "$(dirname "$SELF")/pending" history --find "$key" 2>/dev/null)
     text="Work on $key: continue from $rdir/$key.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole).${hist:+ The history of its handoff entry, if you need it: $hist (on demand, not up front).}"
   fi
-  out=$(bash -c "$(bg_cmd "$pre")$pm -n \"\$0\" \"\$1\"" "$new" "$text" 2>&1)
+  # The caller's account, not the old one's: that one may be at its weekly limit, and only the caller's sessions can
+  # message the coordinator (features/accounts.md). Unless the caller's is past 90% and the old one's is under it.
+  acct=claude wu=$(weekly_use); cp=$(head -1 <<<"$wu" | cut -f2)
+  if [ -n "$cp" ] && [ "$cp" -ge 90 ]; then
+    op=$(awk -F'\t' -v d="$(pre_dir "$pre")" '$1 == d { print $2 }' <<<"$wu"); [ -z "$op" ] || [ "$op" -ge 90 ] || acct=$pre
+  fi
+  out=$(bash -c "$(bg_cmd "$acct")$pm -n \"\$0\" \"\$1\"" "$new" "$text" 2>&1)
   nid=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1); nid=${nid##* }
   [ -n "$nid" ] || { echo "${pid:+stopped \"$name\" (${id:0:8}), but }the new session didn't start: $(tail -1 <<<"$out")"; exit 1; }
   [ -z "$self" ] || { echo "handed over; rename yourself (call name_session with \"$(prev_name "$name")\"), then end your turn now (\"$new\" ($nid) supersedes this session)"; exit 0; }

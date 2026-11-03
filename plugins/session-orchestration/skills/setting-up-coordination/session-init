@@ -171,6 +171,13 @@ if [ "$mode" = check ]; then
                 [ "$r" != true ] || { f=${f:+$f,}review_inbox; docs+=(review_inbox "$LIB_DIR/features/review-inbox.md"); }
                 echo "active: tracker=$t host=$h delegate=$d terminal=$te messages=$m features=${f:-none}"
                 for ((i = 0; i < ${#docs[@]}; i += 2)); do doc_line "${docs[i]}" "${docs[i+1]}"; done
+                if [ "$a" = true ]; then   # each account's weekly use (features/accounts.md, Weekly limits)
+                  wu=$(weekly_use) u=
+                  while IFS=$'\t' read -r wd wp wr; do
+                    u+="${u:+, }${wd/#$HOME/~} "; [ -n "$wp" ] && u+="$wp% (resets $(epochfmt "$wr" '%m-%d %H:%M'))" || u+="no reading"
+                  done <<<"$wu"
+                  echo "  accounts weekly use: $u"; w=$(weekly_warn "$wu"); [ -z "$w" ] || echo "  accounts weekly limit: $w"
+                fi
                 [ "$r" != true ] || { u=$(inbox_url); [ -z "$u" ] || echo "  review_inbox url: $u"; }   # open_pane watches it
                 [ -n "$term_set" ] || [ "$term_found" = plain ] || echo "detected $term_found: run setup to record it (session-status --init --write adds terminal=$term_found)"
                 [ "$a" = true ] || [ "$accounts_n" -lt 2 ] || echo "second account found, accounts off: set features.accounts to true in .claude/coordination.local.json (session-status --init --write adds it when unset)"
