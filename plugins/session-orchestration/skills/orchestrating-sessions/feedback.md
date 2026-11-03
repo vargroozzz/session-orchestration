@@ -64,7 +64,7 @@ takes them.
   once a day, then `· project feedback: K open …, for the next R&D run` when the project has some. Pass it on to the
   user with the other footer items; on a yes to the apply, start an apply session (below).
 - **The R&D run** ends its report with the open plugin cases, most seen first (`feedback list --plugin`), and offers
-  the apply; the project's cases are proposals in that report ([rnd](../rnd/SKILL.md), step 6).
+  the apply; the project's cases are proposals in that report ([rnd](../rnd/SKILL.md), step 7).
 
 Never apply without the user's yes for that batch.
 

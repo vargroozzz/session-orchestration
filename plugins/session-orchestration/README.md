@@ -11,7 +11,7 @@ What you get:
   their sessions, PRs and pending decisions, and approvals as buttons;
 - hooks that keep background sessions from stalling on a prompt nobody can answer, and that let a PR merge or a
   comment post through only with your approval (`gh`, plus the Jira/Bitbucket Data Center and Forgejo CLIs);
-- optional: a review inbox for proposed PR comments, an `rnd` skill that measures how efficiently the sessions work.
+- optional: a review inbox for proposed PR comments, an `rnd` skill that measures how efficiently the sessions work and scans similar tools for ideas (web searches with no personal details).
 
 ## Requirements
 
