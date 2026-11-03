@@ -2,12 +2,12 @@
 // details: markdown shown when the ask is expanded; target: where the action lands (`app#282 src/a.ts:42`,
 // `general`); body: a comment body file as read when queued (its sha256 and text); seen: expanded once;
 // kind: a PR review finding's kind, optional and only with body (issue: the code is wrong; suggestion: works,
-// could be better; question: scope or intent); sending: a click's answer is being submitted (the pane hides it).
+// could be better; question: scope or intent); sending: when a click's answer began to be submitted (the pane hides it meanwhile).
 export type AskKind = 'issue' | 'suggestion' | 'question'
 export type AskBody = { path: string; sha256: string; text: string; cut: number }
 export type Ask = {
   id: string; key: string; question: string; options: string[]; at: number
-  details?: string; target?: string; body?: AskBody; kind?: AskKind; seen?: true; sending?: true
+  details?: string; target?: string; body?: AskBody; kind?: AskKind; seen?: true; sending?: number
 }
 // The project state the pane shows: the status command's output, the adapter's `pending` and `urls` text, and
 // the sessions the sweep saw (session-status --agents).

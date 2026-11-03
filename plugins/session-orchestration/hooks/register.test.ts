@@ -1,7 +1,7 @@
 import type { On, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HIDDEN_BY_MARKDOWN, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, usageName } from './register'
+import { HIDDEN_BY_MARKDOWN, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, usageName } from './register'
 
 test('status rows parse whatever the columns hold', async () => {
   const pad = (k: string, st: string) => `${k.padEnd(9)} ${st.padEnd(14)} `
@@ -553,8 +553,8 @@ test('a review finding post names its kind; a group lists its other asks, then i
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   on('fs.read', async () => ({ value: { base64: 'IyMgTml0CgpVc2UgYGZvbygpYCBoZXJlLhtbMzFtCg==' } }))
   const sha = 'fb45bdda1ae27282b4844fa4afa557cbcc9621cefc02ce030fa715a27e31006c'
-  const post = (kind?: string) => $.tool.call({
-    tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-1', question: `post${kind === undefined ? '' : ` ${kind}`} comment /tmp/c.md on app#2 (sha256 ${sha})`,
+  const post = (kind?: string, n = '') => $.tool.call({
+    tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-1', question: `post${kind === undefined ? '' : ` ${kind}`} comment${n} /tmp/c.md on app#2 (sha256 ${sha})`,
     options: ['Yes, post it', 'No, PROJ-1'], body_file: '/tmp/c.md', ...(kind === undefined ? {} : { kind }),
   })
   expect((await post()).deny).toBeUndefined() // a post that isn't a review finding: no kind, no badge
@@ -562,7 +562,7 @@ test('a review finding post names its kind; a group lists its other asks, then i
   await post('question')
   await post('issue')
   await post('suggestion')
-  await post('question')
+  await post('question', ' 2')
   const merge = (extra = {}) => $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-1', question: 'merge app#2', options: ['Yes, merge', 'No, PROJ-1'], ...extra })
   expect((await merge({ kind: 'issue' })).deny).toMatch(/goes with body_file/)
   await merge()
@@ -634,7 +634,7 @@ test('cancel_approval removes asks by key, by id or by question, and a stale cli
   expect(await ui.find({ type: 'Button', key: 'ask-6-0' })).toBeDefined()
   await ui.press({ key: 'ask-6-0' })
   expect(cancelled).toBe('Removed 1 ask for PROJ-2: (id 6) merge app#3.')
-  expect(toasts).toEqual(['That ask is gone: withdrawn, answered, or expired after 24h.'])
+  expect(toasts).toEqual(['That ask is gone: withdrawn or answered.'])
   expect(await ui.find({ type: 'Button', key: 'ask-6-0' })).toBeUndefined()
   expect((await cancel('IVAN-1')).result).toBe('Removed 1 ask for IVAN-1: (id 3) create IVAN-1 a+b.')
 
@@ -651,62 +651,87 @@ test('cancel_approval removes asks by key, by id or by question, and a stale cli
   await ui.unmount()
 })
 
-test('a review finding ask unanswered for 24h comes back to the coordinator once, pane closed or not; an expired reminder comes back as dropped; other asks expire silently', async ($, on) => {
-  const clock = mock.clock(on)
+test('queued asks live in a store per project root: a new coordinator finds them, a re-queue replaces, an old ask is drawn as old and still answers', async ($, on) => {
+  const t0 = 100 * 3600_000
+  const clock = mock.clock(on, { now: t0 })
+  mock.env(on, { HOME: '/h' })
   const H = 3600_000
-  let refuse = false
-  let hold: Promise<void> | undefined
-  const tries: string[] = []
+  // What the last coordinator left: an ask queued 30h ago, one whose click never finished sending (11 min ago), and an
+  // entry the store's check drops (a control character).
+  let store: string | undefined = JSON.stringify([
+    { id: '6', key: 'PROJ-5', question: 'merge app#5', options: ['Yes, merge PROJ-5', 'No, PROJ-5'], at: t0 - H, sending: t0 - 11 * 60_000 },
+    { id: '7', key: 'PROJ-1', question: 'merge app#1', options: ['Yes, merge PROJ-1', 'No, PROJ-1'], at: t0 - 30 * H },
+    { id: '8', key: 'PROJ-2', question: 'merge\u001b app#2', options: ['Yes', 'No'], at: t0 },
+  ])
+  const paths = new Set<string>()
+  on('fs.read', async (_, e) => {
+    if (store === undefined) throw new Error('ENOENT')
+    paths.add(e.path)
+    return { value: store }
+  })
+  on('fs.write', async (_, e) => {
+    paths.add(e.path)
+    store = e.text
+    return { value: undefined }
+  })
+  on('process.run', async (_, e) => ({ value: { exitCode: 0, stdout: e.argv.includes('--root') ? '/work' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  const submitted: string[] = []
+  const toasts: string[] = []
+  on('ui.toast', async (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
   on('prompt.submit', async (_, e) => {
-    tries.push(e.text)
-    if (refuse) return { drop: 'refused by a hook' }
-    await hold // a coordinator mid-turn: the submit waits for idle
+    if (e.text.includes('PROJ-5')) return { drop: 'busy' }
+    submitted.push(e.text)
     return { text: e.text }
   })
-  on('process.run', async () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
-  on('ui.panes', async () => ({ value: [] })) // the pane is closed: only session.start's sweep runs
-  on('ui.open', async () => ({ value: { isPlaced: false, reason: 'closed' } }))
-  on('session.start', async (_, e) => ({ cwd: e.cwd }))
-  on('tool.register', async (_, e) => ({ value: { tool: e.name } }))
-  on('command.register', async (_, e) => ({ value: { command: e.name } }))
-  on('fs.read', async () => ({ value: { base64: 'IyMgTml0CgpVc2UgYGZvbygpYCBoZXJlLhtbMzFtCg==' } }))
-  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-  const sha = 'fb45bdda1ae27282b4844fa4afa557cbcc9621cefc02ce030fa715a27e31006c'
-  const post = (key: string, prefix = '') => $.tool.call({
-    tool: 'mcp__session-orchestration__ask_approval', key, question: `${prefix}post issue comment /tmp/c.md on app#2 (sha256 ${sha})`,
-    options: ['Yes, post it', `No, ${key}`], body_file: '/tmp/c.md', kind: 'issue',
+  const ask = (key: string, question: string) => $.tool.call({
+    tool: 'mcp__session-orchestration__ask_approval', key, question, options: [`Yes, ${question}`, `No, ${key}`],
   })
-  const merge = (key: string) => $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key, question: 'merge app#3', options: ['Yes, merge', `No, ${key}`] })
-  await post('PROJ-7')
-  await merge('PROJ-8')
-  await clock.advance(12 * H)
-  await post('PROJ-9', 'Reminder: ')
+  const stored = () => (JSON.parse(store ?? '[]') as { id: string; question: string }[]).map(a => `${a.id} ${a.question}`)
 
-  // 24h on, the hook refuses the prompt: PROJ-7 is put back, and a new ask queued meanwhile doesn't sweep it away.
-  await clock.advance(12 * H - 60_000)
-  expect(tries).toEqual([])
-  refuse = true
-  await clock.advance(60_000)
-  expect(tries).toHaveLength(1)
-  refuse = false
-  await merge('PROJ-10')
-  await clock.advance(60_000)
-  expect(tries).toHaveLength(2)
-  expect(tries[1]).toBe(`Approval pane: review finding asks expired unanswered after 24h (approvals.md). Re-ask each once, the same ask with its question starting "Reminder: ": PROJ-7 (id 1) post issue comment /tmp/c.md on app#2 (sha256 ${sha}).`)
-  await clock.advance(120_000)
-  expect(tries).toHaveLength(2) // announced once
+  // The first ask loads the store and numbers past it.
+  expect((await ask('PROJ-3', 'merge app#3')).result).toMatch(/^Queued PROJ-3 \(id 8\) /)
+  expect([...paths]).toEqual([expect.stringMatching(/^\/h\/\.cache\/session-status\/asks\/[0-9a-f]{16}\.json$/)])
+  // The stuck click is answerable again.
+  expect(stored()).toEqual(['6 merge app#5', '7 merge app#1', '8 merge app#3'])
+  expect(store).not.toContain('sending')
+  // The same question again replaces the waiting one, id and age kept: no duplicate.
+  expect((await ask('PROJ-3', 'merge app#3')).result).toMatch(/^Re-queued PROJ-3 \(id 8\): it replaces/)
+  expect((await ask('PROJ-1', 'merge app#1')).result).toMatch(/^Re-queued PROJ-1 \(id 7\): it replaces/)
+  expect(stored()).toEqual(['6 merge app#5', '7 merge app#1', '8 merge app#3'])
+  expect(queuedText(parseAsks(store ?? '') ?? [], t0)).toBe(' Queued in the pane (3): PROJ-5 (id 6) merge app#5; PROJ-1 (id 7, queued 30h ago) merge app#1; PROJ-3 (id 8) merge app#3.')
 
-  // The reminder expires while the coordinator is mid-turn: one prompt however many minutes pass.
-  let release = () => {}
-  hold = new Promise<void>(r => { release = r })
-  await clock.advance(12 * H)
-  await clock.advance(180_000)
-  expect(tries).toHaveLength(3)
-  expect(tries[2]).toBe(`Approval pane: review finding asks expired unanswered after 24h (approvals.md). These reminders expired too, so they are dropped: record each in its review file's header and tell its reviewer session: PROJ-9 (id 3) Reminder: post issue comment /tmp/c.md on app#2 (sha256 ${sha}).`)
-  release()
-  await clock.advance(120_000)
-  expect(tries).toHaveLength(3)
-  expect(tries.some(t => /PROJ-8|PROJ-10/.test(t))).toBe(false)
+  // Another coordinator queues one meanwhile: this pane has it within a minute.
+  store = JSON.stringify([...JSON.parse(store ?? '[]'), { id: '9', key: 'PROJ-4', question: 'merge app#4', options: ['Yes', 'No'], at: t0 }])
+  await clock.advance(60_000)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  expect((await ui.find({ type: 'Text', text: /APPROVE/ }))?.text).toMatch(/^ ⚑ APPROVE 4 /)
+
+  // An answer the session drops (busy) isn't sent: the ask is back, answerable.
+  await ui.press({ key: 'askgrp-PROJ-5' })
+  await ui.press({ key: 'ask-6-0' })
+  expect(toasts).toEqual(["The answer wasn't sent (busy); the ask is back in the pane."])
+  expect(stored()).toEqual(['6 merge app#5', '7 merge app#1', '8 merge app#3', '9 merge app#4'])
+  expect(await ui.find({ type: 'Button', key: 'ask-6-0' })).toBeDefined()
+  expect((await $.tool.call({ tool: 'mcp__session-orchestration__cancel_approval', key: 'PROJ-5' })).result).toBe('Removed 1 ask for PROJ-5: (id 6) merge app#5.')
+
+  // The 30h-old ask is drawn as old and still answers; the answer clears it from the store.
+  await ui.press({ key: 'askgrp-PROJ-1' })
+  expect((await ui.find({ type: 'Button', key: 'askrow-7' }))?.text).toMatch(/OLD merge app#1 30h ago/)
+  expect(await ui.find({ type: 'Text', text: /^Queued 30h ago: check it still applies/ })).toBeDefined()
+  await ui.press({ key: 'ask-7-0' })
+  expect(submitted).toEqual(['Approval pane answer for PROJ-1: Yes, merge app#1. Asked: merge app#1'])
+  expect(stored()).toEqual(['8 merge app#3', '9 merge app#4'])
+  // A cancel clears it from the store too.
+  expect((await $.tool.call({ tool: 'mcp__session-orchestration__cancel_approval', key: 'PROJ-4' })).result).toBe('Removed 1 ask for PROJ-4: (id 9) merge app#4.')
+  expect(stored()).toEqual(['8 merge app#3'])
+  // A store that isn't a list leaves the pane as it is.
+  expect(parseAsks('{}')).toBeUndefined()
+  expect(parseAsks('not json')).toBeUndefined()
+  await ui.unmount()
 })
 
 test('reload_plugins runs /reload-plugins once, when the turn ends', async ($, on) => {

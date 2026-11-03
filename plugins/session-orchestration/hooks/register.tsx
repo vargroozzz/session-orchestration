@@ -19,7 +19,9 @@ import type { Color, EngineInterface, Register, RenderElement, RenderNode, ToolC
 import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek } from '../types'
 
 const PANE = 'coordinator'
-const TTL_MS = 24 * 3600_000 // as long as verify-approval.sh accepts the answer
+// An ask stays until answered or cancelled; past OLD_MS it is drawn as old (check it still applies). Its answer
+// verifies anyway: verify-approval.sh ages the Quote from the click's prompt, not from the queueing.
+export const OLD_MS = 24 * 3600_000
 const asks = atom({ plugin: 'session-orchestration', key: 'asks' } as const, [])
 const board = atom({ plugin: 'session-orchestration', key: 'board' } as const, null)
 const seq = atom({ plugin: 'session-orchestration', key: 'seq' } as const, 0)
@@ -88,14 +90,14 @@ const asksLayout = (list: Ask[], opens: string[]) => {
 }
 // After a press, an ask drawn open is seen and stays seen once closed. Drawing is pure, so one only opened by
 // default (alone) is not marked: NEW again if a newcomer closes it unpressed.
-const markSeen = async ($: EngineInterface, now: number) => {
-  const { drawnOpen } = asksLayout(await liveAsks($, now), await read($, asksOpen))
-  await update($, asks, l => (l.some(a => !a.seen && drawnOpen.has(a.id)) ? l.map((a): Ask => (drawnOpen.has(a.id) ? { ...a, seen: true } : a)) : l))
+const markSeen = async ($: EngineInterface) => {
+  const { drawnOpen } = asksLayout(await liveAsks($), await read($, asksOpen))
+  await setAsks($, l => (l.some(a => !a.seen && drawnOpen.has(a.id)) ? l.map((a): Ask => (drawnOpen.has(a.id) ? { ...a, seen: true } : a)) : l))
 }
 // Open/closed choices (`ask-ID=1`, `group-KEY=0`) for asks and keys still queued: a key whose asks are all gone
 // starts over at its default when it's asked again. One being sent keeps its choices: a failed submit restores it.
-const pruneOpen = async ($: EngineInterface, now: number) => {
-  const kept = (await read($, asks)).filter(a => now - a.at < TTL_MS)
+const pruneOpen = async ($: EngineInterface) => {
+  const kept = await read($, asks)
   await update($, asksOpen, l => l.filter(x => kept.some(a => x.startsWith(`ask-${a.id}=`) || x.startsWith(`group-${a.key}=`))))
 }
 // A comment body file as it is now: its sha256 (of the bytes, as `shasum -a 256` prints it) and its text.
@@ -611,7 +613,7 @@ export function onYouOf(list: Ask[], st: Status | undefined, pend: ReturnType<ty
 async function syncStatus($: EngineInterface) {
   if (!timer) return
   const b = await read($, board)
-  const list = await liveAsks($, await $.clock.now())
+  const list = await liveAsks($)
   const hs = await read($, handed)
   // 4: nothing known yet (no sweep, no ask): clear a count set before rather than leave it standing.
   if (!b && list.length === 0 && hs.length === 0) return $.ui.status(undefined)
@@ -643,52 +645,117 @@ async function runAction($: EngineInterface, a: PaneAction) {
   await refresh($)
 }
 
-// The asks still answerable: verify-approval.sh accepts an answer for TTL_MS; one being sent isn't.
-// ponytail: a session that dies mid-submit leaves its ask `sending`, hidden until the TTL drops it.
-const liveAsks = async ($: EngineInterface, now: number) => (await read($, asks)).filter(a => now - a.at < TTL_MS && !a.sending)
+// The asks still answerable: one being sent isn't. A send that hasn't ended in SENDING_MS (its session died
+// mid-submit, or restarted while the submit waited for idle) is answerable again at the next store read: an answer
+// that did land then shows twice to the coordinator, which beats one never seen.
+const SENDING_MS = 10 * 60_000
+const liveAsks = async ($: EngineInterface) => (await read($, asks)).filter(a => a.sending === undefined)
 const unsent = ({ sending, ...a }: Ask): Ask => a
+export const isOld = (a: Ask, now: number) => now - a.at >= OLD_MS
 // Drops the asks `hit` matches, then the open choices and status count they leave; resolves to the ones dropped.
 async function dropAsks($: EngineInterface, hit: (a: Ask) => boolean) {
   let dropped: Ask[] = []
-  await update($, asks, l => {
+  await setAsks($, l => {
     dropped = l.filter(hit)
     return dropped.length ? l.filter(a => !hit(a)) : l
   })
   if (dropped.length) {
-    await pruneOpen($, await $.clock.now())
+    await pruneOpen($)
     await syncStatus($)
   }
   return dropped
 }
 
-// A review finding's ask (one with a kind) that expired unanswered comes back to the coordinator: a first ask to
-// re-ask once as a reminder, an expired reminder (question starts REMINDER) to record as dropped. Never starts
-// "Approval pane answer for ". Keep in sync with approvals.md.
-export const REMINDER = 'Reminder: '
-const isReminder = (a: Ask) => a.question.startsWith(REMINDER)
-export const expiredText = (as: Ask[]) => {
-  const list = (xs: Ask[]) => xs.map(a => `${a.key} (id ${a.id}) ${oneLine(a.question)}`).join('; ')
-  const first = as.filter(a => !isReminder(a))
-  const reminders = as.filter(isReminder)
-  return [
-    'Approval pane: review finding asks expired unanswered after 24h (approvals.md).',
-    ...(first.length ? [`Re-ask each once, the same ask with its question starting "${REMINDER}": ${list(first)}.`] : []),
-    ...(reminders.length ? [`These reminders expired too, so they are dropped: record each in its review file's header and tell its reviewer session: ${list(reminders)}.`] : []),
-  ].join(' ')
+// The queued asks outlive the session that queued them (a restart, a handover, a plugin release): one file per
+// project root, the store each change reads and writes, so every coordinator of the project and its pane show the
+// same asks until they are answered or cancelled. A worker never sets asksFile (it calls no ask tool and opens no
+// pane); null: a folder not set up for coordination (its root may be a parent's), or no root: asks stay in memory.
+// Within a session, writes queue one after another (asksQueue).
+// shortcut: no lock across processes, so two coordinators writing in the same instant can lose one change; add a file lock if that is seen.
+export const ASKS_DIR = '.cache/session-status/asks'
+let asksFile: string | null | undefined
+let storeText: string | undefined // the store as this session last read or wrote it
+let storeError = '' // the last write's failure: the asks then live only in this session
+let asksQueue: Promise<unknown> = Promise.resolve()
+const isStr = (v: unknown): v is string => typeof v === 'string' && clean(v) === v
+function isAsk(v: unknown): v is Ask {
+  if (!v || typeof v !== 'object') return false
+  const a: Record<string, unknown> = { ...v }
+  const opt = (x: unknown) => x === undefined || isStr(x)
+  const b: Record<string, unknown> | undefined = a.body && typeof a.body === 'object' ? { ...a.body } : undefined
+  return isStr(a.id) && isStr(a.key) && /^\S+$/.test(a.key) && isStr(a.question) && typeof a.at === 'number' &&
+    Array.isArray(a.options) && a.options.length >= 2 && a.options.every(isStr) && opt(a.details) && opt(a.target) &&
+    (a.kind === undefined || isKind(a.kind)) && (a.seen === undefined || a.seen === true) && (a.sending === undefined || typeof a.sending === 'number') &&
+    (a.body === undefined || (!!b && isStr(b.path) && isStr(b.text) && typeof b.sha256 === 'string' && /^[0-9a-f]{64}$/.test(b.sha256) && typeof b.cut === 'number'))
 }
-// Claimed by removing them before the submit, so a tick while the coordinator is mid-turn (submit waits for idle)
-// finds nothing to announce twice; put back if the prompt doesn't enter, for the next minute to retry.
-// ponytail: retries silently each minute; add a toast if a refusing hook ever makes that a loop.
-async function expireReviewAsks($: EngineInterface) {
-  const now = await $.clock.now()
-  const gone = await dropAsks($, a => !!a.kind && !a.sending && now - a.at >= TTL_MS)
-  if (!gone.length) return
-  const r = await $.prompt.submit({ text: expiredText(gone) }).catch((err: unknown) => ({ drop: String(err) }))
-  if (r.drop !== undefined) {
-    await update($, asks, l => [...l, ...gone])
-    await syncStatus($)
+// The store's asks, checked as ask_approval checks its input (the file is anyone's to write); undefined when it
+// can't be read or isn't a list, so a bad file never empties the pane.
+export function parseAsks(text: string): Ask[] | undefined {
+  let o: unknown
+  try {
+    o = JSON.parse(text)
+  } catch {
+    return
   }
+  return Array.isArray(o) ? o.filter(isAsk) : undefined
 }
+// Every write of asks goes through here, one at a time: the store's list (else this session's) in, the result back
+// to both. A failed write keeps the change in this session (storeError says so) rather than losing it.
+function setAsks($: EngineInterface, f: (l: Ask[]) => Ask[]) {
+  const run = asksQueue.then(() => setAsksNow($, f))
+  asksQueue = run.catch(() => undefined)
+  return run
+}
+async function setAsksNow($: EngineInterface, f: (l: Ask[]) => Ask[]) {
+  const file = asksFile ?? undefined
+  const text = file ? String(await $.fs.read(file).catch(() => '')) : ''
+  // Unchanged since this session last read or wrote it: this session's list is the store (no new array, no redraw).
+  const fresh = !!file && text !== storeText
+  const disk = fresh ? parseAsks(text) : undefined
+  const now = await $.clock.now()
+  const stuck = (a: Ask) => a.sending !== undefined && now - a.sending >= SENDING_MS
+  let src: Ask[] = []
+  const next = await update($, asks, l => {
+    src = disk ?? l
+    return f(src.some(stuck) ? src.map(a => (stuck(a) ? unsent(a) : a)) : src)
+  })
+  if (!file) return next
+  storeText = text
+  // A missing or unreadable store takes this session's list.
+  if (next !== src || (fresh && disk === undefined)) {
+    const out = JSON.stringify(next)
+    try {
+      await $.fs.write(file, out)
+      storeText = out
+      storeError = ''
+    } catch (err) {
+      storeError = err instanceof Error ? err.message : String(err)
+    }
+  }
+  return next
+}
+// Reads the store into this session's list: at a coordinator's ask call or pane open, then each minute. `setUp`:
+// open_pane's check of the folder, else checked here once.
+async function loadAsks($: EngineInterface, setUp?: boolean) {
+  if (asksFile === undefined) {
+    if (!(setUp ?? (await initCheck($)).setUp)) {
+      asksFile = null
+      return
+    }
+    const r = await projectRoot($)
+    if (!r) return
+    asksFile = `${await homePath($, ASKS_DIR)}/${await hex16(r)}.json`
+    storeText = undefined
+  }
+  if (asksFile === null) return
+  await setAsks($, l => l)
+  await pruneOpen($)
+  await syncStatus($)
+}
+// The queued asks, one line each, for open_pane's result: what a new coordinator inherits.
+export const queuedText = (as: Ask[], now: number) => as.length
+  ? ` Queued in the pane (${as.length}): ${as.map(a => `${a.key} (id ${a.id}${isOld(a, now) ? `, queued ${ago(now - a.at)}` : ''}) ${shortShas(oneLine(a.question))}`).join('; ')}.`
+  : ''
 
 const ASK_SCHEMA = {
   type: 'object',
@@ -839,7 +906,8 @@ export const HANDED_DIR = '.cache/session-status/commands'
 export const HANDED_TTL = 3 * 86_400_000 // ponytail: a command older than 3 days is stale; its session can hand it again
 // Unset, or no environment to read (a test that mocks none), reads as ''. $.env.get takes a literal name.
 const accountOf = async ($: EngineInterface) => (await $.env.get('CLAUDE_CONFIG_DIR').catch(() => undefined)) ?? ''
-const handedDir = async ($: EngineInterface) => `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/${HANDED_DIR}`
+const homePath = async ($: EngineInterface, rel: string) => `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/${rel}`
+const handedDir = ($: EngineInterface) => homePath($, HANDED_DIR)
 // context-watch.sh's stamps, ${XDG_CACHE_HOME:-$HOME/.cache}/session-status: an empty XDG_CACHE_HOME is unset there (||).
 const stampDir = async ($: EngineInterface) => `${(await $.env.get('XDG_CACHE_HOME').catch(() => undefined)) ||
   `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/.cache`}/session-status`
@@ -866,9 +934,11 @@ export function parseHanded(text: string): Handed | undefined {
       typeof account !== 'string' || typeof at !== 'number' || handedProblem(key, command, what)) return
   return { id, key: String(key), session, cwd, account, command: String(command), what: String(what), at }
 }
-export const handedId = async (session: string, command: string) =>
-  [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${session}\n${command}`)))]
+// The first 16 hex digits of a text's sha256.
+const hex16 = async (text: string) =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
     .slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('')
+export const handedId = (session: string, command: string) => hex16(`${session}\n${command}`)
 // The press, in the user's words, as the Bash call's consent: what the permission path reads as their request. Only
 // the press and the command it showed: the session's own words (key, what) would speak in the user's voice.
 export const runConsent = (h: Handed) => `The user pressed "Run" in the coordinator pane on this exact command: ${h.command}`
@@ -1101,6 +1171,9 @@ async function open($: EngineInterface) {
   if (!timer) {
     timer = $.clock.every(600_000, () => void refresh($))
     $.clock.every(60_000, () => void refreshActivity($))
+    // Another coordinator's asks and answers (a handover's overlap) reach this pane within a minute.
+    $.clock.every(60_000, () => void loadAsks($).catch(() => undefined))
+    void loadAsks($).catch(() => undefined)
     void refresh($)
   }
   return opened
@@ -1111,11 +1184,11 @@ export const register: Register = on => {
     const started = await next(e)
     await $.tool.register({
       name: 'open_pane',
-      description: 'Coordinator only: opens the coordinator pane beside the conversation. The pane shows the queued approval asks as buttons, the output of the project\'s status command and the adapter\'s pending text, refreshed every 10 minutes and on its Refresh button. Call it once at the start of a coordinator session; a worker session never calls it. It shows only in an interactive terminal session with the plugin loaded, and waits until the terminal is about 144 columns wide (110 once the user has opened it themselves; the user\'s /coordinator command opens it at any width); it never shows in the agent view or a background session, so there, ask in plain text.',
+      description: 'Coordinator only: opens the coordinator pane beside the conversation. The pane shows the queued approval asks as buttons, the output of the project\'s status command and the adapter\'s pending text, refreshed every 10 minutes and on its Refresh button. Its result lists the asks still queued (they carry over from the last coordinator). Call it once at the start of a coordinator session; a worker session never calls it. It shows only in an interactive terminal session with the plugin loaded, and waits until the terminal is about 144 columns wide (110 once the user has opened it themselves; the user\'s /coordinator command opens it at any width); it never shows in the agent view or a background session, so there, ask in plain text.',
     })
     await $.tool.register({
       name: 'ask_approval',
-      description: 'Coordinator only: queue a reserved approval as buttons in the coordinator pane instead of the question box. Returns at once; the user\'s click arrives later as a prompt "Approval pane answer for <KEY>: <option>. Asked: <question>" (<option> may be the user\'s own words, typed in the pane\'s question dialog), which is the Quote for a relayed approval. Unanswered asks expire after 24h; an expired one with a kind (a review finding) comes back to you as a prompt: re-ask it once with the question starting "Reminder: "; an expired reminder is dropped (record it and tell the reviewer). Keep the question one line; put what the user should read in details (markdown), target, and for a comment post body_file (the body file, written first: the pane shows its text and sha256). Use it only for an action the project reserves for the user, one action per ask; ask anything else in plain text, or in the question box when the answer needs the user\'s own words (approvals.md, next to the coordinator skill).',
+      description: 'Coordinator only: put a decision waiting on the user (a reserved approval or any other choice) as buttons in the coordinator pane, one decision per ask, your recommended option first. Returns at once; the user\'s click arrives later as a prompt "Approval pane answer for <KEY>: <option>. Asked: <question>" (<option> may be the user\'s own words, typed in the pane\'s question dialog), which is the Quote for a relayed approval (it verifies for 24h from the click). An ask stays until answered or cancelled, across coordinator restarts and plugin releases; past 24h the pane marks it OLD, so check it still applies before acting on its answer. Queueing the same key and question again replaces the waiting ask (same id). Keep the question one line; put what the user should read in details (markdown), target, and for a comment post body_file (the body file, written first: the pane shows its text and sha256). Ask in plain text only when this says the pane isn\'t on screen, or in the question box when the answer needs the user\'s own words (approvals.md, next to the coordinator skill).',
       inputSchema: ASK_SCHEMA,
     })
     await $.tool.register({
@@ -1146,9 +1219,6 @@ export const register: Register = on => {
     await $.command.register({ name: 'coordinator', description: 'Open the coordinator pane at any width (close: close it)', argumentHint: '[close]', immediate: true })
     // A reload (reload_plugins) keeps the pane up but starts this module over, its timers gone: start them again.
     if ((await $.ui.panes()).some(p => p.id === PANE)) await open($)
-    // Apart from the pane's timers: a review ask's 24h runs out with the pane closed too. A session with no asks
-    // reads an empty list each minute.
-    $.clock.every(60_000, () => void expireReviewAsks($).catch(() => undefined)) // unclaimed or put back: next minute
     return started
   })
 
@@ -1173,7 +1243,11 @@ export const register: Register = on => {
     // Not set up yet: no name, which would be the parent's coordinator's or not the one the setup writes.
     const named = !init.setUp ? 'This session keeps its name until the folder is set up; open_pane names it then.' : await nameCoordinator($)
     const inbox = init.inbox ? await watchInbox($, init.inbox) : ''
-    return { result: `${isPlaced ? 'Coordinator pane open.' : 'The pane is waiting: this terminal is too narrow or draws no panes. Tell the user /coordinator opens it at any width.'} ${named}${init.text}${inbox}` }
+    // The asks the last coordinator left: the store of this (maybe just moved) root.
+    asksFile = undefined
+    await loadAsks($, init.setUp).catch(() => undefined)
+    const queued = queuedText(await liveAsks($), await $.clock.now())
+    return { result: `${isPlaced ? 'Coordinator pane open.' : 'The pane is waiting: this terminal is too narrow or draws no panes. Tell the user /coordinator opens it at any width.'} ${named}${init.text}${inbox}${queued}` }
   })
 
   // Any session's own name, `<KEY>-<short-desc>` once it knows its task, through open_pane's /rename at turn end.
@@ -1306,23 +1380,36 @@ export const register: Register = on => {
       }
     }
     const text = opt(details) && clean(String(details))
-    const id = String(await update($, seq, n => n + 1))
     const at = await $.clock.now()
-    await pruneOpen($, at)
-    // An expired review ask stays until the sweep announces it (expireReviewAsks).
-    await update($, asks, list => [...list.filter(a => a.kind || at - a.at < TTL_MS), {
-      id, key, question, options: labels, at,
-      ...(text ? { details: text.length > BODY_MAX ? `${text.slice(0, BODY_MAX)}\n\n… ${text.length - BODY_MAX} more characters not kept` : text } : {}),
-      ...(opt(target) ? { target: oneLine(clean(String(target))) } : {}),
-      ...(body ? { body } : {}),
-      ...(isKind(kind) ? { kind } : {}),
-    }])
+    await loadAsks($).catch(() => undefined)
+    // The same question for the key queued again (a restart's re-queue) replaces the waiting one in its place, id and
+    // age kept; a new id is past every id in the store, which other coordinators' sessions also number.
+    const n = await read($, seq)
+    let id = ''
+    let again = false
+    await setAsks($, list => {
+      const was = list.find(a => a.key === key && a.question === question && a.sending === undefined)
+      again = !!was
+      id = was?.id ?? String(Math.max(n, ...list.map(a => Number(a.id) || 0)) + 1)
+      const ask: Ask = {
+        id, key, question, options: labels, at: was?.at ?? at,
+        ...(text ? { details: text.length > BODY_MAX ? `${text.slice(0, BODY_MAX)}\n\n… ${text.length - BODY_MAX} more characters not kept` : text } : {}),
+        ...(opt(target) ? { target: oneLine(clean(String(target))) } : {}),
+        ...(body ? { body } : {}),
+        ...(isKind(kind) ? { kind } : {}),
+      }
+      return was ? list.map(a => (a === was ? ask : a)) : [...list, ask]
+    })
+    if (!again) await update($, seq, () => Number(id))
+    await pruneOpen($)
     const { isPlaced } = await open($)
     await syncStatus($)
+    const unsaved = storeError ? ` (not saved for the next coordinator: ${storeError}; mention it in the handover)` : ''
+    const queued = `${again ? `Re-queued ${key} (id ${id}): it replaces the same question waiting there` : `Queued ${key} (id ${id})`}${unsaved}`
     if (!isPlaced) {
-      return { result: `Queued ${key} (id ${id}), but the pane isn't on screen (terminal too narrow, or no panes here). Ask the user in plain text instead, and tell them /coordinator opens the pane at any width.` }
+      return { result: `${queued}, but the pane isn't on screen (terminal too narrow, or no panes here). Ask the user in plain text instead, and tell them /coordinator opens the pane at any width.` }
     }
-    return { result: `Queued ${key} (id ${id}) in the coordinator pane. The answer arrives as a prompt; don't wait for it.` }
+    return { result: `${queued} in the coordinator pane. The answer arrives as a prompt; don't wait for it.` }
   })
 
   // Removes asks without answering them: a click on a stale drawing then finds nothing (`answer`'s claim), and
@@ -1342,10 +1429,10 @@ export const register: Register = on => {
     }
     // id wins over question: the question as shown (one line, sha256 cut) needn't match the queued text.
     const hit = (a: Ask) => a.key === key && (id !== undefined ? a.id === id : question === undefined || a.question === question)
+    await loadAsks($).catch(() => undefined)
     const removed = await dropAsks($, hit)
-    const now = await $.clock.now()
-    const queued = removed.filter(a => !a.sending && now - a.at < TTL_MS)
-    const clicked = removed.filter(a => a.sending)
+    const queued = removed.filter(a => a.sending === undefined)
+    const clicked = removed.filter(a => a.sending !== undefined)
     const late = clicked.length ? ` ${clicked.map(a => `(id ${a.id})`).join(', ')} was clicked just before: its answer may still arrive.` : ''
     if (!queued.length) return { result: `No queued ask matched ${key}${id !== undefined ? ` id ${id}` : question !== undefined ? ` "${oneLine(question)}"` : ''}.${late}` }
     const differs = id !== undefined && question !== undefined && queued.some(a => a.question !== question) ? ' Its question isn\'t the one passed: check it was the ask you meant.' : ''
@@ -1362,7 +1449,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Link, Markdown, Code } = $.ui.resolve(e)
     const now = await $.clock.now()
-    const list = await liveAsks($, now)
+    const list = await liveAsks($)
     const b = await read($, board)
     const busy = await read($, refreshing)
     const expanded = await read($, wrapped)
@@ -1405,24 +1492,34 @@ export const register: Register = on => {
     const cols = e.props.bodyColumns
     const answer = (a: Ask, option: string) => async () => {
       // Claim it in one write: a second click, or a click on a removed ask's stale drawing, finds nothing to answer.
+      // The store's list: another coordinator's pane may have answered or withdrawn it. Key and question too: an id
+      // freed by a cancel can be given to another coordinator's next ask.
       const now = await $.clock.now()
+      const same = (x: Ask) => x.id === a.id && x.key === a.key && x.question === a.question
       let claimed = false
-      await update($, asks, l => {
-        claimed = l.some(x => x.id === a.id && !x.sending && now - x.at < TTL_MS)
-        return claimed ? l.map((x): Ask => (x.id === a.id ? { ...x, sending: true } : x)) : l
+      await setAsks($, l => {
+        claimed = l.some(x => same(x) && x.sending === undefined)
+        return claimed ? l.map((x): Ask => (same(x) ? { ...x, sending: now } : x)) : l
       })
-      if (!claimed) return $.ui.toast('That ask is gone: withdrawn, answered, or expired after 24h.')
+      if (!claimed) return $.ui.toast('That ask is gone: withdrawn or answered.')
       logPress($, 'Approval answer')
       await syncStatus($)
-      try {
-        await $.prompt.submit({ text: answerText(a, option), asUser: true })
-      } catch (err) {
-        // Not delivered: answerable again in its place, unless cancel_approval took it meanwhile.
-        await update($, asks, l => l.map(x => (x.id === a.id ? unsent(x) : x)))
+      // Not delivered (a throw, or a hook's drop): answerable again in its place, unless cancel_approval took it meanwhile.
+      const putBack = async () => {
+        await setAsks($, l => l.map(x => (same(x) ? unsent(x) : x)))
         await syncStatus($)
+      }
+      try {
+        const r = await $.prompt.submit({ text: answerText(a, option), asUser: true })
+        if (r.drop !== undefined) {
+          await putBack()
+          return $.ui.toast(`The answer wasn't sent (${r.drop}); the ask is back in the pane.`)
+        }
+      } catch (err) {
+        await putBack()
         throw err
       }
-      await dropAsks($, x => x.id === a.id)
+      await dropAsks($, same)
     }
     // A conditional or redirected answer ("no, delete the old one instead") in one round: the question dialog, its
     // options plus Other for the user's own words, submitted like a click. Dismissed: nothing is sent.
@@ -1717,7 +1814,7 @@ export const register: Register = on => {
     const { asksBy, groupOpen, askOpen, drawnOpen } = asksLayout(list, await read($, asksOpen))
     const setOpen = (id: string, open: boolean) => async () => {
       await update($, asksOpen, l => [...l.filter(x => !x.startsWith(`${id}=`)), `${id}=${open ? 1 : 0}`])
-      await markSeen($, now)
+      await markSeen($)
     }
     const isNew = (a: Ask) => !a.seen && !drawnOpen.has(a.id)
     const fresh = list.filter(isNew).length
@@ -1816,13 +1913,15 @@ export const register: Register = on => {
             <Text>{draw(clip([
               seg(aOpen ? '▾ ' : '▸ ', { color: 'permission' }),
               ...(isNew(a) ? [seg('NEW ', { color: 'permission', bold: true })] : []),
+              ...(isOld(a, now) ? [seg('OLD ', { color: 'warning', bold: true })] : []),
               ...kindBadge(a),
               seg(shortShas(oneLine(clean(a.question))), aOpen ? { bold: true } : undefined),
-              seg(` ${ago(now - a.at)}`, { dimColor: true }),
+              seg(` ${ago(now - a.at)}`, isOld(a, now) ? { color: 'warning' } : { dimColor: true }),
             ], cols - 8))}</Text>
           </Button>
           {aOpen && (
             <Box flexDirection="column" paddingLeft={2}>
+              {isOld(a, now) && <Text color="warning" wrap="wrap">Queued {ago(now - a.at)}: check it still applies before you answer (the PR or ticket may have moved).</Text>}
               <Text bold wrap="wrap">{draw(kindBadge(a))}{clean(a.question)}</Text>
               {a.target && <Text wrap="wrap"><Text dimColor>target </Text>{a.target}</Text>}
               {a.body && <Text dimColor wrap="wrap">body {clean(a.body.path)} · sha256 {a.body.sha256}</Text>}

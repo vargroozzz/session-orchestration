@@ -310,7 +310,10 @@ the `body_file` when the ask is queued and shows its text as markdown with its s
 if markdown would hide a link target or HTML). Asks are grouped per task key, one line each, until
 the user opens one (NEW: never opened). An ask with a kind shows it as a coloured badge; a group
 lists its other asks (a merge, a post with no kind) first, then issues, suggestions, questions, and
-the group line counts each kind. `details`, `target` and `kind` show only in the pane.
+the group line counts each kind. `details`, `target` and `kind` show only in the pane. An ask queued
+over 24h ago stays, marked OLD with its age in the warning colour and, opened, a line to check it still
+applies. The asks are kept per project root in `~/.cache/session-status/asks/` (one file, the store every
+change goes through), so a new coordinator's pane shows what the last one queued; open_pane's result lists them.
 
 ## Project actions in detail
 

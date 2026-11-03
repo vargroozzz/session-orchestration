@@ -83,9 +83,9 @@ idle *or* waiting. `status` tells them apart: `idle` (turn over), `waiting` (a p
   name this skill: it is the coordinator's.
 - When giving work, set `notify_when_idle: true`. One notice arrives when the session goes idle. Never poll
   `ListAgents`, and never send "are you done?".
-- Decisions for the user that block several items (not approvals: each of those is its own ask) go in one round:
-  numbered, each with your recommended answer, worded so a plain "yes" accepts them all ("yes except 2" takes your
-  recommendation for the rest).
+- **Every decision waiting on the user goes on the pane**: one `ask_approval` per decision, approval or not, your
+  recommended option first ([approvals.md](approvals.md), Asking). Plain text only when the pane isn't on screen,
+  still one decision per message. Never a numbered round.
 - Never pass large content between sessions through your own context. Point to a file or a branch.
 - Never ask a session to do something that was denied or blocked in your own session.
 - A successful send isn't proof of delivery. A session in a different permission mode may hold your message for its
@@ -124,8 +124,8 @@ session goes to that session in either mode.
 
 The project names a handoff file (e.g. `pending.md`), shown by `--start` and the pane. It holds only what would
 otherwise live in your conversation alone, so the next coordinator can pick it up:
-- Three kinds of entry, one dated `- ` line each: decisions waiting on the user, instructions you drafted but
-  haven't sent, and open requests to sessions. Nothing the status command already answers, and no copied status.
+- Three kinds of entry, one dated `- ` line each: decisions waiting on the user (each also queued on the pane as
+  its `ask_approval`), instructions you drafted but haven't sent, and open requests to sessions. Nothing the status command already answers, and no copied status.
   Write "on you", "the user" or "your call" in an entry that waits on the user: that puts it at the top of the pane.
   Name the session's id when there is one.
 - Add an entry among the others, above any heading after them: the pane reads entries only up to the first heading,
@@ -138,9 +138,9 @@ otherwise live in your conversation alone, so the next coordinator can pick it u
   merge call is due. Before passing on an "on you" entry a day or more old, recheck it: the task may have moved.
 
 **Handing over** (at the context-watch hook's mark, or a restart): overwrite `<replies>/coordinator-handover.md` with
-the state that's in no file: live sessions worth knowing and what each waits on, open pane asks, why the restart. No
-rules and no files to read: the next coordinator's Start reads those, and each restated rule is re-sent on its every
-wake.
+the state that's in no file: live sessions worth knowing and what each waits on, why the restart (pane asks carry over
+by themselves). No rules and no files to read: the next coordinator's Start reads those, and each restated rule is
+re-sent on its every wake.
 
 ## Project memory
 
@@ -202,7 +202,7 @@ The files next to this one, each read whole when its event comes up, never at St
 
 | Read | When |
 |---|---|
-| [approvals.md](approvals.md) | Before you ask the user to approve an action, queue or cancel an `ask_approval`, or relay an approval; a worker's `needs your approval:` line; an `Approval pane answer for …` or `Approval pane: … expired` prompt |
+| [approvals.md](approvals.md) | Before you put any decision to the user, queue or cancel an `ask_approval`, or relay an approval; a worker's `needs your approval:` line; an `Approval pane answer for …` prompt |
 | [resuming.md](resuming.md) | Before you resume, wake or stop a session, or queue a message for later (`--send-when-idle`); a send that says "not reachable"; a session over 200K (exit 4), stuck on a permission prompt, or one `claude stop` can't confirm; "Workspace not trusted" |
 | [plans.md](plans.md) | A task too big for one session; a `handoff ready: KEY cN` or `handoff ready: KEY` message |
 | [pane.md](pane.md) | A `Coordinator pane action for …` or `Coordinator pane: the user ran the command …` prompt; the pane's Actions buttons; editing `.claude/coordinator-actions.json` |

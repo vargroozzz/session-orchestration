@@ -16,6 +16,6 @@ Posting anything under the user's name is reserved (CLAUDE.md, "Cross-session me
   Comment: <ready-to-post text>
   ```
 - Kinds: issue = the code is wrong; suggestion = works, could be better; question = scope or intent the author decides.
-{{?post_cmd}}- Post only what the user named, with `{{post_cmd}}`. The coordinator gives each finding 24h and one reminder;
-{{?!post_cmd}}- Post nothing yourself: the user posts what they name. The coordinator gives each finding 24h and one reminder;
-  when it says dropped, or the PR merges first, put `Dropped YYYY-MM-DD: <why>; posted: <n…|none>` above the title.
+{{?post_cmd}}- Post only what the user named, with `{{post_cmd}}`. Each finding waits in the coordinator pane until answered;
+{{?!post_cmd}}- Post nothing yourself: the user posts what they name. Each finding waits in the coordinator pane until answered;
+  when the coordinator says it is dropped, or the PR merges first, put `Dropped YYYY-MM-DD: <why>; posted: <n…|none>` above the title.

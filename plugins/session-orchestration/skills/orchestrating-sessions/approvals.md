@@ -1,8 +1,8 @@
 # Approvals: asking the user and relaying
 
-The coordinator's rules for approvals. Read this before you ask the user to approve an action, queue or cancel an
-`ask_approval`, or relay an approval to a session; when a worker's report says `needs your approval: …`; and on an
-`Approval pane answer for …` or `Approval pane: … expired` prompt.
+The coordinator's rules for approvals and decisions. Read this before you put any decision to the user (an approval
+or any other choice), queue or cancel an `ask_approval`, or relay an approval to a session; when a worker's report
+says `needs your approval: …`; and on an `Approval pane answer for …` prompt.
 
 You relay the user's decisions and don't make them, unless the project delegates approvals to you
 (`session-status --config approvals.delegate` prints `true`): then decide and give the go yourself, and ask the user
@@ -27,14 +27,17 @@ gave you in one of the ways below, naming the task key or answering your last me
 
 ## Asking
 
-- **Prefer the coordinator pane** for a reserved approval: call `ask_approval` (ToolSearch:
-  `mcp__session-orchestration__ask_approval`) with the task key, the question, and one option per answer, each
-  naming the key and the exact action ("Yes, patch the PROJ-4172 config and restart the frontend" / "No, leave
-  PROJ-4172 as is"). One question per action. It returns at once and the buttons wait in the pane, so you keep
+- **Every decision waiting on the user goes on the coordinator pane**, one `ask_approval` per decision: a reserved
+  approval, and just as much any other choice (which option to take, whether to start or stop a task, a scope
+  question). Never a numbered plain-text round. Call `ask_approval` (ToolSearch:
+  `mcp__session-orchestration__ask_approval`) with the task key (or a 3-5 word name joined by `-` when there is
+  none), the question, and one option per answer, **your recommended option first** (label it `(recommended)`),
+  each naming the key and the exact action ("Yes, patch the PROJ-4172 config and restart the frontend" / "No, leave
+  PROJ-4172 as is"). One question per decision. It returns at once and the buttons wait in the pane, so you keep
   receiving worker messages. When the user clicks, the answer arrives as your next prompt, `Approval pane answer
   for <KEY>: <option>. Asked: <question>`; from **In your own words…**, the user's typed text stands in for
   `<option>` (a conditional yes, or a different action): act only on what those words approve. That whole line is
-  the Quote. It verifies for 24h, and only from this plugin's click, so a typed copy doesn't count.
+  the Quote. It verifies for 24h from the click, and only from this plugin's click, so a typed copy doesn't count.
   - Make each option stand alone: the worker sees the answer and the question, not the other options.
   - Keep the question one line (the action, as the hook names it) and put what the user reads into the optional
     fields: `details` (markdown: what's being decided, the review comment being answered), `target` (`app#282
@@ -49,12 +52,15 @@ gave you in one of the ways below, naming the task key or answering your last me
     but could be better) or `question` (scope or intent the author or PO decides). Leave it out for any other post
     (a Jira status or backfill comment, a review reply); an ask without `body_file` takes none. How the pane shows
     these fields: [Approval asks](status-reference.md#approval-asks). They are not part of the answer line.
-  - An unanswered ask leaves the pane after 24h. One with a `kind` (a review finding) comes back as a prompt,
-    `Approval pane: … expired unanswered after 24h: <KEY> (id N) <question>`, so a review post can't sit unseen:
-    queue it again once, the same ask with its question starting `Reminder: `. When a reminder expires, the finding
-    is dropped: note it in the review's file header (the project's review brief names the file) and tell the
-    reviewer session.
-  - If the tool says the pane isn't on screen, ask in plain text instead.
+  - An ask stays on the pane until it is answered or cancelled, across coordinator restarts, handovers and plugin
+    releases: the asks are kept per project, and `open_pane`'s result lists the ones waiting. Don't queue them
+    again; if you do, the same key and question replaces the waiting ask (same id), never a second one. One queued
+    over 24h ago is marked OLD: still answerable (its answer verifies from the click), but before you act on it,
+    check the action still applies (the PR or ticket may have moved). When the decision no longer applies (a PR
+    merged first, the task closed), cancel it, and for a review finding note `Dropped` in the review's file header
+    and tell the reviewer session.
+  - Plain text only when the pane isn't on screen (the tool says so: a narrow terminal, the agent view, a background
+    session). Then each decision is still its own message, recommended answer first.
 - **To replace or withdraw an ask**, queue the new one, then remove the old with `cancel_approval` (ToolSearch:
   `mcp__session-orchestration__cancel_approval`): the key, plus the `id` `ask_approval` returned or the exact
   question; the key alone removes all its asks. It submits no answer, and a click on a removed ask's buttons does
@@ -63,7 +69,7 @@ gave you in one of the ways below, naming the task key or answering your last me
   Quote; the key in the answer, the question or its header). But while it is open no worker message reaches you, so
   use it only for an answer that needs the user's own words, and only when they're at the keyboard. It is yours
   only: sessions ask in plain text.
-- **Otherwise one standalone message**, less than 24h old: the worker only accepts a whole message. It must name
+- **Without the pane, one standalone message**, less than 24h old: the worker only accepts a whole message. It must name
   the task key, or answer your last message, which names it. Ask about one action at a time: a bare "yes" only
   counts when your question was about exactly that action. "yes, merge PROJ-4668" works either way. A numbered
   reply ("do 1, 3, 4") to a summary of several items doesn't verify, even when the summary named the keys: queue

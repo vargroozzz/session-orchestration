@@ -117,9 +117,9 @@ Ask in plain text, never with the question box, and not through plan mode in a b
 waits, no message reaches you, so a coordinator can't relay the answer (a hook denies both in `--bg` sessions, and an
 `EnterWorktree` outside your start dir's `.claude/worktrees/`, with how to do it instead). Name the task key and the
 exact action (e.g. "force-push PROJ-4668?"). An approval is always its own ask, one action each, because a relay
-names one action. Several other decisions that block you go in one round:
-numbered, each with your recommended answer, worded so a plain "yes" accepts them all ("yes except 2" takes your
-recommendation for the rest). Put the round in your replies-folder file and point the `Blocker` line at it. Decide
+names one action. Other decisions that block you are listed one per line, each standing alone with its options and
+your recommended one first: the coordinator puts each on its pane as its own ask, so no numbered "yes except 2"
+round. Put them in your replies-folder file and point the `Blocker` line at it. Decide
 what doesn't block you yourself, and look up what you can before asking. Send the same ask to the coordinator as your
 `blocked` status report, then end your turn; the answer comes from the user or, where the project allows it, as a
 relayed approval. A plan that needs sign-off: write it to a file, make no other changes, and ask the same way with
