@@ -50,7 +50,8 @@ one of: `coding`, `PR #N open`, `in review`, `ready to merge`, `merged, deployin
   `myproj-coordinator`) is a hint, not an address: coordinators get restarted. Run
   `bash <this skill's folder>/session-status --coordinator` from the project root and send to the
   first name it prints (newest coordinator first), then the next. Nothing printed: try the brief's
-  name. No send works: the replies-folder file is the report. Always write every status report to
+  name. No send works (a coordinator under another Claude account can't be messaged): the
+  replies-folder file is the report, and its `--watch` sees it. Always write every status report to
   `<TASK>.md` (overwrite it) in the project's replies folder, if its `CLAUDE.md` names one: a new
   coordinator reads it there.
 - A status report is about this session's own work. Name another session only as a blocker or

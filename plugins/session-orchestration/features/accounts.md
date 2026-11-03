@@ -36,6 +36,10 @@ session under another account.
   resumes applies (read its `ctx` first).
 - **Waking or stopping** a session under another account (a retired one, a `claude stop` that can't confirm):
   run the command under that account's prefix, as `session-status` prints it.
+- **A worker under another account** (one the user started there) finds no coordinator in `ListAgents` and can't
+  `SendMessage` it: it writes its report to the replies folder only. `session-status --changes` (so `--watch`)
+  lists each `<KEY>.md` written there in the last day under `Reports:` (not a key a session of your account works
+  on: that one messages), so a new one wakes you; read it there.
 - **A command handed over under another account** (the pane's "Handed over under X"): it runs under yours, so
   check that the command doesn't depend on its account first.
 

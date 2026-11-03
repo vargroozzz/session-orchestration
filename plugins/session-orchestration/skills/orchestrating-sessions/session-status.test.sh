@@ -37,7 +37,7 @@ EOF2
 mkdir -p "$root/.claude"; cat > "$root/.claude/session-status-adapter" <<EOF
 #!/bin/sh
 case \$1 in
-  tasks) [ -f $tmp/fail ] && { echo boom; exit 1; }; printf 'ABC-12\t-\t\t%s\n' "\$([ -f $tmp/stale ] && echo '(PRs as of 04:13) ')"; [ ! -f $tmp/fix ] || echo 'fix: Sign in → gh auth login' ;;
+  tasks) [ -f $tmp/fail ] && { echo boom; exit 1; }; printf 'ABC-12\t-\t\t%s\n' "\$([ -f $tmp/stale ] && echo '(PRs as of 04:13) ')\$(cat $tmp/prs 2>/dev/null)"; [ ! -f $tmp/fix ] || echo 'fix: Sign in → gh auth login' ;;
   notices) cat $tmp/notices; exit \$(cat $tmp/rc) ;;
   *) exit 2 ;;
 esac
@@ -174,6 +174,12 @@ rm "$tmp/fail"
 # A stale-PR marker appearing or clearing alone doesn't wake --changes.
 run --changes >/dev/null; touch "$tmp/stale"; [ "$(run --changes)" = "no changes" ] && rm "$tmp/stale" &&
   [ "$(run --changes)" = "no changes" ] || { echo "stale marker woke --changes"; exit 1; }
+# Two PRs listed the other way round don't wake --changes; one changing state does.
+echo 'app#1 OPEN app#2 OPEN | ' > "$tmp/prs"; run --changes >/dev/null; echo 'app#2 OPEN app#1 OPEN | ' > "$tmp/prs"
+[ "$(run --changes)" = "no changes" ] && echo 'app#2 OPEN CONFLICT app#1 OPEN | ' > "$tmp/prs" && run --changes >/dev/null &&
+  echo 'app#2 OPEN app#1 OPEN CONFLICT | ' > "$tmp/prs" && run --changes | grep -q '^now: .*app#1 OPEN CONFLICT' &&
+  echo 'app#2 MERGED app#1 OPEN | ' > "$tmp/prs" && run --changes | grep -q '^now: .*app#2 MERGED' &&
+  rm "$tmp/prs" && run --changes >/dev/null || { echo "PR order woke --changes, or a state change didn't"; exit 1; }
 # A working <-> idle flip doesn't wake: working -> blocked (its turn is over) and back.
 echo working > "$tmp/state"; run --changes >/dev/null; echo blocked > "$tmp/state"
 [ "$(run --changes)" = "no changes" ] && echo working > "$tmp/state" && [ "$(run --changes)" = "no changes" ] || { echo "idle flip woke --changes"; exit 1; }
@@ -402,6 +408,12 @@ rm "$root/.claude/coordination.local.json"
 hid=88888888-2222-3333-4444-555555555555 nid=aaaaaaaa-2222-3333-4444-555555555555
 echo '{"type":"user","message":{"content":"Work on ABC-40"}}' > "$proj/$hid.jsonl"
 printf -- '- Replies folder (for reports): `replies/`.\n' > "$root/CLAUDE.md"; mkdir -p "$root/replies"
+# Accounts on: a report written to the replies folder wakes --changes (a worker on another account can't message).
+echo '{"features":{"accounts":true}}' > "$root/.claude/coordination.local.json"; run --changes >/dev/null
+echo brief > "$root/replies/ABC-41-c1.md"; [ "$(run --changes)" = "no changes" ] || { echo "a coordinator's brief woke --changes"; exit 1; }
+echo report > "$root/replies/ABC-41.md"; out=$(run --changes)
+rm "$root/replies/ABC-41.md" "$root/replies/ABC-41-c1.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
+grep -q '^now:   \* report written: ABC-41.md (' <<<"$out" || { echo "a report didn't wake --changes: $out"; exit 1; }
 setacct cfg "$(sess "$hid" "fix it" idle 1)"; calls >/dev/null
 out=$(run --handover "$hid" -- 'Do X.') && rc=0 || rc=$?
 [ "$rc" = 2 ] && [ "$out" = 'no replies/ABC-40.md: ask "fix it" for a status report first, or write one' ] && ! calls | grep -q 'stop\|--bg' ||
@@ -657,7 +669,7 @@ out=$(init "$a") && grep -q '^1\. Task keys: ACME-123 (in 66% ' <<<"$out" && gre
   grep -q '^3\. Files: CLAUDE.local.md, .claude/session-status-adapter, ' <<<"$out" || { echo "init (a) failed: $out"; exit 1; }
 init "$a" --check >/dev/null && { echo "init (a) --check exited 0 before --write"; exit 1; }
 out=$(init "$a" --write) && [ "$(init "$a" --check)" = "$(printf 'configured: %s (acme-coordinator)\nactive: tracker=jira host=github delegate=off terminal=plain messages=none features=none' "$a")" ] && [ -z "$(git -C "$a" status --short)" ] &&
-  grep -q '^- Replies folder (the plugin.s "folder for this"): `.claude/orchestration/replies/`\.$' "$a/CLAUDE.local.md" &&
+  grep -q '^- Replies folder (the plugin.s "folder for this"): `/[^`]*/session-orchestration/replies/[^`]*-init-acme/`\.$' "$a/CLAUDE.local.md" &&
   grep -qF '`approvals.delegate` in' "$a/CLAUDE.local.md" && [ "$(jq -c . "$a/.claude/coordination.local.json")" = '{"features":{"accounts":false},"approvals":{"delegate":false}}' ] &&
   [ "$(jq -c . "$a/.claude/coordination/coordination.json")" = '{"tracker":"jira","host":"github","features":{"review_inbox":false}}' ] && [ "$(cd "$a" && .claude/session-status-adapter urls)" = 'pr https://github.com/acme/{repo}/pull/{id}' ] &&
   [ "$(init "$a" | sed -n '1p;2p;3s/:.*//p;4s/:.*//p')" = "$(printf 'This folder is set up for coordination already (%s, acme-coordinator): nothing to propose.\nOptional, on request (session-status --init --write FLAG):\n  --review-brief\n  --rnd-brief' "$a")" ] ||
@@ -670,6 +682,10 @@ out=$(init "$a" --write --review-brief --rnd-brief) && [ "$out" = "$(printf 'Wro
   grep -qF 'git diff origin/main...origin/<branch>' "$a/.claude/orchestration/review-brief.md" &&
   [ "$(init "$a")" = "This folder is set up for coordination already ($a, acme-coordinator): nothing to propose." ] &&
   [ -z "$(git -C "$a" status --short)" ] || { echo "init briefs: $out"; exit 1; }
+# A replies folder an older setup put inside the checkout: --check says to move it.
+cp "$a/CLAUDE.local.md" "$tmp/cl.bak" && sed -i.x 's#^- Replies folder (\(.*\)): `.*`\.$#- Replies folder (\1): `.claude/orchestration/replies/`.#' "$a/CLAUDE.local.md"
+init "$a" --check | grep -q '^replies folder .claude/orchestration/replies/ is inside the git checkout ' && mv "$tmp/cl.bak" "$a/CLAUDE.local.md" && rm -f "$a/CLAUDE.local.md.x" &&
+  ! init "$a" --check | grep -q 'inside the git checkout' || { echo "replies-in-checkout warning failed"; exit 1; }
 w=$(mkdir -p "$tmp/init/ws/r1" "$tmp/init/ws/r2" && cd "$tmp/init/ws" && pwd -P)
 git -C "$w/r1" init -q && git -C "$w/r2" init -q && gc "$w/r1" --allow-empty -m hello
 out=$(init "$w") && grep -q '^1\. Task keys: session names, ws-<short-desc> ' <<<"$out" && grep -q '(none, workspace of 2 repos)' <<<"$out" &&
