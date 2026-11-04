@@ -667,7 +667,7 @@ test('features.notify: an ask waiting unseen N minutes shows one local notificat
   const shown: string[][] = []
   let check = 'configured: /work (work-coordinator)\nactive: tracker=none host=github delegate=off features=notify\n  notify: nothing to do.\n  notify after: 5 min\n'
   on('process.run', async (_, e) => {
-    if (e.argv[0] === 'osascript') shown.push(e.argv)
+    if (e.argv[0] === 'osascript') shown.push([...e.argv])
     const stdout = e.argv.includes('--check') ? check : e.argv.includes('--root') ? '/work' : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
