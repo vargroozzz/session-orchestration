@@ -162,6 +162,13 @@ and ignores working↔idle flips itself, so never wrap it in a loop or filter. R
 watcher at a time: skip arming if one already runs. Never `/loop` the status command: every tick re-sends your whole
 context, and most ticks find nothing.
 
+**PR events go to the owner, not the user.** A `PR events` section in the output lists each owned open PR that newly
+failed CI, got a conflict or had changes requested: `* REPO#ID EVENT @SHA (KEY) → "NAME" ID`. Send each line's session
+`PR REPO#ID (KEY): EVENT on SHA. Fix it and push; force-push, post or merge only with the usual approval. Reply when
+pushed, or blocked.` through `session-status --send-when-idle ID TEXT` (it prints `send:` when SendMessage is yours to do;
+[resuming.md](resuming.md)). Don't
+relay it to the user or ask first: it is the worker's own task. The script sends each PR, event and head SHA once.
+
 ## Rules
 
 - **The only files you change are the memory files, the handoff file and your handover**, plus what these docs have

@@ -153,6 +153,13 @@ the file's path. That is a plain-text ask, not a plan approval, so a relay can a
   agents` and the coordinator pane list it by ticket. The rename lands when the turn ends. Once per task; subagents
   never call it. Tool missing: call `reload_plugins`, then load it next turn.
 
+- **A PR event on your PR** (`PR REPO#ID (KEY): ci-failed | conflict | changes-requested on SHA`): it's your task, so
+  start on it without asking. Read the failed build's log, merge the base branch in, or read the review comments,
+  then fix, commit and push. A rebase needs a force-push, which is Reserved ([Approvals](#approvals)): ask first.
+  Replying to a review comment, resolving a thread or merging is still a post or a merge
+  ([Posting and merging](#posting-and-merging)): ask for it like any other. Report `pushed SHA` or `blocked` with the
+  reason. If the event is already fixed (an old build, a pushed fix), say so and do nothing else.
+
 ## Chunk sessions
 
 A `Chunk: KEY/N` line in your first prompt marks you as one chunk of a plan:

@@ -201,6 +201,28 @@ echo 'app#1 OPEN app#2 OPEN | ' > "$tmp/prs"; run --changes >/dev/null; echo 'ap
   echo 'app#2 OPEN app#1 OPEN CONFLICT | ' > "$tmp/prs" && run --changes | grep -q '^now: .*app#1 OPEN CONFLICT' &&
   echo 'app#2 MERGED app#1 OPEN | ' > "$tmp/prs" && run --changes | grep -q '^now: .*app#2 MERGED' &&
   rm "$tmp/prs" && run --changes >/dev/null || { echo "PR order woke --changes, or a state change didn't"; exit 1; }
+# PR events: a new failing CI, conflict or changes requested on an owned open PR is one line for the owner, once per
+# PR, event and pushed head SHA (a local commit isn't one); a peek records nothing; changes requested doesn't come
+# back on a push while it stays. With no pushed head the SHA is `-`.
+pev() { printf '  * app#1 %s @%s (ABC-12) → "fix it" 11111111' "$1" "${2:-$(git -C "$root/wt" rev-parse --short=12 '@{u}')}"; }
+commit() { git -C "$root/wt" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x; }
+push() { commit && git -C "$root/wt" push -q; }
+echo 'app#1 OPEN CI-FAILED | ' > "$tmp/prs"; out=$(run --changes)
+grep -qxF "$(pev ci-failed -)" <<<"$out" && git init -q --bare "$tmp/origin.git" && git -C "$root/wt" remote add origin "$tmp/origin.git" &&
+  git -C "$root/wt" push -q -u origin feature/ABC-12-fix && out=$(run --changes) && grep -qxF "$(pev ci-failed)" <<<"$out" &&
+  [ "$(run --changes)" = "no changes" ] && commit && [ "$(run --changes | grep -c '^  \* ')" = 0 ] && git -C "$root/wt" push -q &&
+  [ "$(SESSION_STATUS_PEEK=1 run --changes | sed -n '/^PR events/,$p')" = "$(printf 'PR events (send each owner the nudge, SKILL.md):\n%s' "$(pev ci-failed)")" ] &&
+  [ "$(run --changes | tail -1)" = "$(pev ci-failed)" ] && [ "$(run --changes)" = "no changes" ] &&
+  echo 'app#1 OPEN CI-FAILED !bob | ' > "$tmp/prs" && [ "$(run --changes | grep -c '^  \* app#1')" = 1 ] && push &&
+  [ "$(run --changes | grep '^  \* app#1')" = "$(pev ci-failed)" ] &&
+  echo 'app#1 MERGED CONFLICT | ' > "$tmp/prs" && ! run --changes | grep -q '^  \* app#1' &&
+  rm "$tmp/prs" && run --changes >/dev/null && git -C "$root/wt" reset -q --soft HEAD~2 && git -C "$root/wt" branch -q --unset-upstream &&
+  git -C "$root/wt" remote remove origin || { echo "PR events failed: $out"; exit 1; }
+# The first run with no record (an upgrade) only records, even as a watcher's peek; the next new event still fires.
+rm "$tmp/.cache/session-status/"*.pr-events; echo 'app#1 OPEN CONFLICT | ' > "$tmp/prs"
+[ "$(SESSION_STATUS_PEEK=1 run --changes | grep -c '^  \* app#1')" = 0 ] && echo 'app#1 OPEN CONFLICT CI-FAILED | ' > "$tmp/prs" &&
+  [ "$(run --changes | grep '^  \* app#1')" = "$(pev ci-failed -)" ] && rm "$tmp/prs" && run --changes >/dev/null ||
+  { echo "PR events' first run failed"; exit 1; }
 # A working <-> idle flip doesn't wake: working -> blocked (its turn is over) and back.
 echo working > "$tmp/state"; run --changes >/dev/null; echo blocked > "$tmp/state"
 [ "$(run --changes)" = "no changes" ] && echo working > "$tmp/state" && [ "$(run --changes)" = "no changes" ] || { echo "idle flip woke --changes"; exit 1; }
