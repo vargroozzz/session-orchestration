@@ -43,6 +43,7 @@ jobs:
           for p in plugins/*/; do
             echo "== $p"
             claude plugin validate "$p" || fail=1
-            claude plugin test "$p" || fail=1
+            # claude plugin test needs a hooks module; a plugin with shell hooks only has nothing for it to load.
+            if jq -e '.modules // empty' "$p/hooks/hooks.json" >/dev/null 2>&1; then claude plugin test "$p" || fail=1; else echo "no hooks module: plugin test skipped"; fi
           done
           exit $fail

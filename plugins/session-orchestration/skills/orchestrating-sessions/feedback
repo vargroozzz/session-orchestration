@@ -9,6 +9,8 @@
 # and layout, in this project's store: config feedback.project_dir (relative: to the project root), else
 # ${XDG_STATE_HOME:-~/.local/state}/session-orchestration/feedback-projects/<project root, encoded>. Never committed,
 # scrubbed or sent: the R&D run turns them into project fixes.
+# The case files themselves (add, seen, list, count, mark) are project-memory's `cases`, given the store and the
+# origin line; this script adds the plugin's scope, its footer, scrub and the ways a case goes upstream.
 #
 # Usage: feedback add CATEGORY TITLE --where PATH[:LINE] --found 'ROLE; STEP' --evidence TEXT [--suggested TEXT] [--new]
 #                     [--project]
@@ -36,89 +38,46 @@ TODAY=$(date +%F)
 LABEL=todo
 
 die() { echo "$*" >&2; exit 2; }
-field() { sed -n "s/^- $1: //p" "$2" | head -1; }
-title_of() { sed -n '1s/^# //p' "$1"; }
-cases() { find "${1:-$DIR}" -mindepth 2 -maxdepth 2 -name '*.md' 2>/dev/null | sort; }   # [STORE]
-open_cases() { cases "${1:-$DIR}" | while read -r f; do [ "$(field status "$f")" = open ] && echo "$f"; done; }
-# This project's store (the header says where).
-pdir() {
-  local r d c; r=$(find_root); d=$(config feedback.project_dir 2>/dev/null)
-  # A git worktree outside the project (no marker up from it): the main checkout's project, so its cases meet.
-  [ -x "$r/.claude/session-status-adapter" ] || [ -f "$r/.claude/coordination.local.json" ] ||
-    ! c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || [ "${c##*/}" != .git ] ||
-    [ "${c%/.git}" = "$r" ] || r=$(cd "${c%/.git}" && find_root)
-  case $d in
-    '') echo "${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/feedback-projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$r")" ;;
-    /*) echo "$d" ;; *) echo "$r/$d" ;;
-  esac
+# project-memory's cases keeps both stores; resolved only by the subcommands that use it.
+cases() {
+  [ -n "${CASES:-}" ] || CASES=$(pm_dir)/skills/project-memory/cases || exit 2
+  [ -x "$CASES" ] || die "$CASES is missing: update project-memory"
+  "$CASES" "$@"
 }
-seen_n() { field seen "$1" | tr ',' '\n' | grep -c .; }
-# Title words for the dedup: 4+ letters, without the ones nearly every case has (the plugin's own names).
-words() { tr 'A-Z' 'a-z' <<<"$1" | tr -cs 'a-z0-9' '\n' | awk 'length >= 4' |
-  grep -vxE 'session|sessions|status|plugin|when|with|that|this|from|does|into|than|them|they|have|after' | sort -u; }
+# This project's store: feedback.project_dir (relative to the root), else cases' default for the project.
+pdir() {
+  local d; d=$(config feedback.project_dir 2>/dev/null)
+  case $d in '') cases store ;; /*) echo "$d" ;; *) echo "$(cases root)/$d" ;; esac
+}
 repo() { jq -r '.repository // empty | if type == "object" then .url else . end' "$PLUGIN_JSON" 2>/dev/null |
   sed -E 's#^(git\+)?https?://github\.com/##; s#\.git$##; s#/$##' | grep -E '^[^/ ]+/[^/ ]+$'; }
 
 case ${1:-} in
 add)
-  cat=${2:-} title=${3:-}; shift 3 2>/dev/null || die "usage: feedback add CATEGORY TITLE --where … --found … --evidence …"
-  case $cat in bugfixes|features|refactorings) ;; *) die "category: bugfixes | features | refactorings" ;; esac
-  where= found= evidence= suggested= new= store=$DIR
-  while [ $# -gt 0 ]; do
-    case $1 in
-      --where) where=${2:-} ;; --found) found=${2:-} ;; --evidence) evidence=${2:-} ;; --suggested) suggested=${2:-} ;;
-      --new) new=1; shift; continue ;; --project) store=$(pdir); shift; continue ;; *) die "unknown argument: $1" ;;
-    esac
-    [ $# -ge 2 ] || die "$1 needs a value"; shift 2
-  done
-  [ -n "$title" ] && [ -n "$where" ] && [ -n "$found" ] && [ -n "$evidence" ] || die "title, --where, --found and --evidence are required"
-  [ "$(printf '%s\n' "$title" "$where" "$found" "$suggested" | wc -l | tr -d ' ')" = 4 ] || die "title, --where, --found and --suggested are one line each"
-  [ "$store" != "$DIR" ] || [[ $where != /* && $where != '~'* ]] ||
-    die "--where is a path in the plugin (skills/…/session-status:206), never a project's (project friction: --project)"
-  [ "$(grep -c . <<<"$evidence")" -le 3 ] || die "--evidence: at most 3 lines"
-  if [ -z "$new" ]; then
-    file=${where%%:*} tw=$(words "$title")
-    sim=$(open_cases "$store" | while read -r f; do
-      wf=$(field where "$f")
-      common=$(comm -12 <(words "$(title_of "$f")") <(echo "$tw") | grep -c .)
-      # The same place, the same file and a word in common, or two words in common.
-      { [ "$wf" = "$where" ] || { [ "${wf%%:*}" = "$file" ] && [ "$common" -ge 1 ]; } || [ "$common" -ge 2 ]; } && printf '  %s — %s\n' "$f" "$(title_of "$f")"
-    done)
-    [ -z "$sim" ] || { printf 'similar open cases:\n%s\nthe same case: feedback seen FILE; a new one: rerun with --new\n' "$sim"; exit 3; }
-  fi
-  slug=$(tr 'A-Z' 'a-z' <<<"$title" | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-50 | sed 's/-$//')
-  slug=${slug:-case}   # a title with no ASCII letters or digits
-  f=$store/$cat/$TODAY-$slug.md; n=2
-  while [ -e "$f" ]; do f=$store/$cat/$TODAY-$slug-$n.md; n=$((n + 1)); done
-  mkdir -p "$store/$cat" "$DIR" || die "can't create $store/$cat"
-  find_root >> "$DIR/.roots"   # scrub's deny list covers it even once its sessions are gone
-  { echo "# $title"
-    echo "- where: $where"
-    echo "- found while: $found"
-    if [ "$store" = "$DIR" ]; then echo "- plugin: $(jq -r .version "$PLUGIN_JSON")"; else echo "- project: $(find_root)"; fi
-    echo "- evidence: $(head -1 <<<"$evidence")"; tail -n +2 <<<"$evidence" | sed 's/^/  /'
-    [ -z "$suggested" ] || echo "suggested: $suggested"
-    echo "- seen: $TODAY"
-    echo "- status: open"
-  } > "$f"
-  echo "$f" ;;
-seen)
-  f=${2:-}; [ -f "$f" ] || die "usage: feedback seen FILE"
-  field seen "$f" | tr -d ' ' | tr ',' '\n' | grep -qxF "$TODAY" && exit 0
-  sed -i.bak -E "s/^(- seen: .*)$/\1, $TODAY/" "$f" && rm -f "$f.bak" ;;
+  shift; args=() store=$DIR
+  for a in "$@"; do [ "$a" = --project ] && store=$(pdir) || args+=("$a"); done
+  if [ "$store" = "$DIR" ]; then
+    # --where: a path in the plugin. The value follows the flag; a bad one is cases' to report.
+    prev=; for a in ${args[@]+"${args[@]}"}; do
+      [ "$prev" = --where ] && [[ $a == /* || $a == '~'* ]] &&
+        die "--where is a path in the plugin (skills/…/session-status:206), never a project's (project friction: --project)"
+      prev=$a
+    done
+    origin="plugin: $(jq -r .version "$PLUGIN_JSON")"
+  else origin="project: $(cases root)"; fi
+  out=$(cases --store "$store" --origin "$origin" add ${args[@]+"${args[@]}"}); rc=$?
+  [ -z "$out" ] || echo "${out//cases seen FILE/feedback seen FILE}"
+  # scrub's deny list covers this project even once its sessions are gone.
+  [ "$rc" != 0 ] || { mkdir -p "$DIR" && find_root >> "$DIR/.roots"; }
+  exit "$rc" ;;
+seen) [ -f "${2:-}" ] || die "usage: feedback seen FILE"; cases seen "$2" ;;
 list)
   shift; all= scope=
-  for a in "$@"; do case $a in --all) all=1 ;; --plugin|--project) scope=$a ;; *) die "usage: feedback list [--all] [--plugin|--project]" ;; esac; done
-  sel() { if [ -n "$all" ]; then cases "$1"; else open_cases "$1"; fi; }
-  { [ "$scope" = --project ] || sel "$DIR"; [ "$scope" = --plugin ] || sel "$(pdir)"; } | while read -r f; do
-    printf '%s\t%s\t%s\t%s\n' "$(seen_n "$f")" "$(field status "$f" | cut -d' ' -f1)" "$f" "$(title_of "$f")"
-  done | sort -t$'\t' -k1,1nr ;;
+  for a in "$@"; do case $a in --all) all=$a ;; --plugin|--project) scope=$a ;; *) die "usage: feedback list [--all] [--plugin|--project]" ;; esac; done
+  { [ "$scope" = --project ] || cases --store "$DIR" list $all; [ "$scope" = --plugin ] || cases --store "$(pdir)" list $all; } |
+    sort -t$'\t' -k1,1nr ;;
 count)
-  cnt() {
-    local n=0 m=0 f
-    while read -r f; do [ -n "$f" ] || continue; n=$((n + 1)); [ "$(seen_n "$f")" -lt 2 ] || m=$((m + 1)); done <<<"$(open_cases "$1")"
-    [ "$n" = 0 ] || echo "$n open ($m seen ≥2×)"
-  }
+  cnt() { cases --store "$1" count; }
   case ${2:-} in
     --plugin) cnt "$DIR" ;; --project) cnt "$(pdir)" ;;
     '') p=$(cnt "$DIR") q=$(cnt "$(pdir)"); [ -z "$q" ] || p="${p:+$p; }project: $q"; [ -z "$p" ] || echo "$p" ;;
@@ -135,13 +94,7 @@ footer)
   l=${p:+plugin feedback: $p — apply? (feedback.md)}
   [ -z "$q" ] || l="${l:+$l · }project feedback: $q, for the next R&D run"
   echo "$l" ;;
-mark)
-  f=${2:-}; [ -f "$f" ] || die "usage: feedback mark FILE sent URL | fixed WHAT | dropped"
-  case ${3:-} in sent) [ -n "${4:-}" ] || die "sent needs the URL"; s="sent $4" ;; fixed) [ -n "${4:-}" ] || die "fixed needs what changed"; s="fixed $4" ;;
-    dropped) s=dropped ;; *) die "sent URL | fixed WHAT | dropped" ;; esac
-  [[ $s != *$'\n'* ]] || die "one line"
-  # awk, not sed: a URL's # or & would be sed syntax.
-  S="- status: $s" awk '/^- status: / && !d { print ENVIRON["S"]; d = 1; next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;
+mark) [ -f "${2:-}" ] || die "usage: feedback mark FILE sent URL | fixed WHAT | dropped"; shift; cases mark "$@" ;;
 mode)
   m=$(config feedback.mode 2>/dev/null)
   if [ -n "$m" ] && [ "$m" != auto ]; then echo "$m"

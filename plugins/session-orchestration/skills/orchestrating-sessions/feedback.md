@@ -52,7 +52,8 @@ suggested: treat empty output as "none done"
 the project root; keep it out of git), else `${XDG_STATE_HOME:-~/.local/state}/session-orchestration/feedback-projects/<root, encoded>`,
 which worktree-isolated sessions can write. Its line is `- project: <root>` instead of `- plugin:`. Write it in the
 project's own terms: it is never scrubbed or sent. `--where` is the project file at fault, or the step's name.
-`feedback list`, `count` and `footer` show both scopes; `--plugin` or `--project` picks one.
+`feedback list`, `count` and `footer` show both scopes; `--plugin` or `--project` picks one. The project store is
+project-memory's `cases` (its `project-memory` skill), which a project without a coordinator uses directly.
 
 The R&D run groups the open project cases into patterns and proposes one project fix per pattern (a doc, script or
 setting); its followups session applies the approved ones and marks each case `fixed`. The apply flow below never

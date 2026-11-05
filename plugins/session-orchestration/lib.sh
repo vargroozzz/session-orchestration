@@ -18,6 +18,20 @@
 # with manifests and dependencies when a module needs another, or a catalog of third-party modules appears.
 LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
+# pm_dir: the project-memory plugin's folder (plugin.json lists it as a dependency): the sibling in a checkout of the
+# marketplace, else the installed copy of this account (installed_plugins.json) that has the scripts, this
+# marketplace's (session-orchestration) over another's. Fails with a message on stderr.
+pm_dir() {
+  local d f
+  [ -f "$LIB_DIR/../project-memory/.claude-plugin/plugin.json" ] && { (cd "$LIB_DIR/../project-memory" && pwd); return 0; }
+  f=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json
+  d=$(jq -r '.plugins | to_entries | map(select(.key | startswith("project-memory@")))
+      | sort_by(.key == "project-memory@session-orchestration") | .[].value[].installPath' "$f" 2>/dev/null |
+    while read -r p; do [ -x "$p/skills/project-memory/cases" ] && echo "$p"; done | tail -1)
+  [ -n "$d" ] && { echo "$d"; return 0; }
+  echo "project-memory isn't installed: claude plugin install project-memory@session-orchestration" >&2; return 1
+}
+
 # coord_file NAME: the nearest .claude/NAME up from the cwd, stopping after the first folder with its own adapter
 # (the project's root). A worktree below finds the main checkout's person file even when it has the repo file.
 coord_file() {

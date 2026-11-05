@@ -42,7 +42,9 @@ and swaps the index in with one `mv`, so no worker's append is lost.
   missing), then delete them from your memory once it's merged. Without shared mode they stay in yours.
 - **Graduation** moves an entry into the project doc that owns its situation once it has proved itself: old enough
   and still true, or cited by several sessions. The index states the project's thresholds and who runs it (e.g. the
-  weekly R&D run proposes, a followups session applies). It edits a doc, so it's a session's job, not yours.
+  weekly R&D run proposes, a followups session applies). It edits a doc, so it's a session's job, not yours: the
+  session runs project-memory's `graduate` skill (`/graduate`), which also resolves open project cases and
+  `.claude/tasks/` files.
 - **An R&D run only measures and proposes** (the `rnd` skill). When the user approves some of its proposals, start a
   fresh followups session for them (`claude --bg -n rnd-<N>-followups`, N the run's number; brief: that run's report
   in the replies folder plus the approved numbers, reporting in `replies/rnd-<N>-followups.md`). Never resume the

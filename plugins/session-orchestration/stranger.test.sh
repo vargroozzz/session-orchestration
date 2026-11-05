@@ -21,6 +21,10 @@ fail() { echo "FAIL $*"; fails=$((fails + 1)); }
 
 out=$T/out; : > "$out"
 { bash "$SS" --init; bash "$SS" --init --write; } >> "$out" 2>&1 || fail "setup: $(tail -3 "$out")"
+# Setup's project memory (project-memory's memory-init): the index with the coordinator's row, and its topic files.
+m=$(find "$T/repo" -name memory.md -not -path '*/memory/*' | head -1)
+[ -n "$m" ] && [ -f "${m%.md}/coordinator.md" ] && [ -f "${m%.md}/misc.md" ] && grep -qF '| `coordinator.md` | Acting as the coordinator' "$m" &&
+  grep -qF "projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$(pwd -P)")*/" "$m" || fail "setup's memory: ${m:-none} $(cat "$m" 2>/dev/null | head -30)"
 c=$(bash "$SS" --init --check 2>&1); echo "$c" >> "$out"
 [[ $c == configured* ]] || fail "check: $c"
 bash "$SS" >> "$out" 2>&1 || fail "status: $(tail -3 "$out")"

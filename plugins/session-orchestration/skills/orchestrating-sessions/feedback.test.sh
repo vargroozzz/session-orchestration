@@ -135,6 +135,18 @@ use peek press; use 'PROJ-1 /x' press; use fallback; use peek bogus
 [ "$(wc -l < "$U" | tr -d ' ')" = 2 ] && grep -q '"k":"press","what":"peek"}$' "$U" && grep -q '"k":"path","what":"fallback"}$' "$U" ||
   fail "usage log: $(cat "$U")"
 
+# pm_dir: the sibling in a checkout; else the installed copy installed_plugins.json names; else a failure.
+[ "$(bash -c '. "$0" && pm_dir' "$LIB")" = "$(cd "${LIB%/*}/../project-memory" && pwd)" ] || fail "pm_dir sibling"
+# Only a copy with the scripts counts, and this marketplace's beats another's (listed last or not).
+mkdir -p "$T/inst/so" "$T/inst/pm-1.0/skills/project-memory" "$T/inst/other/skills/project-memory" "$T/inst/old" "$HOME/.claude/plugins" &&
+  cp "$LIB" "$T/inst/so/lib.sh" && touch "$T/inst/pm-1.0/skills/project-memory/cases" "$T/inst/other/skills/project-memory/cases" &&
+  chmod +x "$T/inst/pm-1.0/skills/project-memory/cases" "$T/inst/other/skills/project-memory/cases"
+jq -nc --arg p "$T/inst/pm-1.0" --arg o "$T/inst/other" --arg x "$T/inst/old" \
+  '{plugins: {"project-memory@session-orchestration": [{installPath: "/gone"}, {installPath: $p}, {installPath: $x}], "project-memory@zz": [{installPath: $o}]}}' > "$HOME/.claude/plugins/installed_plugins.json"
+[ "$(bash -c '. "$0" && pm_dir' "$T/inst/so/lib.sh")" = "$T/inst/pm-1.0" ] || fail "pm_dir installed: $(bash -c '. "$0" && pm_dir' "$T/inst/so/lib.sh" 2>&1)"
+rm "$HOME/.claude/plugins/installed_plugins.json"
+bash -c '. "$0" && pm_dir' "$T/inst/so/lib.sh" 2>/dev/null && fail "pm_dir with no copy"
+
 # A messages module named only in the person-wide file still has its block dropped from the repo file.
 mkdir -p "$HOME/.config/session-orchestration" "$T/other-proj/.claude/coordination"
 echo '{"messages": "slack"}' > "$HOME/.config/session-orchestration/config.json"

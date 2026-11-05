@@ -101,9 +101,8 @@ schedules it.
      issues that recur; one proposal at most. `history read` against `unread` in `handoff.txt` says whether
      sessions that opened a history file did better: report it, and say when either side is under 5 entries.
 4. Run the project brief's own checks. If the project memory index has a graduation rule and the
-   brief has no graduation check of its own, read every topic file, apply the rule to each entry, and
-   list the ones to graduate (entry, target doc and section, why) and to drop, as one proposal outside
-   the 5 below. Either way, give memory's size (index plus topic files, bytes / 4) beside last run's,
+   brief has no graduation check of its own, run project-memory's `graduate` skill's Gather and Propose
+   steps (no Apply) and put its numbered list in as one proposal outside the 5 below. Either way, give memory's size (index plus topic files, bytes / 4) beside last run's,
    and put it in "Next run".
 5. For each of last run's ranked proposals, say whether it landed (look at the file or setting it
    targets) and whether its waste count moved. Its "Other tools" proposals: landed or not only.

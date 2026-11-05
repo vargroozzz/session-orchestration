@@ -160,6 +160,8 @@ if [ "$mode" = check ]; then
                 [ "$te" = plain ] || ( load_terminal ) 2>>"$wf"
                 [ "$a" != true ] || ( load_module features accounts list_accounts ) 2>>"$wf"
                 [ "$m" = none ] || ( load_module messages "$m" messages_notices ) 2>>"$wf"
+                # The dependency (memory, guards, cases): an install from before the split may not have it.
+                pm_dir >/dev/null 2>>"$wf"
                 sort -u "$wf"; rm -f "$wf"   # the warnings
                 [ "${#review[@]}" = 0 ] || echo "committed code new or changed upstream: ${review[*]%@*}: run setup to review it"
                 [ "$d" = true ] && d=on || d=off
@@ -378,7 +380,10 @@ at() { case $1 in /*) echo "$1" ;; *) echo "$root/$1" ;; esac; }
 # One GitHub repo with gh: the adapter that puts its PRs in the pane. Else the minimal one (pending, keys, links).
 adapter_tpl=session-status-adapter; [ -n "$gh" ] && [ "${#repos[@]}" = 1 ] && adapter_tpl=github-adapter
 [ -n "$adapter$noexec" ] || plan+=("$adapter_tpl	.claude/session-status-adapter")
-plan+=("pending.md	$orch/pending.md" "memory.md	$orch/memory.md" "memory-topic.md	$orch/memory/coordinator.md" "memory-topic.md	$orch/memory/misc.md")
+plan+=("pending.md	$orch/pending.md")
+# The project memory (index and topic files): project-memory's memory-init writes what's missing.
+meminit=$(pm_dir)/skills/project-memory/memory-init || exit 1
+mem_args=("$orch" --root "$root" --topic coordinator.md "coordinating sessions" "acting as the coordinator, or messaging, resuming or handing work to another session")
 [ -z "$review_brief" ] || plan+=("review-brief.md	$orch/review-brief.md")
 [ -z "$rnd_brief" ] || plan+=("rnd-brief.md	.claude/rnd-brief.md")
 todo=()
@@ -389,6 +394,7 @@ for p in ${plan[@]+"${plan[@]}"}; do
   todo+=("$p")
 done
 targets=$(for p in ${todo[@]+"${todo[@]}"}; do t=${p#*	}; [ -e "$(at "$t")" ] && t="$t (section appended)"; echo "$t"; done
+          (cd "$root" && "$meminit" "${mem_args[@]}" --dry-run)
           [ -d "$(at "$replies_dir")" ] || echo "$replies_dir/")
 
 if [ "$mode" = propose ]; then
@@ -426,7 +432,7 @@ fill() { # template, then flags: lines starting {{?FLAG}} kept when FLAG is set,
     fi
     out+=$line$'\n'
   done < "$tpl/$1"
-  for v in name orch replies_dir default_branch key_example key_re branch_pattern worktree_cmd enc_root urls repo_slug topic_title topic_trigger merge_cmd post_cmd done_rule; do
+  for v in name orch replies_dir default_branch key_example key_re branch_pattern worktree_cmd enc_root urls repo_slug merge_cmd post_cmd done_rule; do
     out=${out//"{{$v}}"/${!v:-}}
   done
   printf '%s' "$out"
@@ -434,11 +440,6 @@ fill() { # template, then flags: lines starting {{?FLAG}} kept when FLAG is set,
 wrote=()
 for p in ${todo[@]+"${todo[@]}"}; do
   t=${p%%	*} f=$(at "${p#*	}")
-  topic_title= topic_trigger=
-  case $f in
-    */memory/coordinator.md) topic_title="coordinating sessions" topic_trigger="acting as the coordinator, or messaging, resuming or handing work to another session" ;;
-    */memory/misc.md) topic_title="everything else" topic_trigger="nothing else fits" ;;
-  esac
   mkdir -p "$(dirname "$f")" || exit 1
   if [ "$t" = claude-section.md ] && [ -e "$f" ]; then
     { echo; fill "$t"; } >> "$f" || exit 1; wrote+=("${p#*	} (section appended)")
@@ -448,6 +449,8 @@ for p in ${todo[@]+"${todo[@]}"}; do
     wrote+=("${p#*	}")
   fi
 done
+memw=$(cd "$root" && "$meminit" "${mem_args[@]}") || exit 1
+while IFS= read -r l; do [ -z "$l" ] || wrote+=("$l"); done <<<"$memw"
 [ -d "$(at "$replies_dir")" ] || { mkdir -p "$(at "$replies_dir")" && wrote+=("$replies_dir/"); }
 # The config: each key only when unset (an existing value is the user's); approvals.delegate also when --delegate
 # turns it on.

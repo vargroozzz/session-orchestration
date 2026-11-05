@@ -126,7 +126,7 @@ says how to fix the command, or holds the line to send, `needs your approval: <e
 ## Asking the user
 
 Ask in plain text, never with the question box, and not through plan mode in a background session: while either
-waits, no message reaches you, so a coordinator can't relay the answer (a hook denies both in `--bg` sessions, and an
+waits, no message reaches you, so a coordinator can't relay the answer (project-memory's hook denies both in `--bg` sessions, and an
 `EnterWorktree` outside your start dir's `.claude/worktrees/`, with how to do it instead). Name the task key and the
 exact action (e.g. "force-push PROJ-4668?"). An approval is always its own ask, one action each, because a relay
 names one action. Other decisions that block you are listed one per line, each standing alone with its options and
@@ -186,22 +186,13 @@ in your report, and don't wait on it: the coordinator passes on the outcome.
 
 ## Project memory
 
-If the project's `CLAUDE.md` names a project memory file, read it when you start a task. It is usually an index: one
-line per topic file with a "read when" trigger. Read the topic files whose trigger matches your task, whole, and skip
-the rest; read a topic later when the work reaches it. (A project with a single flat file: read it whole.) When you
-learn something another task's session would need, append it to the matching topic file, one line per entry:
+If the project's `CLAUDE.md` names a project memory file, read it when you start a task, and append to it, as
+project-memory's `project-memory` skill says (the index's header repeats the essentials): read the index, then only
+the topic files whose "read when" trigger matches your task; append one line per decision or pitfall another task
+would need, `- <YYYY-MM-DD> <TASK>: <what, and why>`, to the matching topic (else the catch-all), never rewriting
+other lines. The user's "remember this" about the project goes there the same way. The coordinator prunes it, plus
+whoever the index names for graduation (`/graduate`).
 
-```
-- <YYYY-MM-DD> <TASK>: <the decision or pitfall, and why, in one line>
-```
-
-- Worth an entry: a decision the user made that outlives the task ("feature flags go in config, not env"), a pitfall
-  that cost time ("the dev DB resets at 02:00 UTC"), a convention found the hard way. Not: your task's progress
-  (that's the status report), or what a `CLAUDE.md` or doc already says.
-- No topic fits: use the catch-all topic the index names, not the index itself.
-- Append only, with `>>` or an edit at the end; never rewrite or delete other lines. Other sessions write it too, and
-  the coordinator prunes it (plus whoever the index names for graduation).
-- The user says "remember this" about the project: append it to the matching topic file the same way.
 - In a repo with shared coordination (a committed `.claude/coordination/`), also read its `memory.md` when it exists,
   and tag an entry true and useful to a collaborator on another machine `[team]` (`- <date> <TASK>: [team] …`); in
   doubt, leave it untagged. The coordinator's prune carries `[team]` lines into the repo by PR; never write to the

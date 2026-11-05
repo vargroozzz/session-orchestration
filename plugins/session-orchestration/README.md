@@ -9,8 +9,10 @@ What you get:
   and enforced by hooks, with a `reply` tool that finds the project's live coordinator;
 - a playbook for the coordinator, with a status command (`session-status`) and a pane beside the chat: tasks,
   their sessions, PRs and pending decisions, and approvals as buttons;
-- hooks that keep background sessions from stalling on a prompt nobody can answer, and that let a PR merge or a
-  comment post through only with your approval (see [Hooks](#hooks));
+- a hook that lets a PR merge or a comment post through only with your approval (see [Hooks](#hooks));
+- through [project-memory](../project-memory/README.md), installed with it: project memory read by every session,
+  a `/graduate` pass into the docs, project friction cases, deferred tasks, and guards that keep background
+  sessions from stalling on a prompt nobody can answer;
 - optional: a review inbox for proposed PR comments, an `rnd` skill that measures how efficiently the sessions work and scans similar tools for ideas (web searches with no personal details).
 
 **GitHub works out of the box** (tracker `github`, `gh`). Jira, Bitbucket and Forgejo need your own adapter and CLI
@@ -38,6 +40,12 @@ From the public marketplace:
 claude plugin marketplace add vargroozzz/session-orchestration
 claude plugin install session-orchestration@session-orchestration
 ```
+
+That installs [project-memory](../project-memory/README.md) too (a dependency). For memory, `/graduate` and the
+background guards without a coordinator, install only `project-memory@session-orchestration`.
+
+Updating an install from before project-memory split off: `claude plugin install project-memory@session-orchestration`
+too if `session-status --init --check` says it isn't installed (until then, background sessions have no guards).
 
 ## Start
 
@@ -74,12 +82,12 @@ Installing the plugin adds these to every Claude Code session, in every project:
   coordinated work: a project setup has written files for (an adapter, `.claude/coordination.local.json` or
   `.claude/coordination/`, in the folder or one above), or a session a coordinator started or messaged. Elsewhere,
   `claude -p` and `--bg` runs included, those commands run as without the plugin.
-- **Background-session guards** (`hooks/no-question-box.sh`, `hooks/bg-compound.sh`): in a `--bg` session, in any
-  project, the question box, plan mode, an `EnterWorktree` outside the session's own worktrees, and a compound Bash
-  command that would raise a permission dialog are denied with a hint (ask in plain text; split the command). A
-  prompt nobody sees would stall the session. Interactive sessions are left alone.
 - **Context watch** (`hooks/context-watch.sh`): asks a task or coordinator session to hand off before it compacts;
   a session that isn't coordinated gets nothing.
+
+The background-session guards (no question box, plan mode or stray `EnterWorktree` in a `--bg` session; a compound
+Bash command split instead of raising a prompt) come with [project-memory](../project-memory/README.md), which this
+plugin depends on.
 
 ## More
 
