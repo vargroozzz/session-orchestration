@@ -16,6 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./scrub-check.sh
       - name: shell suites
+        if: ${{ !cancelled() }}   # independent of the scrub: a failed scrub still shows these
         run: |
           git config --global user.email ci@example.com
           git config --global user.name ci
