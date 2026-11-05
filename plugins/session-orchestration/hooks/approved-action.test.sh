@@ -4,7 +4,8 @@
 set -euo pipefail; unset XDG_CONFIG_HOME   # the person-wide config.json: never the real one
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-root=$(mkdir -p "$tmp/proj" && cd "$tmp/proj" && pwd -P)
+root=$(mkdir -p "$tmp/proj/.claude" && cd "$tmp/proj" && pwd -P)
+echo '{}' > "$root/.claude/coordination.local.json"   # a coordinated project (the defaults); only those are gated
 cid=99999999-2222-3333-4444-555555555555
 home=$tmp/home; proj=$home/.claude/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root")
 mkdir -p "$proj" "$tmp/bin"
@@ -345,4 +346,30 @@ jq -nc --arg c "$m" '{session: "w2", key: "PROJ-15", command: $c}' > "$hd/b.json
 jq -nc '{session: "w1", key: "PROJ-15", command: "echo other"}' > "$hd/c.json"
 SID=w1 check "$m" allow "approved merge, also handed over"
 [ ! -e "$hd/a.json" ] && [ -e "$hd/b.json" ] && [ -e "$hd/c.json" ] || { echo "FAIL: handed command withdrawal: $(ls "$hd")"; exit 1; }
+# Not coordinated (no adapter or coordination file up from the cwd, nothing from a coordinator in the transcript):
+# no gate, attended or not. A coordinator's mark in the transcript gates it again.
+# gate CWD TRANSCRIPT SID COMMAND: the decision, "" for none. The cache goes under the test's HOME.
+gate() {
+  jq -nc --arg c "$4" --arg cwd "$1" --arg tp "$2" --arg s "$3" '{tool_input: {command: $c}, cwd: $cwd, transcript_path: $tp, session_id: $s}' |
+    (unset XDG_CACHE_HOME; cd "$tmp" && HOME=$home PATH=$tmp/bin:$PATH bash "$here/approved-action.sh") | jq -r '.hookSpecificOutput.permissionDecision // empty'
+}
+plain=$(mkdir -p "$tmp/plain/sub" && cd "$tmp/plain/sub" && pwd -P)
+typed "merge it" "$now" > "$tmp/solo.jsonl"
+for c in "gh pr merge 5 -R a/b" "$bb pr merge 272 --repo app"; do
+  got=$(gate "$plain" "$tmp/solo.jsonl" s1 "$c"); [ -z "$got" ] || { echo "FAIL uncoordinated '$c' gated: $got"; exit 1; }
+done
+# s1's no is cached with how far it read; a relay appended later is still found (only the new bytes are read).
+[ "$(cat "$home/.cache/session-status/coordinated/s1")" = "$(wc -c < "$tmp/solo.jsonl" | tr -d ' ')" ] || { echo "FAIL: no cached offset"; exit 1; }
+typed "Session task: PROJ-9" "$now" >> "$tmp/solo.jsonl"
+got=$(gate "$plain" "$tmp/solo.jsonl" s1 "gh pr merge 5 -R a/b")
+[ "$got" = deny ] || { echo "FAIL coordinator-started session outside a project: got $got"; exit 1; }
+[ "$(cat "$home/.cache/session-status/coordinated/s1")" = yes ] || { echo "FAIL: yes not cached"; exit 1; }
+# The coordinator's other starts: `Work on KEY`, a chunk.
+for p in "Work on PROJ-9: fix it" "Chunk: PROJ-9/2"; do
+  typed "$p" "$now" > "$tmp/w.jsonl"
+  got=$(gate "$plain" "$tmp/w.jsonl" "" "gh pr merge 5 -R a/b"); [ "$got" = deny ] || { echo "FAIL '$p' start ungated: got $got"; exit 1; }
+done
+# A deleted worktree below a coordinated root (the cwd no longer exists) is still coordinated.
+got=$(gate "$root/.claude/worktrees/gone" "$tmp/solo-plain.jsonl" "" "gh pr merge 5 -R a/b")
+[ "$got" = deny ] || { echo "FAIL: a deleted worktree's cwd failed open: got $got"; exit 1; }
 echo ok

@@ -38,7 +38,9 @@ by a parent. Configured adds:
   (no tracker call) and prints a numbered proposal: task keys, code host, the files it would write and the config,
   approvals, worktrees. Show it to the user as one plain-text round, unchanged, and wait. Never write before a
   "yes". The round always holds two questions, each with the detected answer as the default:
-  1. **Tracker**: `none` (a task is a short name), `github` (issues and PRs through `gh`), `jira`.
+  1. **Tracker**: `none` (a task is a short name), `github` (issues and PRs through `gh`), `jira` (task keys only:
+     the adapter setup writes, GitHub's for code on GitHub with `gh` (PRs, CI) or else a stub, makes no Jira calls,
+     so the board shows no ticket status until the user adds those for their own Jira CLI; status-reference.md, the adapter contract). Say so when proposing `jira`.
   2. **Approvals**: may a coordinator's message stand in for the user's in task sessions? Default **no**.
 - **On "yes"**: `session-status --init --write`, plus `--delegate` only if the user said so (delegation is theirs to
   give: it makes the coordinator's messages count as theirs), and each correction as `KEY=VALUE` (the names on the
@@ -99,7 +101,7 @@ Both are excluded from git, the repo file until shared mode commits it. `session
 
 | Key | Values | Default |
 |---|---|---|
-| `tracker` | `none` \| `github` \| `jira` | detected at setup: `jira` for Jira-style keys, `github` for a GitHub remote with `#123` refs, else `none` |
+| `tracker` | `none` \| `github` \| `jira` (keys only; ticket status needs your own adapter) | detected at setup: `jira` for Jira-style keys, `github` for a GitHub remote with `#123` refs, else `none` |
 | `host` | `github` \| `bitbucket` \| `forgejo` \| `none` | from the `origin` remote |
 | `key_pattern` | an extended regex matching a task key | not written by setup (your override); unset: the adapter's `key-pattern`, else `[A-Z][A-Z0-9]+-[0-9]+` |
 | `approvals.delegate` | `true` \| `false` | `false` |

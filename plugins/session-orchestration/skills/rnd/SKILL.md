@@ -151,7 +151,8 @@ coordinator message is sent or skipped for a stated reason.
 ## Scheduling the weekly run
 
 `rnd-weekly`, next to this file, starts `claude --bg -n rnd-weekly-<date>` in a project root with this
-skill as its brief, and logs to `~/Library/Logs/rnd-weekly.log` (`RND_LOG` overrides). It needs the
+skill as its brief, and logs to `rnd-weekly.log` in `~/Library/Logs` on macOS, else in
+`${XDG_STATE_HOME:-~/.local/state}` (`RND_LOG` overrides). It needs the
 plugin enabled in the account it runs under, and WebSearch and WebFetch allowed there for the "Other tools" step. `rnd-weekly <root> --dry-run` prints the command without
 starting it. Point the schedule at a stable checkout of the plugin, not the versioned install cache.
 

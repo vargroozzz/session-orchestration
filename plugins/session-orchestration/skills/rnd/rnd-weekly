@@ -1,11 +1,14 @@
 #!/bin/bash
 # Weekly R&D run launcher for cron or launchd: starts a background session in a project root that follows the
 # rnd skill (SKILL.md beside this file, plus the project's .claude/rnd-brief.md). Edit those, not the schedule line.
-# usage: rnd-weekly PROJECT_ROOT [--dry-run]     log: $RND_LOG (default ~/Library/Logs/rnd-weekly.log)
+# usage: rnd-weekly PROJECT_ROOT [--dry-run]     log: $RND_LOG (default rnd-weekly.log in ~/Library/Logs on macOS,
+# else in ${XDG_STATE_HOME:-~/.local/state})
+# PATH: where claude is installed (cron's PATH is minimal); put anything else the session needs in the schedule line.
 set -euo pipefail
-export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 root=${1:?usage: rnd-weekly PROJECT_ROOT [--dry-run]}
-LOG=${RND_LOG:-$HOME/Library/Logs/rnd-weekly.log}
+if [ "$(uname)" = Darwin ]; then logdir=$HOME/Library/Logs; else logdir=${XDG_STATE_HOME:-$HOME/.local/state}; fi
+LOG=${RND_LOG:-$logdir/rnd-weekly.log}
 mkdir -p "$(dirname "$LOG")"
 cd "$root" 2>/dev/null || { echo "$(date '+%F %T') no project root $root" >> "$LOG"; exit 1; }
 cmd=(claude --bg -n "rnd-weekly-$(date +%F)" "Session task: weekly R&D run. Use the session-orchestration:rnd skill and follow it.")

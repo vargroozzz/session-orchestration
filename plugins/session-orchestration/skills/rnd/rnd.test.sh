@@ -361,9 +361,12 @@ rnd search hunter2xyz 7 >/dev/null && fail "search: a masked secret isn't found"
   fail "search: a session's second account" "$(rnd search "other account" 7)"
 rm -r "$a/eeeeeeee-5555.jsonl" "$a/ffffffff-6666.jsonl" "$home/.claude-other/projects/-x-proj"
 
-printf '#!/bin/sh\necho "$@" > %q\n' "$tmp/claude.args" > "$tmp/bin/claude"; chmod +x "$tmp/bin/claude"
+# The stub in ~/.local/bin (HOME=$tmp below): rnd-weekly puts that first on its PATH, so the real claude never runs.
+mkdir -p "$tmp/.local/bin"
+printf '#!/bin/sh\necho "$@" > %q\n' "$tmp/claude.args" > "$tmp/.local/bin/claude"; chmod +x "$tmp/.local/bin/claude"
 out=$(HOME=$tmp RND_LOG=$tmp/log "$here/rnd-weekly" "$tmp" --dry-run)
-grep -q 'claude --bg -n rnd-weekly-' <<<"$out" && [ ! -e "$tmp/claude.args" ] || fail "rnd-weekly --dry-run starts nothing" "$out"
+grep -q 'claude --bg -n rnd-weekly-' <<<"$out" && grep -qx "$tmp/.local/bin/claude" <<<"$out" && [ ! -e "$tmp/claude.args" ] ||
+  fail "rnd-weekly --dry-run starts nothing, and finds the stub" "$out"
 HOME=$tmp RND_LOG=$tmp/log "$here/rnd-weekly" "$tmp"
 grep -q 'session-orchestration:rnd' "$tmp/claude.args" && grep -q "start in $tmp" "$tmp/log" || fail "rnd-weekly starts the run" "$(cat "$tmp/log")"
 HOME=$tmp RND_LOG=$tmp/log "$here/rnd-weekly" "$tmp/nope" && fail "rnd-weekly: a missing root fails" ""

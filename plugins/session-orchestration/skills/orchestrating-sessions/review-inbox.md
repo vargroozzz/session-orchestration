@@ -76,7 +76,10 @@ A fresh session, started for the job (`claude --bg 'Post the approved review-inb
    comments, adds the AI disclosure marker when `~/.claude/ai-disclosure.on` exists, and keeps a
    ledger (`review-inbox-posted.tsv` in the account's `CLAUDE_CONFIG_DIR`, one line per row id) so no row is posted twice: not
    by a re-run, nor after the user undoes and re-approves a row already posted. One run at a time
-   (a lock next to the ledger).
+   (a lock next to the ledger). It posts through the host CLI command in `BITBUCKETDC` (Bitbucket rows) or
+   `FORGEJO` (Forgejo rows), with no default: the user sets it once in the account's `settings.json` →
+   `env` (e.g. `"BITBUCKETDC": "bitbucketdc-cli"`, or an `npx …` command), which every session inherits.
+   Unset, each row prints `skipped <id>: set BITBUCKETDC …`: report that line, don't set it yourself.
 3. For each `posted` line, `ArtifactData` `update` that row with `commentId` and `postedAt`,
    `if_version` from step 1. A `failed` row stays in the ledger as `unknown`, since the CLI may have
    failed after the host took the comment: report it. To retry, the PR must have no such comment;

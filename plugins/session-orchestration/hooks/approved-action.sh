@@ -15,7 +15,8 @@
 # normal permission dialog, same text) in an interactive session: CLAUDE_CODE_SESSION_ATTENDED=1, set in every
 # hook's env. A `--bg` session gets 0 even while `claude attach`ed (tested on 2.1.296: the binary forces 0 for
 # CLAUDE_CODE_SESSION_KIND=bg), so it is denied; unset or any other value is denied too. Fails closed: any error
-# here exits 2, which blocks (hooks.json also sets onFailure: block, for a timeout). Every other command exits 0 at once, with no decision.
+# here exits 2, which blocks (hooks.json also sets onFailure: block, for a timeout). Every other command exits 0 at once, with no decision,
+# and so does every command outside coordinated work (coordinated(), below).
 # gh counts as a call where a command starts; its words must be plain (no variable, $(…), alias or xargs), or it is
 # denied (asked, when attended). A post or merge it can't find as a call (inside bash -c, a heredoc a shell reads) is
 # denied too: post from a file. A command that only mentions one (a grep pattern, a commit message, a prompt, a
@@ -48,6 +49,32 @@ ask_for() {
 cmd=$(jq -r '.tool_input.command // ""' <<<"$input") || exit 1
 raw=$cmd sid=$(jq -r '.session_id // ""' <<<"$input") || exit 1
 cwd=$(jq -r '.cwd // ""' <<<"$input") tp=$(jq -r '.transcript_path // ""' <<<"$input") || exit 1
+# Only coordinated work is gated: a project set up for it (an adapter or a coordination file, the cwd or a folder
+# above: worktrees sit below the root), or a session a coordinator started or messaged (its transcript). Anywhere
+# else, gh and the CLIs run as without the plugin, `claude -p` and --bg automation included.
+# The folder test is wider than lib.sh's find_root/shared_dir (any adapter, person file or committed folder), so the
+# gate covers at least what they call coordinated. It walks the cwd as a string: a deleted worktree still counts.
+# The transcript markers: the first prompts a coordinator starts sessions with (orchestrating-sessions, handover), a
+# relay, a message. A yes is cached per session; a no records how far it read, so the next call reads only what's new.
+coordinated() {
+  local d=${cwd:-$PWD} c n=0 sz
+  while [ "${d:-/}" != / ] && [ "$d" != . ]; do
+    [ -e "$d/.claude/session-status-adapter" ] || [ -e "$d/.claude/coordination.local.json" ] || [ -d "$d/.claude/coordination" ] && return 0
+    d=$(dirname "$d")
+  done
+  [ -f "$tp" ] || return 1
+  [[ $sid =~ ^[A-Za-z0-9_-]+$ ]] && c=${XDG_CACHE_HOME:-$HOME/.cache}/session-status/coordinated/$sid && mkdir -p "${c%/*}" 2>/dev/null || c=
+  [ -n "$c" ] && read -r n 2>/dev/null < "$c"; [ "$n" = yes ] && return 0; [[ $n =~ ^[0-9]+$ ]] || n=0
+  sz=$(( $(wc -c < "$tp") )); [ "$n" -le "$sz" ] || n=0
+  # From 64 bytes back: a marker the last read cut in two is read whole.
+  # (Not a pipe: grep -q stops early, and pipefail would read tail's SIGPIPE as no match.)
+  if LC_ALL=C grep -qE '"(Work on |Chunk: )|Session task: |Act as a coordinator|APPROVAL relayed from the user|<cross-session-message from=' \
+    < <(tail -c +"$(( n > 64 ? n - 63 : 1 ))" "$tp"); then
+    [ -z "$c" ] || echo yes > "$c"; return 0
+  fi
+  [ -z "$c" ] || echo "$sz" > "$c"; return 1
+}
+coordinated || pass
 # Text given to a command is text, not calls, only when every command in sight is one that never runs what it's
 # given and the call writes no file (no > but to /dev/null or &N; a file written could be run by what comes next:
 # a git hook, a config) and sets no variable (GIT_EDITOR=bash git commit, X=bash; …, printf -v). An allowlist, so

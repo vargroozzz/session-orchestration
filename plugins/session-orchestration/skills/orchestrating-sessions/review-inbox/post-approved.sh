@@ -13,7 +13,8 @@
 # posting it twice.
 # The host is the row's: its prUrl names forgejo or bitbucket, else REVIEW_INBOX_HOST, else the project's config host.
 # Env: REVIEW_INBOX_HOST (bitbucket | forgejo; default the project's config host, from the cwd), BITBUCKETDC /
-# FORGEJO (the CLI command; default npx -y @first/bitbucketdc-cli@latest / @first/forgejo-cli@latest), REVIEW_INBOX_LEDGER
+# FORGEJO (the CLI command, required for that host's rows: no default, so nothing is fetched and run unasked),
+# REVIEW_INBOX_LEDGER
 # (default review-inbox-posted.tsv in the account's ${CLAUDE_CONFIG_DIR:-~/.claude}: row ids are unique only
 # within one account's inbox), AI_DISCLOSURE (default ~/.claude/ai-disclosure.on).
 set -uo pipefail
@@ -21,8 +22,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 dir=${1:-}; [ -d "$dir" ] || { echo "usage: post-approved.sh <dir>" >&2; exit 2; }
 [ -d "$dir/findings" ] && dir=$dir/findings
 dhost=${REVIEW_INBOX_HOST:-$(. "$here/../../../lib.sh" && config host 2>/dev/null)}
-read -ra bbcli <<<"${BITBUCKETDC:-npx -y @first/bitbucketdc-cli@latest}"
-read -ra fjcli <<<"${FORGEJO:-npx -y @first/forgejo-cli@latest}"
+read -ra bbcli <<<"${BITBUCKETDC:-}"
+read -ra fjcli <<<"${FORGEJO:-}"
 ledger=${REVIEW_INBOX_LEDGER:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/review-inbox-posted.tsv}
 switch=${AI_DISCLOSURE:-$HOME/.claude/ai-disclosure.on}
 touch "$ledger"
@@ -45,9 +46,11 @@ for f in "$dir"/*.json; do
   fi
   case $(jq -r '.prUrl // ""' "$f") in *forgejo*) host=forgejo ;; *bitbucket*) host=bitbucket ;; *) host=$dhost ;; esac
   case $host in
-    bitbucket) cli=("${bbcli[@]}") ;; forgejo) cli=("${fjcli[@]}") ;;
+    bitbucket) var=BITBUCKETDC n=${#bbcli[@]} ;; forgejo) var=FORGEJO n=${#fjcli[@]} ;;
     *) echo "skipped $id: the review inbox posts to bitbucket or forgejo, not host=${host:-(none)}"; continue ;;
   esac
+  [ "$n" -gt 0 ] || { echo "skipped $id: set $var to your $host CLI command (no default)"; continue; }
+  if [ "$host" = forgejo ]; then cli=("${fjcli[@]}"); else cli=("${bbcli[@]}"); fi
   file=$(jq -r '.file // ""' "$f"); line=$(jq -r '.line // "" | if type == "number" then floor else . end' "$f")
   if [ "$host" = forgejo ]; then
     [ -z "$file" ] || [ -n "$line" ] ||

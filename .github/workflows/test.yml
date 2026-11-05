@@ -7,6 +7,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # The private deny pattern scrub-check.sh and stranger.test.sh read (kept out of the repo). A fork's PR gets no
+    # secrets: there alone scrub-check skips; anywhere else a missing secret fails it.
+    env:
+      SCRUB_DENY: ${{ secrets.SCRUB_DENY }}
+      SCRUB_FORK_PR: ${{ github.event.pull_request.head.repo.fork }}
     steps:
       - uses: actions/checkout@v4
       - run: ./scrub-check.sh
@@ -19,4 +24,25 @@ jobs:
             echo "== $t"
             bash "$t" || fail=1
           done < <(git ls-files '*.test.sh')
+          exit $fail
+  # The hooks modules' tests and the manifests, as `claude plugin test` and `validate` run them locally (no account
+  # needed). Not tsc: its types are written by Claude Code when a session loads the plugin, so they aren't in a
+  # checkout (README, Contributing).
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code@2.1.318
+      - run: claude plugin validate .
+      - name: validate and test each plugin
+        run: |
+          fail=0
+          for p in plugins/*/; do
+            echo "== $p"
+            claude plugin validate "$p" || fail=1
+            claude plugin test "$p" || fail=1
+          done
           exit $fail

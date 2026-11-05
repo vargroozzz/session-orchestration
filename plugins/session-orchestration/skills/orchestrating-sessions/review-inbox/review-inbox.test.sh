@@ -113,4 +113,10 @@ grep -qx 'skipped nohost: the review inbox posts to bitbucket or forgejo, not ho
   [ "$(grep -c '^posted' <<<"$out")" = 2 ] || { echo "FAIL per-row host: $out"; exit 1; }
 grep -qF 'pr|comment|create|7|--repo|TEST/test|--body-file|-|--path|src/a.ts|--line|9|--line-type|REMOVED|--file-type|FROM|' "$tmp/calls" &&
   grep -qF 'pr|comment|create|7|--project|TEST|--repo|test|' "$tmp/calls" || { echo "FAIL per-row host args"; cat "$tmp/calls"; exit 1; }
+# No CLI set for the host: skipped with how to set it, nothing fetched or run, nothing ledgered.
+: > "$tmp/calls"
+out=$(env -u FORGEJO -u BITBUCKETDC REVIEW_INBOX_HOST=github REVIEW_INBOX_LEDGER=$tmp/ledger4 bash "$here/post-approved.sh" "$tmp/rows" | sort)
+grep -qx 'skipped onfj: set FORGEJO to your forgejo CLI command (no default)' <<<"$out" &&
+  grep -qx 'skipped onbb: set BITBUCKETDC to your bitbucket CLI command (no default)' <<<"$out" &&
+  [ ! -s "$tmp/calls" ] && [ ! -s "$tmp/ledger4" ] || { echo "FAIL unset CLI: $out"; exit 1; }
 echo ok
