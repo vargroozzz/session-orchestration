@@ -11,6 +11,12 @@
       "description": "Coordinate parallel Claude Code sessions: a reply protocol for sessions that receive cross-session messages, and a playbook for the coordinator.",
       "source": "./plugins/session-orchestration",
       "category": "productivity"
+    },
+    {
+      "name": "project-memory",
+      "description": "Project memory for Claude Code sessions, with or without a coordinator: an index of topic files, a /graduate pass into the docs, project friction cases, deferred tasks, and background-session guards.",
+      "source": "./plugins/project-memory",
+      "category": "productivity"
     }
   ]
 }

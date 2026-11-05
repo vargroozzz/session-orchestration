@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Sets up a project memory in DIR: the index DIR/memory.md and one topic file per --topic under DIR/memory/, plus the
+# catch-all misc.md. Writes only files that are missing (an existing memory is the project's) and prints each path it
+# wrote, as DIR/…; --dry-run prints what it would write and writes nothing. A topic file new to an existing index
+# gets its row added to the index's table (printed as "DIR/memory.md (row: FILE)").
+# usage: memory-init DIR [--dry-run] [--root PATH] [--topic FILE TITLE TRIGGER]…
+#   e.g. memory-init docs/claude --topic deploys.md 'deploys' 'deploying or touching CI'
+# The index's graduation count greps the transcripts of --root (default: the git main checkout, else the cwd).
+set -uo pipefail
+shopt -u patsub_replacement 2>/dev/null || true   # bash 5.2+: an & in a replacement would expand to the match
+here=$(cd "$(dirname "$0")" && pwd)
+die() { echo "$*" >&2; exit 2; }
+dir=${1:-}; [ -n "$dir" ] && [[ $dir != -* ]] || die "usage: memory-init DIR [--dry-run] [--topic FILE TITLE TRIGGER]…"
+shift; dir=${dir%/}
+dry= root= topics=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --dry-run) dry=1; shift ;;
+    --root) [ $# -ge 2 ] && [ -n "$2" ] || die "--root PATH"; root=$2; shift 2 ;;
+    --topic) [ $# -ge 4 ] && [[ $2 =~ ^[A-Za-z0-9._-]+\.md$ ]] && [ "$2" != misc.md ] && [ -n "$3" ] && [ -n "$4" ] ||
+               die "--topic FILE TITLE TRIGGER: FILE a plain name ending .md, not misc.md (always there)"
+             topics+=("$2" "$3" "$4"); shift 4 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+topics+=(misc.md "everything else" "nothing else fits")
+[ -n "$root" ] || { c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [ "${c##*/}" = .git ] && root=${c%/.git} || root=$(pwd -P); }
+enc_root=$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root")
+put() { # FILE: stdin into it, when missing
+  [ ! -e "$1" ] || { cat >/dev/null; return 0; }
+  echo "$1"; [ -n "$dry" ] && { cat >/dev/null; return 0; }
+  mkdir -p "$(dirname "$1")" && cat > "$1" || die "can't write $1"
+}
+row() { # I: the index row for topic I
+  local t=${topics[$1+2]}; t=$(printf %s "${t:0:1}" | tr a-z A-Z)${t:1}   # (not ${t^}: macOS has bash 3.2)
+  [ "${topics[$1]}" != misc.md ] || t="Nothing above fits"
+  printf '| `%s` | %s |' "${topics[$1]}" "$t"
+}
+rows=
+for ((i = 0; i < ${#topics[@]}; i += 3)); do rows+=$(row $i)$'\n'; done
+had_idx=; [ ! -e "$dir/memory.md" ] || had_idx=1
+idx=$(<"$here/templates/memory.md")
+idx=${idx//"{{enc_root}}"/$enc_root}; idx=${idx//"{{topic_rows}}"$'\n'/$rows}
+printf '%s\n' "$idx" | put "$dir/memory.md"
+tpl=$(<"$here/templates/memory-topic.md")
+for ((i = 0; i < ${#topics[@]}; i += 3)); do
+  f=$dir/memory/${topics[i]}; new=; [ -e "$f" ] || new=1
+  s=${tpl//"{{topic_title}}"/${topics[i+1]}}; printf '%s\n' "${s//"{{topic_trigger}}"/${topics[i+2]}}" | put "$f"
+  # An existing index: a new topic gets its row after the table's last row (else at the end), so sessions read it.
+  [ -n "$had_idx" ] && [ -n "$new" ] && ! grep -qF "\`${topics[i]}\`" "$dir/memory.md" || continue
+  echo "$dir/memory.md (row: ${topics[i]})"; [ -z "$dry" ] || continue
+  r=$(row $i); tmp=$dir/memory.md.$$
+  R=$r awk '{ l[NR] = $0; if ($0 ~ /^\|/) last = NR }   # (ENVIRON, not -v: -v would read \ escapes in the row)
+    END { r = ENVIRON["R"]; for (i = 1; i <= NR; i++) { print l[i]; if (i == last) print r }; if (!last) print r }' \
+    "$dir/memory.md" > "$tmp" &&
+    mv "$tmp" "$dir/memory.md" || { rm -f "$tmp"; die "can't add the row to $dir/memory.md"; }
+done

@@ -1,0 +1,8 @@
+{
+  "name": "project-memory",
+  "version": "0.1.0",
+  "description": "What one Claude Code session learns, the next one knows: a project memory index with topic files, a /graduate pass that moves proven entries into the docs, project friction cases and deferred tasks, and guards that keep background sessions from waiting on a dialog nobody sees.",
+  "author": { "name": "vargroozzz" },
+  "license": "MIT",
+  "repository": "https://github.com/vargroozzz/session-orchestration"
+}

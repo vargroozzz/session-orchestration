@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Project cases: friction from the project itself (its hosts, sign-ins, docs, scripts) that a session hit and
+# carried on past, kept until a fix lands (the graduate skill turns them into doc or script fixes). Never committed
+# or sent anywhere.
+#
+# A case: STORE/<category>/YYYY-MM-DD-<slug>.md, category bugfixes | features | refactorings: a title, then where,
+# found while, the origin line, evidence, an optional suggested line, seen and status (SKILL.md shows one).
+# STORE: --store DIR, else ${XDG_STATE_HOME:-~/.local/state}/session-orchestration/feedback-projects/<root, encoded>,
+# the path session-orchestration has always used, so its cases and these are one list. The root: the nearest folder
+# up with session-orchestration's .claude/coordination.local.json or an executable .claude/session-status-adapter,
+# else the git main checkout (a worktree's cases meet its checkout's), else the cwd.
+# The origin line: --origin TEXT (`- TEXT`), else `- project: <root>`.
+#
+# Usage: cases [--store DIR] [--origin TEXT] add CATEGORY TITLE --where WHERE --found 'ROLE; STEP' --evidence TEXT
+#                     [--suggested TEXT] [--new]
+#                       writes a case and prints its path. Open cases with the same file in `where` or two title words
+#                       in common are printed instead (exit 3): add a date to one with `cases seen FILE`, or rerun
+#                       with --new.
+#        cases seen FILE      today's date added to its `seen:` line (a duplicate counts there, not as a new file)
+#        cases [--store DIR] list [--all]   open cases (--all: every case): times seen, status, path, title (tabs),
+#                                most seen first
+#        cases [--store DIR] count   `N open (M seen ≥2×)`, nothing when none are open
+#        cases mark FILE sent URL | fixed WHAT | dropped
+#        cases [--store DIR] store   the store's path
+#        cases root                  the project root the default store is named after
+set -uo pipefail
+TODAY=$(date +%F)
+die() { echo "$*" >&2; exit 2; }
+marked() { # DIR: the nearest folder up from DIR that session-orchestration set up (an adapter or its config)
+  local d=$1
+  while [ "$d" != / ]; do
+    { [ -x "$d/.claude/session-status-adapter" ] || [ -f "$d/.claude/coordination.local.json" ]; } && { echo "$d"; return 0; }
+    d=$(dirname "$d")
+  done
+  return 1
+}
+# The project: a set-up folder up from here; else, in a linked git worktree, the main checkout's (so a worktree's
+# cases meet its checkout's); else the git top level; else here.
+root() {
+  local c t
+  marked "$(pwd -P)" && return
+  t=$(git rev-parse --show-toplevel 2>/dev/null)
+  c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [ "${c##*/}" = .git ] && [ "${c%/.git}" != "$t" ] &&
+    { marked "${c%/.git}" || echo "${c%/.git}"; return; }
+  [ -z "$t" ] || { echo "$t"; return; }
+  pwd -P
+}
+STORE= ORIGIN=
+while :; do
+  case ${1:-} in
+    --store) [ -n "${2:-}" ] || die "--store needs a folder"; STORE=$2; shift 2 ;;
+    --origin) [ -n "${2:-}" ] || die "--origin needs a value"; ORIGIN=$2; shift 2 ;;
+    *) break ;;
+  esac
+done
+[ -n "$STORE" ] || STORE=${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/feedback-projects/$(root | sed 's/[^A-Za-z0-9]/-/g')
+
+field() { sed -n "s/^- $1: //p" "$2" | head -1; }
+title_of() { sed -n '1s/^# //p' "$1"; }
+all_cases() { find "$STORE" -mindepth 2 -maxdepth 2 -name '*.md' 2>/dev/null | sort; }
+open_cases() { all_cases | while read -r f; do [ "$(field status "$f")" = open ] && echo "$f"; done; }
+seen_n() { field seen "$1" | tr ',' '\n' | grep -c .; }
+# Title words for the dedup: 4+ letters, without the ones nearly every case has.
+words() { tr 'A-Z' 'a-z' <<<"$1" | tr -cs 'a-z0-9' '\n' | awk 'length >= 4' |
+  grep -vxE 'session|sessions|status|plugin|when|with|that|this|from|does|into|than|them|they|have|after' | sort -u; }
+
+case ${1:-} in
+add)
+  cat=${2:-} title=${3:-}; shift 3 2>/dev/null || die "usage: cases add CATEGORY TITLE --where … --found … --evidence …"
+  case $cat in bugfixes|features|refactorings) ;; *) die "category: bugfixes | features | refactorings" ;; esac
+  where= found= evidence= suggested= new=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --where) where=${2:-} ;; --found) found=${2:-} ;; --evidence) evidence=${2:-} ;; --suggested) suggested=${2:-} ;;
+      --new) new=1; shift; continue ;; *) die "unknown argument: $1" ;;
+    esac
+    [ $# -ge 2 ] || die "$1 needs a value"; shift 2
+  done
+  [ -n "$title" ] && [ -n "$where" ] && [ -n "$found" ] && [ -n "$evidence" ] || die "title, --where, --found and --evidence are required"
+  [ "$(printf '%s\n' "$title" "$where" "$found" "$suggested" "$ORIGIN" | wc -l | tr -d ' ')" = 5 ] || die "title, --where, --found, --suggested and --origin are one line each"
+  [ "$(grep -c . <<<"$evidence")" -le 3 ] || die "--evidence: at most 3 lines"
+  if [ -z "$new" ]; then
+    file=${where%%:*} tw=$(words "$title")
+    sim=$(open_cases | while read -r f; do
+      wf=$(field where "$f")
+      common=$(comm -12 <(words "$(title_of "$f")") <(echo "$tw") | grep -c .)
+      # The same place, the same file and a word in common, or two words in common.
+      { [ "$wf" = "$where" ] || { [ "${wf%%:*}" = "$file" ] && [ "$common" -ge 1 ]; } || [ "$common" -ge 2 ]; } && printf '  %s — %s\n' "$f" "$(title_of "$f")"
+    done)
+    [ -z "$sim" ] || { printf 'similar open cases:\n%s\nthe same case: cases seen FILE; a new one: rerun with --new\n' "$sim"; exit 3; }
+  fi
+  slug=$(tr 'A-Z' 'a-z' <<<"$title" | tr -cs 'a-z0-9' '-' | sed 's/^-//; s/-$//' | cut -c1-50 | sed 's/-$//')
+  slug=${slug:-case}   # a title with no ASCII letters or digits
+  f=$STORE/$cat/$TODAY-$slug.md; n=2
+  while [ -e "$f" ]; do f=$STORE/$cat/$TODAY-$slug-$n.md; n=$((n + 1)); done
+  mkdir -p "$STORE/$cat" || die "can't create $STORE/$cat"
+  { echo "# $title"
+    echo "- where: $where"
+    echo "- found while: $found"
+    echo "- ${ORIGIN:-project: $(root)}"
+    echo "- evidence: $(head -1 <<<"$evidence")"; tail -n +2 <<<"$evidence" | sed 's/^/  /'
+    [ -z "$suggested" ] || echo "suggested: $suggested"
+    echo "- seen: $TODAY"
+    echo "- status: open"
+  } > "$f"
+  echo "$f" ;;
+seen)
+  f=${2:-}; [ -f "$f" ] || die "usage: cases seen FILE"
+  field seen "$f" | tr -d ' ' | tr ',' '\n' | grep -qxF "$TODAY" && exit 0
+  sed -i.bak -E "s/^(- seen: .*)$/\1, $TODAY/" "$f" && rm -f "$f.bak" ;;
+list)
+  case ${2:-} in --all) sel=all_cases ;; '') sel=open_cases ;; *) die "usage: cases list [--all]" ;; esac
+  $sel | while read -r f; do
+    printf '%s\t%s\t%s\t%s\n' "$(seen_n "$f")" "$(field status "$f" | cut -d' ' -f1)" "$f" "$(title_of "$f")"
+  done | sort -t$'\t' -k1,1nr ;;
+count)
+  n=0 m=0
+  while read -r f; do [ -n "$f" ] || continue; n=$((n + 1)); [ "$(seen_n "$f")" -lt 2 ] || m=$((m + 1)); done <<<"$(open_cases)"
+  [ "$n" = 0 ] || echo "$n open ($m seen ≥2×)" ;;
+mark)
+  f=${2:-}; [ -f "$f" ] || die "usage: cases mark FILE sent URL | fixed WHAT | dropped"
+  case ${3:-} in sent) [ -n "${4:-}" ] || die "sent needs the URL"; s="sent $4" ;; fixed) [ -n "${4:-}" ] || die "fixed needs what changed"; s="fixed $4" ;;
+    dropped) s=dropped ;; *) die "sent URL | fixed WHAT | dropped" ;; esac
+  [[ $s != *$'\n'* ]] || die "one line"
+  # awk, not sed: a URL's # or & would be sed syntax.
+  S="- status: $s" awk '/^- status: / && !d { print ENVIRON["S"]; d = 1; next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;
+store) echo "$STORE" ;;
+root) root ;;
+*) sed -n '/^# Usage:/,/^set /p' "$0" | sed '$d; s/^# \{0,1\}//' >&2; exit 2 ;;
+esac
