@@ -171,7 +171,7 @@ if [ "${1:-}" = --prev-name ]; then
   if [ -n "$t" ]; then
     pid=$(list_sessions | awk -F'\t' -v s="${CLAUDE_CODE_SESSION_ID:-}" 's != "" && $1 == s { print $9; exit }')
     tty=; [ -z "$pid" ] || tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
-    if [ -z "$tty" ] || [ "$tty" = '??' ]; then echo "note: no terminal for this session's process: tab not titled" >&2
+    if [ -z "$tty" ] || [[ $tty = \?* ]]; then echo "note: no terminal for this session's process: tab not titled" >&2
     else load_terminal; title_tty "$tty" "$p" >/dev/null 2>&1 || echo "note: the $(config terminal) terminal didn't title the tab of $tty" >&2
     fi
   fi
@@ -454,7 +454,7 @@ ho_live() {
 }
 ho_field() { awk -F'\t' -v k="$1" -v v="$2" -v c="$3" '$k == v { print $c; exit }' <<<"$live"; }   # COLUMN VALUE OUTPUT_COLUMN
 ho_base() { local b=$1; [[ $b =~ ^(.+)-prev-[0-9]+$ ]] && b=${BASH_REMATCH[1]}; echo "${b%-next}"; }
-ho_tty() { local p t; p=$(ho_field 1 "$1" 9); [ -n "$p" ] && t=$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ') && [ -n "$t" ] && [ "$t" != '??' ] && echo "$t"; }
+ho_tty() { local p t; p=$(ho_field 1 "$1" 9); [ -n "$p" ] && t=$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ') && [ -n "$t" ] && [[ $t != \?* ]] && echo "$t"; }   # no tty: ?? on macOS, ? on Linux
 if [ "${1:-}" = --name-check ]; then
   [ -n "${2:-}" ] || { echo "usage: session-status --name-check NAME" >&2; exit 2; }
   ho_live || exit 1
