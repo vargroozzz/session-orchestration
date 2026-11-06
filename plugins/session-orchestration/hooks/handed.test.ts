@@ -65,6 +65,7 @@ test('hand_command writes the command for the pane, with who handed it', async (
 async function pane($: Engine, on: On, files: object[], bash: () => ToolCallResult) {
   mock.clock(on, { now: 10_000 })
   mock.env(on, { HOME: '/h' })
+  on('session.id', async () => ({ value: 'sess-c' }))
   const rm: string[] = [], calls: { command: string; consent?: string }[] = [], prompts: string[] = []
   on('process.run', async (_, e) => {
     if (e.argv[0] === 'rm') rm.push(String(e.argv[2]))

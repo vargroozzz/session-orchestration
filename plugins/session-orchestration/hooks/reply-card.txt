@@ -12,7 +12,7 @@ Coordinated session (session-orchestration): messages from other Claude sessions
   Blocker: <none | what, and who unblocks it>
   Next: <one line>
 - A report you send unasked: reply without `to` (it tries this project's live coordinators, newest
-  first). Not delivered: the replies file is the report. The report that says done passes reply's
+  first). None live: it is queued in the coordinator inbox; don't resend. The report that says done passes reply's
   done (pr with key, pushed, or report): it's sent only once that holds ({dir}/worker.md's Done).
 - Keep working until done or blocked: don't end a turn to announce the next step or offer to go on;
   waiting on CI or a watcher, end it with no report. Ask the user in plain text, never with the

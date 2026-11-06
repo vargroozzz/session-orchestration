@@ -1099,8 +1099,18 @@ async function nameCoordinator($: EngineInterface) {
   const r = await projectRoot($)
   if (!r) return 'No project root, so this session keeps its name.'
   const name = `${(r.split('/').pop() ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-coordinator`
+  // Two live sessions under one name would split the workers' messages: a successor waits for the old one's rename.
+  const [held, role, holder = ''] = (await nameCheck($, name)).split(' ')
+  if (held === 'held' && role === 'next') return `"${name}" is still held by ${holder.slice(0, 8)}, the coordinator you succeed: keep your name until it renames itself (the coordinator skill, Handing over: the successor's step).`
+  if (held === 'held') return `Another live session (${holder.slice(0, 8)}) holds "${name}": a coordinator already runs. Stop here and ask the user which session coordinates; don't coordinate beside it.`
+  if (held !== 'free') return `Couldn't check whether another session holds "${name}" (${held || 'no answer'}), so this session keeps its name: call open_pane again.`
   await update($, naming, () => name) // a command can't run inside the tool call: turn.complete runs it
   return `This session becomes "${name}" when this turn ends: put that name in briefs.`
+}
+// session-status --name-check NAME: `free|held next|other [HOLDER]`, from the project root as this session.
+async function nameCheck($: EngineInterface, name: string) {
+  const r = await projectRoot($)
+  return oneLine(await runStatus($, ['--name-check', name], { ...(r ? { cwd: r } : {}), env: { CLAUDE_CODE_SESSION_ID: await $.session.id() } }))
 }
 
 // The bootstrap trigger (skill setting-up-coordination): a folder not set up for coordination says so in open_pane's
@@ -1328,8 +1338,11 @@ export const register: Register = on => {
     if (typeof name !== 'string' || !new RegExp(SESSION_NAME).test(name)) {
       return { deny: 'name_session needs name: 1-64 characters of A-Z a-z 0-9 . _ -, starting with a letter or digit, e.g. PROJ-1234-fix-settler.' }
     }
-    // Workers message the coordinator by that name: a task session taking it would get their reports.
-    if (name.endsWith('-coordinator')) return { deny: 'name_session: a "-coordinator" name is the coordinator\'s (open_pane gives it).' }
+    // Workers message the coordinator by that name: a task session taking it would get their reports. Only a
+    // successor (named NAME-next) takes it, once no other live session holds it.
+    if (name.endsWith('-coordinator') && (await nameCheck($, name)) !== 'free next') {
+      return { deny: `name_session: a "-coordinator" name is the coordinator's (open_pane gives it); a successor takes it only as "${name}-next" once no other live session holds it.` }
+    }
     await update($, naming, () => name)
     return { result: `This session becomes "${name}" when this turn ends.` }
   })
@@ -1348,16 +1361,25 @@ export const register: Register = on => {
       const gaps = await doneGaps($, done, key, text, wt, cwd)
       if (gaps.length) return { deny: `reply: not sent, done ${done} doesn't hold yet: ${gaps.join('; ')}. Fix that and reply again (worker.md, Done).` }
     }
-    const names = typeof to === 'string' && to.trim() ? [to.trim()]
-      : (await runStatus($, ['--coordinator'], { cwd, env: { CLAUDE_CODE_SESSION_ID: await $.session.id() } }))
+    const toName = typeof to === 'string' ? to.trim() : ''
+    const id = await $.session.id()
+    const names = toName ? [toName]
+      : (await runStatus($, ['--coordinator'], { cwd, env: { CLAUDE_CODE_SESSION_ID: id } }))
         .split('\n').filter(n => n && !n.startsWith('failed: '))
-    if (!names.length) return { deny: 'reply: no coordinator of this project is running. Pass to, or the replies file is your report.' }
     const why: string[] = []
     for (const name of names) {
       const sent = await $.session.send({ to: name, text })
       if (sent.isDelivered) return { result: `Sent to ${name}.` }
       why.push(`${name}: ${sent.reason}`)
     }
+    // No live coordinator took it (none runs, it is mid-handover, or under another account): the coordinator inbox,
+    // which the next coordinator reads at Start and a live one's watcher reports.
+    if (!toName || /-coordinator(-next)?$/.test(toName)) {
+      const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--inbox-add', id],
+        { cwd, stdin: text, timeoutMs: 60_000 }).catch(() => undefined)
+      if (r?.exitCode === 0) return { result: `Queued, no coordinator live${why.length ? ` (${why.join('; ')})` : ''}: it is in ${r.stdout.trim()}, which the coordinator reads. Don't send it again.` }
+    }
+    if (!names.length) return { deny: 'reply: no coordinator of this project is running and the coordinator inbox took nothing (no replies folder?). Pass to, or the replies file is your report.' }
     return { deny: `reply: not delivered (${why.join('; ')}). The replies file is your report.` }
   })
 

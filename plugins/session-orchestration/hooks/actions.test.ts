@@ -45,6 +45,7 @@ test('fix lines: only at the start of a line, deduped against the file, given a 
 
 test('an action shows while its when passes and the fix line is there; pressing runs it in the root, then refreshes', async ($, on) => {
   mock.clock(on)
+  on('session.id', async () => ({ value: 'sess-c' }))
   let signedOut = true
   const runs: { argv: string[]; cwd?: string }[] = []
   on('process.run', async (_, e) => {

@@ -669,6 +669,62 @@ setacct cfg "$(sess "$k2" "PROJ-9-c3b" idle 1),$(sess "$kid" "PROJ-9-c3b-prev-1"
 setacct cfg "$(sess "$kid" "x-prev-1" idle 1)"
 [ "$(CLAUDE_CODE_SESSION_ID=$kid run --prev-name)" = x-prev-1 ] || { echo "--prev-name renamed an already-renamed caller"; exit 1; }
 
+# Coordinator handover: old (o) starts its successor (x) as NAME-next; x's Start ends with --await name (the ready
+# mark), o's --await ready sees it, o renames, x's --await name finds NAME free, o's --successor --done, x's --await
+# done ends it (the plain terminal closes nothing). --name-check tells a successor from a second coordinator.
+o=0a0a0a0a-1111-3333-4444-555555555555 x=0b0b0b0b-1111-3333-4444-555555555555 z=0c0c0c0c-1111-3333-4444-555555555555
+as() { local who=$1; shift; CLAUDE_CODE_SESSION_ID=$who SESSION_STATUS_AWAIT_S=1 run "$@"; }
+setacct cfg "$(sess "$o" "it's-coordinator" idle 1 interactive)"
+out=$(as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 2 ] && grep -q 'has characters a shell would read' <<<"$out" || { echo "--successor with a quote in the name: $rc $out"; exit 1; }
+setacct cfg "$(sess "$o" p-coordinator idle 1 interactive)"
+[ "$(as "$z" --name-check p-coordinator)" = "held other $o" ] && [ "$(as "$o" --name-check p-coordinator)" = "free other" ] ||
+  { echo "--name-check, one coordinator"; exit 1; }
+out=$(as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 2 ] && grep -qF "  cd $root && CLAUDE_CONFIG_DIR=~/cfg claude -n p-coordinator-next 'Act as a coordinator. You succeed \"p-coordinator\" (0a0a0a0a): " <<<"$out" &&
+  grep -qF -- '--await ready` (Bash, run_in_background)' <<<"$out" || { echo "--successor, plain terminal: $rc $out"; exit 1; }
+setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" p-coordinator-next busy 1 interactive)"
+[ "$(as "$o" --successor; echo $?)" = "$(printf '"p-coordinator-next" (0b0b0b0b) runs already: arm `%s --await ready` in the background\n3' "$here/session-status")" ] &&
+  [ "$(as "$x" --name-check p-coordinator)" = "held next $o" ] && [ "$(as "$z" --name-check p-coordinator)" = "held other $o" ] ||
+  { echo "--successor twice, or --name-check with a successor"; exit 1; }
+[ "$(as "$o" --await ready --timeout 1; echo $?)" = "$(printf -- '--await ready: nothing after 1s; check the other coordinator (session-status --activity) and arm it again or hand over by hand\n1')" ] ||
+  { echo "--await ready before the successor's Start"; exit 1; }
+as "$x" --await name --timeout 1 >/dev/null && { echo "--await name while the old one holds the name"; exit 1; }
+as "$o" --await ready | grep -q '^ready: "p-coordinator-next" (0b0b0b0b) has finished its Start. Now: rename yourself' || { echo "--await ready"; exit 1; }
+# A message meanwhile: the reply tool's backstop (--inbox-add) wakes the successor's wait; --start and --changes show it.
+[ "$(printf 'PROJ-1 · done\n# not a heading' | as "$z" --inbox-add "$o")" = "$root/replies/coordinator-inbox.md #1" ] &&
+  printf 'second' | as "$z" --inbox-add --from 'w (12345678), forwarded' >/dev/null && out=$(as "$x" --await name --timeout 5) &&
+  grep -q '^unread in the inbox' <<<"$out" && grep -qx '## 1 · unread · [0-9-]* [0-9:]* · from "p-coordinator" (0a0a0a0a)' <<<"$out" &&
+  grep -qx ' # not a heading' <<<"$out" && grep -qx '## 2 · unread · .* · from w (12345678), forwarded' <<<"$out" &&
+  [ "$(run --start | grep -c '^## Coordinator inbox, unread')" = 1 ] && run --changes >/dev/null &&
+  printf 'third' | as "$z" --inbox-add >/dev/null && run --changes | grep -q '^now:   \* 3 · unread · .* · from unknown$' &&
+  as "$x" --inbox --read 1 2 >/dev/null && [ "$(as "$x" --inbox | grep -c '^## ')" = 1 ] && as "$x" --inbox --read all >/dev/null &&
+  [ -z "$(as "$x" --inbox)" ] && [ "$(run --changes)" = "no changes" ] && ! run --start | grep -q 'Coordinator inbox' ||
+  { echo "the coordinator inbox: $out"; exit 1; }
+# Adds racing a --read: under the lock none is lost and none shares a number; no lock is left behind.
+ib=$root/replies/coordinator-inbox.md
+for i in 1 2 3 4; do printf 'race %s' "$i" | as "$z" --inbox-add >/dev/null & done; as "$x" --inbox --read all >/dev/null & wait
+[ "$(grep -c '^## ' "$ib")" = 7 ] && [ "$(grep '^## ' "$ib" | cut -d' ' -f2 | sort -u | wc -l | tr -d ' ')" = 7 ] && [ ! -e "$ib.lock" ] ||
+  { echo "inbox adds racing a --read"; cat "$ib"; exit 1; }
+as "$x" --inbox --read all >/dev/null
+[ "$(as "$o" --successor --done; echo $?)" = "$(printf 'you still hold "p-coordinator": rename first (name_session with what --prev-name prints)\n3')" ] &&
+  ! as "$o" --await renamed --timeout 1 >/dev/null || { echo "--successor --done or --await renamed before the rename"; exit 1; }
+setacct cfg "$(sess "$o" p-coordinator-prev-1 busy 1 interactive),$(sess "$x" p-coordinator-next idle 1 interactive)"
+as "$o" --await renamed | grep -q '^renamed: you are "p-coordinator-prev-1". Now stop your watcher' || { echo "--await renamed"; exit 1; }
+[ "$(as "$x" --name-check p-coordinator)" = "free next" ] && as "$x" --await name | grep -qF '"p-coordinator" is free: call name_session with name p-coordinator' &&
+  [ "$(as "$x" --successor --done; echo $?)" = "$(printf '"p-coordinator-next" isn'\''t a renamed old coordinator (NAME-prev-K): no done stamp written\n2')" ] &&
+  as "$o" --successor --done | grep -q '^done: ' && [ "$(cat "$tmp/.cache/session-status/handover/p-coordinator.done")" = "$o" ] ||
+  { echo "--await name after the rename, or --successor --done"; exit 1; }
+setacct cfg "$(sess "$o" p-coordinator-prev-1 busy 1 interactive),$(sess "$x" p-coordinator idle 1 interactive)"
+as "$x" --await done --timeout 1 >/dev/null && { echo "--await done while the old one is busy"; exit 1; }
+setacct cfg "$(sess "$o" p-coordinator-prev-1 idle 1 interactive),$(sess "$x" p-coordinator idle 1 interactive)"
+out=$(as "$x" --await done --timeout 2)
+[ "$out" = "handover done: the old coordinator (0a0a0a0a) has no terminal: left running; tell the user to close it." ] &&
+  [ ! -e "$tmp/.cache/session-status/handover/p-coordinator.done" ] || { echo "--await done: $out"; exit 1; }
+# A renamed old coordinator (-prev-K) isn't a coordinator the reply tool sends to.
+setacct cfg "$(sess "$cid" p-coordinator idle 1)"; [ "$(run --coordinator)" = p-coordinator ] &&
+  setacct cfg "$(sess "$cid" p-coordinator-prev-1 idle 1)" && [ -z "$(run --coordinator)" ] || { echo "--coordinator listed a -prev-K"; exit 1; }
+
 # --peek: the main thread's last turns as markdown (no sidechain, no system reminder), then what it does now.
 pid=cccccccc-2222-3333-4444-555555555555
 printf '%s\n' '{"type":"user","timestamp":"2026-10-18T10:00:00Z","message":{"content":"Work on ABC-50"}}' \

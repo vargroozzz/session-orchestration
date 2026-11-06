@@ -48,7 +48,8 @@ grep -q '## c2: handoff chunklon' <<<"$(fire chunklong9 "$chunk" 126000)" || fai
 grep -qE 'Rename yourself: call name_session with the name `.*session-status --prev-name` prints.* Message the coordinator' <<<"$(fire chunk5 "$chunk" 151000)" || fail 'chunk hard text: rename before the coordinator message'
 out=$(fire task2 "$task" 126000); grep -q 'handoff ready: PROJ-123"' <<<"$out" && grep -q '## Handoff' <<<"$out" || fail "task message: $out"
 expect coord "$coord" 144000 ''
-out=$(fire coord "$coord" 146000); grep -q 'handover file' <<<"$out" && ! grep -q 'handoff ready' <<<"$out" || fail "coordinator soft: $out"
+out=$(fire coord "$coord" 146000); grep -q 'handover file' <<<"$out" && ! grep -q 'handoff ready' <<<"$out" &&
+  grep -q 'session-status --successor` and do what it prints' <<<"$out" || fail "coordinator soft: $out"
 expect coord "$coord" 171000 'Stop now'
 # A coordinator by what it did (lib.sh coord_re: an open_pane tool use), without `Act as a coordinator`, with or
 # without a Session task line: the coordinator's thresholds and text. Chunk and task texts carry the self-handover.

@@ -34,8 +34,9 @@ test('open_pane says when the folder is not set up for coordination', async ($, 
   // under /work's adapter: --root is the parent until this folder gets its own
   let check = { exitCode: 3, stdout: 'covered by a parent: /work (work-coordinator) covers this folder\n' }
   let rootDir = '/work'
+  on('session.id', async () => ({ value: 'sess-c' }))
   on('process.run', async (_, e) => ({ value: {
-    ...(e.argv.includes('--check') ? check : { exitCode: 0, stdout: e.argv.includes('--root') ? rootDir : '' }),
+    ...(e.argv.includes('--check') ? check : { exitCode: 0, stdout: e.argv.includes('--root') ? rootDir : e.argv.includes('--name-check') ? 'free other\n' : '' }),
     stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
@@ -64,15 +65,34 @@ test('open_pane names the coordinator <project>-coordinator', async ($, on) => {
     renamed.push(e.args)
     return { text: 'renamed' }
   })
-  on('process.run', async (_, e) => ({ value: {
-    exitCode: 0, stdout: e.argv.includes('--root') ? '/work/myproj' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
-  }))
+  on('session.id', async () => ({ value: 'sess-c' }))
+  // the name check runs from the project root as this session
+  let held = 'held other 0c0c0c0c-0000\n'
+  const checked: unknown[] = []
+  on('process.run', async (_, e) => {
+    if (e.argv.includes('--name-check')) checked.push([e.argv.slice(2), e.init?.cwd, e.init?.env?.CLAUDE_CODE_SESSION_ID])
+    return { value: {
+      exitCode: 0, stdout: e.argv.includes('--root') ? '/work/myproj' : e.argv.includes('--name-check') ? held : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }
+  })
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   on('turn.complete', async () => ({ text: '' }))
+  const open = async () => (await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })).result
+  const end = { answer: '', durationMs: 1, isAborted: false, turnId: 't0', reason: 'answer' } as const
+  // another coordinator runs: keep the name and ask
+  expect(await open()).toBe('Coordinator pane open. Another live session (0c0c0c0c) holds "myproj-coordinator": a coordinator already runs. Stop here and ask the user which session coordinates; don\'t coordinate beside it.')
+  expect(checked).toEqual([[['--name-check', 'myproj-coordinator'], '/work/myproj', 'sess-c']])
+  // a successor: the old one still holds it
+  held = 'held next 0a0a0a0a-0000\n'
+  expect(await open()).toBe('Coordinator pane open. "myproj-coordinator" is still held by 0a0a0a0a, the coordinator you succeed: keep your name until it renames itself (the coordinator skill, Handing over: the successor\'s step).')
+  held = ''
+  expect(await open()).toBe('Coordinator pane open. Couldn\'t check whether another session holds "myproj-coordinator" (no answer), so this session keeps its name: call open_pane again.')
+  await $.turn.complete(end)
+  expect(renamed).toEqual([])
+  held = 'free other\n'
   const r = await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
   expect([renamed, r.result]).toEqual([[], 'Coordinator pane open. This session becomes "myproj-coordinator" when this turn ends: put that name in briefs.'])
-  const end = { answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as const
-  await $.turn.complete(end)
+  await $.turn.complete({ ...end, turnId: 't1' })
   await $.turn.complete({ ...end, turnId: 't2' })
   expect(renamed).toEqual(['myproj-coordinator']) // once
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
@@ -84,8 +104,9 @@ test('open_pane watches the review inbox once and says whether its decisions wak
   mock.clock(on)
   let url = 'https://claude.ai/artifact/Inbox_1'
   const check = () => `configured: /work/p (p-coordinator)\nactive: tracker=none host=github delegate=off\n  review_inbox: start step\n  review_inbox url: ${url}\n`
+  on('session.id', async () => ({ value: 'sess-c' }))
   on('process.run', async (_, e) => ({ value: {
-    exitCode: 0, stdout: e.argv.includes('--check') ? check() : e.argv.includes('--root') ? '/work/p' : '',
+    exitCode: 0, stdout: e.argv.includes('--check') ? check() : e.argv.includes('--root') ? '/work/p' : e.argv.includes('--name-check') ? 'free other\n' : '',
     stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
@@ -121,6 +142,9 @@ test('name_session renames any session at turn end and refuses a bad name', asyn
     return { text: 'renamed' }
   })
   on('turn.complete', async () => ({ text: '' }))
+  on('session.id', async () => ({ value: 'sess-c' }))
+  let check = 'free other\n' // a "-coordinator" name only for a successor (named NAME-next) once it is free
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: check, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   const call = (name: unknown) => $.tool.call({ tool: 'mcp__session-orchestration__name_session', name })
   const bad = await Promise.all(['PROJ-1 fix', '', 'x'.repeat(65), 'a/b', 42, '-n', 'myproj-coordinator'].map(call))
   expect(bad.map(r => r.deny !== undefined)).toEqual([true, true, true, true, true, true, true])
@@ -132,6 +156,10 @@ test('name_session renames any session at turn end and refuses a bad name', asyn
   await $.turn.complete(end)
   await $.turn.complete({ ...end, turnId: 't2' })
   expect(renamed).toEqual(['PROJ-1234-fix-settler']) // once
+  check = 'held next 0a0a0a0a\n'
+  expect((await call('myproj-coordinator')).deny).toContain('"myproj-coordinator-next" once no other live session holds it')
+  check = 'free next\n'
+  expect((await call('myproj-coordinator')).result).toBe('This session becomes "myproj-coordinator" when this turn ends.')
 })
 
 test('a queued approval becomes buttons; a click submits the answer once and clears it', async ($, on) => {
@@ -654,6 +682,7 @@ test('cancel_approval removes asks by key, by id or by question, and a stale cli
 test('features.notify: an ask waiting unseen N minutes shows one local notification, a count only', async ($, on) => {
   const t0 = 100 * 3600_000
   const clock = mock.clock(on, { now: t0 })
+  on('session.id', async () => ({ value: 'sess-c' }))
   mock.env(on, { HOME: '/h' })
   let store: string | undefined
   on('fs.read', async () => {
@@ -876,8 +905,13 @@ test('reply answers the from it is given, else tries the live coordinators the p
   on('session.cwd', async () => ({ value: '/work/proj/.claude/worktrees/PROJ-1/sub' }))
   on('session.id', async () => ({ value: 'sess-3' }))
   let coords = 'proj-coordinator\nold-coordinator\n'
-  const ran: unknown[] = []
+  let inbox = { exitCode: 3, stdout: '' } // no replies folder: the inbox takes nothing
+  const ran: unknown[] = [], queued: unknown[] = []
   on('process.run', async (_, e) => {
+    if (e.argv[2] === '--inbox-add') {
+      queued.push([e.argv.slice(2), e.init?.cwd, e.init?.stdin])
+      return { value: { ...inbox, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     ran.push([e.argv.slice(2), e.init?.cwd, e.init?.env?.CLAUDE_CODE_SESSION_ID])
     return { value: { exitCode: 0, stdout: coords, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -896,9 +930,17 @@ test('reply answers the from it is given, else tries the live coordinators the p
   live = []
   expect((await reply({ text: 'PROJ-1 · b · blocked' })).deny).toBe('reply: not delivered (proj-coordinator: no session by that name; old-coordinator: no session by that name). The replies file is your report.')
   coords = ''
-  expect((await reply({ text: 'PROJ-1 · b · idle' })).deny).toBe('reply: no coordinator of this project is running. Pass to, or the replies file is your report.')
+  expect((await reply({ text: 'PROJ-1 · b · idle' })).deny).toBe('reply: no coordinator of this project is running and the coordinator inbox took nothing (no replies folder?). Pass to, or the replies file is your report.')
+  // with a replies folder, no live coordinator (none, mid-handover, another account): the coordinator inbox
+  inbox = { exitCode: 0, stdout: '/work/docs/replies/coordinator-inbox.md #2\n' }
+  expect((await reply({ text: 'PROJ-1 · b · idle' })).result).toBe('Queued, no coordinator live: it is in /work/docs/replies/coordinator-inbox.md #2, which the coordinator reads. Don\'t send it again.')
+  expect((await reply({ text: 'PROJ-1 · b · done', to: 'proj-coordinator' })).result).toBe('Queued, no coordinator live (proj-coordinator: no session by that name): it is in /work/docs/replies/coordinator-inbox.md #2, which the coordinator reads. Don\'t send it again.')
+  // an answer to a worker never goes to the coordinator inbox
+  expect((await reply({ text: 'PROJ-2 go', to: 'PROJ-2-x' })).deny).toBe('reply: not delivered (PROJ-2-x: no session by that name). The replies file is your report.')
+  expect(queued).toEqual([[['--inbox-add', 'sess-3'], '/work/proj', 'PROJ-1 · b · blocked'], [['--inbox-add', 'sess-3'], '/work/proj', 'PROJ-1 · b · idle'],
+    [['--inbox-add', 'sess-3'], '/work/proj', 'PROJ-1 · b · idle'], [['--inbox-add', 'sess-3'], '/work/proj', 'PROJ-1 · b · done']])
   expect(sent).toEqual(['uds:/tmp/w.sock: PROJ-1 accepted', 'proj-coordinator: PROJ-1 · b · coding', 'old-coordinator: PROJ-1 · b · coding',
-    'proj-coordinator: PROJ-1 · b · blocked', 'old-coordinator: PROJ-1 · b · blocked'])
+    'proj-coordinator: PROJ-1 · b · blocked', 'old-coordinator: PROJ-1 · b · blocked', 'proj-coordinator: PROJ-1 · b · done', 'PROJ-2-x: PROJ-2 go'])
 })
 
 test('a done reply is sent only once its kind holds: clean, pushed, a PR on the board without failing checks; a report\'s files exist', async ($, on) => {

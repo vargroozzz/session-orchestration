@@ -376,8 +376,8 @@ weekly_warn() {
     fi
   done <<<"${1-$(weekly_use)}"
   [ -n "$cp" ] && [ "$cp" -ge 90 ] && [ -n "$best" ] || return 0
-  printf '%s is past 90%% of its weekly limit (resets %s), %s is under it: hand over to a coordinator under %s (features/accounts.md, Weekly limits)\n' \
-    "$(tilde "$cur")" "$(epochfmt "$cr" '%m-%d %H:%M')" "$(tilde "$best")" "$(tilde "$best")"
+  printf '%s is past 90%% of its weekly limit (resets %s), %s is under it: hand over to a coordinator under %s (session-status --successor --account %s; features/accounts.md, Weekly limits)\n' \
+    "$(tilde "$cur")" "$(epochfmt "$cr" '%m-%d %H:%M')" "$(tilde "$best")" "$(tilde "$best")" "$(tilde "$best")"
 }
 # tilde PATH: PATH with a leading $HOME as ~ (bash 5.2 expands a bare ~ in ${x/#$HOME/~}, so it goes in a variable).
 tilde() { local t='~'; printf '%s' "${1/#$HOME/$t}"; }

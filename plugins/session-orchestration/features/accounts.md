@@ -62,9 +62,11 @@ another is under it, it adds `accounts weekly limit:` "`<yours>` is past 90% of 
 is under it: hand over to a coordinator under `<other>`", and `--watch` wakes you with it under `Weekly limit:`, once.
 Then:
 - Start no new task session: it would run under your account.
-- Write your handover (the coordinator skill's Handing over), saying the move is why, and ask the user to start the
-  next coordinator under that account (their usual command with its `CLAUDE_CONFIG_DIR`; plain `claude` with it unset
-  for `~/.claude`), then stop this one.
+- Write your handover (the coordinator skill's Handing over), saying the move is why, and hand over with
+  `session-status --successor --account <other>`: it starts the next coordinator under that account and the handover
+  goes on as there. With no terminal configured it prints the command for the user to run (their usual command with
+  its `CLAUDE_CONFIG_DIR`; `env -u CLAUDE_CONFIG_DIR` for `~/.claude`). The two coordinators can't message each other
+  across accounts: the handover steps use files and the coordinator inbox instead.
 - The next coordinator moves the workers it still needs to its account (`--send-when-idle --here`, above); one left
   where it is freezes at the limit. A `--handover` successor starts under the caller's account, unless that one is
   past 90% and the old session's is under it.

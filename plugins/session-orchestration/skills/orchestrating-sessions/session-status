@@ -119,7 +119,13 @@
 #                       folder's KEY.md (a chunk: KEY-build.md's handoff); --self, a session hands itself over when no
 #                       coordinator runs (see the block)
 #        session-status --prev-name [NAME]   NAME-prev-K, the name a session renames itself to when it hands off: K the
-#                       lowest free number over every listed session name (NAME: the caller's own)
+#                       lowest free number over every listed session name (NAME: the caller's own); --title also
+#                       titles the caller's terminal tab with it
+#        session-status --successor [--account DIR] | --successor --done | --await ready|renamed|name|done [--timeout S] |
+#                       --name-check NAME   a coordinator hands itself over to NAME-next it starts (see the block;
+#                       SKILL.md, Handing over)
+#        session-status --inbox [--read N…|all] | --inbox-add [--from WHO] [SENDER_ID] < TEXT   the coordinator
+#                       inbox: messages no live coordinator took (the reply tool's backstop), unread ones printed
 #        session-status --init [--check | --write …]   set this folder up for coordination: the setting-up-coordination
 #                       skill's session-init documents the modes; runs in the cwd, not the root
 #        session-status --config KEY   a config value (lib.sh at the plugin root lists the keys), e.g. approvals.delegate
@@ -156,8 +162,19 @@ prev_name() {
   echo "$b-prev-$k"
 }
 # --prev-name [NAME]: prev_name's name for NAME, by default the caller's own (by $CLAUDE_CODE_SESSION_ID).
+# --prev-name --title: the caller's, and its terminal's tab (title_tty, by its process's tty) titled with it, so the
+# successor finds and the user tells the old coordinator's tab; a terminal that can't is noted on stderr.
 if [ "${1:-}" = --prev-name ]; then
-  prev_name "${2:-}" || { echo "usage: session-status --prev-name [NAME] (this session isn't listed: name it)" >&2; exit 2; }
+  t=; [ "${2:-}" = --title ] && { t=1; shift; }
+  p=$(prev_name "${2:-}") || { echo "usage: session-status --prev-name [--title] [NAME] (this session isn't listed: name it)" >&2; exit 2; }
+  echo "$p"
+  if [ -n "$t" ]; then
+    pid=$(list_sessions | awk -F'\t' -v s="${CLAUDE_CODE_SESSION_ID:-}" 's != "" && $1 == s { print $9; exit }')
+    tty=; [ -z "$pid" ] || tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+    if [ -z "$tty" ] || [ "$tty" = '??' ]; then echo "note: no terminal for this session's process: tab not titled" >&2
+    else load_terminal; title_tty "$tty" "$p" >/dev/null 2>&1 || echo "note: the $(config terminal) terminal didn't title the tab of $tty" >&2
+    fi
+  fi
   exit 0
 fi
 # --search TEXT [days]: rnd.py search, every project and account, the caller left out.
@@ -375,6 +392,163 @@ replies_path() {
   r=${r%/}; r=${r/#\~/$HOME}; case $r in ''|/*) echo "$r" ;; *) echo "$ROOT/$r" ;; esac
 }
 
+# The coordinator inbox: <replies>/coordinator-inbox.md holds the messages no live coordinator took (the reply tool's
+# backstop) and what an old coordinator forwards while it hands over. An entry is a `## N · unread · MM-DD HH:MM ·
+# from WHO` heading and the text under it; --inbox --read N marks it read.
+inbox_file() { local rd; rd=$(replies_path); [ -n "$rd" ] && echo "$rd/coordinator-inbox.md"; }
+inbox_unread() {   # the unread entries, heading and text, oldest first
+  local f; f=$(inbox_file) && [ -f "$f" ] || return 0
+  awk '/^## [0-9]+ · / { on = index($0, " · unread · ") > 0 } on' "$f"
+}
+# inbox_lock FILE: an add and a --read's rewrite never interleave (an add between the read and the mv was lost). A lock
+# left by a killed run is taken over after 5s.
+inbox_lock() {
+  INBOX_LOCK=$1.lock; local i
+  for i in $(seq 50); do mkdir "$INBOX_LOCK" 2>/dev/null && break; [ "$i" -lt 50 ] || { rm -rf "$INBOX_LOCK"; mkdir "$INBOX_LOCK"; }; sleep 0.1; done
+  trap 'rmdir "$INBOX_LOCK" 2>/dev/null' EXIT
+}
+if [ "${1:-}" = --inbox-add ]; then
+  shift; from=; [ "${1:-}" = --from ] && { from=${2:-}; shift 2; }
+  f=$(inbox_file) || { echo "$ROOT/CLAUDE.md names no replies folder: no inbox" >&2; exit 2; }
+  body=$(cat); [ -n "${body//[[:space:]]/}" ] || { echo "usage: session-status --inbox-add [--from WHO] [SENDER_ID] < TEXT" >&2; exit 2; }
+  if [ -z "$from" ] && [ -n "${1:-}" ]; then
+    n=$(list_sessions | awk -F'\t' -v s="$1" '$1 == s { print $2; exit }'); from="${n:+\"$n\" }(${1:0:8})"
+  fi
+  mkdir -p "${f%/*}"; inbox_lock "$f"
+  [ -f "$f" ] || printf '# Coordinator inbox\n\nMessages no live coordinator took. The next coordinator reads the unread ones (session-status --start, --inbox) and marks each read once acted on: session-status --inbox --read N.\n' > "$f"
+  k=$(( $(awk '/^## [0-9]+ · / { n = $2 } END { print n + 0 }' "$f") + 1 ))
+  # a `#` line in the text would read as a heading: indented
+  printf '\n## %s · unread · %s · from %s\n%s\n' "$k" "$(date '+%m-%d %H:%M')" "$(tr -d '\n' <<<"${from:-unknown}")" "$(sed 's/^#/ #/' <<<"$body")" >> "$f"
+  echo "$f #$k"; exit 0
+fi
+if [ "${1:-}" = --inbox ]; then
+  shift; f=$(inbox_file) || { echo "(no replies folder: no inbox)"; exit 0; }
+  if [ "${1:-}" = --read ]; then
+    shift; [ $# -gt 0 ] && ! printf '%s\n' "$@" | grep -qvxE '[0-9]+|all' || { echo "usage: session-status --inbox [--read N…|all]" >&2; exit 2; }
+    [ -f "$f" ] || { echo "no $f"; exit 2; }
+    inbox_lock "$f"; awk -v ks=" $* " '/^## [0-9]+ · unread · / && (index(ks, " all ") || index(ks, " " $2 " ")) { sub(/ · unread · /, " · read · ") } { print }' "$f" > "$f.$$" &&
+      mv "$f.$$" "$f" && echo "marked read: $*"; exit
+  fi
+  inbox_unread; exit 0
+fi
+
+# Coordinator handover (SKILL.md, Handing over), with NAME the coordinator's name:
+#   --successor [--account DIR]   the old coordinator starts NAME-next, interactive, in a tab of the configured
+#                                 terminal under DIR (default its own account), first prompt `Act as a coordinator`
+#   --await ready                 the old one waits until NAME-next has finished its Start (handover/NAME.ready)
+#   --await renamed               the old one, after name_session NAME-prev-K: waits until the listing shows the new name
+#   --await name                  the successor, at the end of its Start: writes NAME.ready, waits until no other live
+#                                 session holds NAME (the old one renamed itself)
+#   --successor --done            the old one, renamed and done forwarding: writes NAME.done
+#   --await done                  the successor, named NAME: once NAME.done is there and the old session idle, closes
+#                                 the old one's terminal (close_tty: its tab, or only its split beside others)
+#   --name-check NAME             `free|held next|other [HOLDER_ID]`: whether a live session other than the caller holds
+#                                 NAME, and whether the caller is NAME-next (open_pane and name_session ask it)
+# A successor's --await exits early on an unread inbox entry (it prints them): act on them, mark them read, re-arm.
+# Each --await polls every SESSION_STATUS_AWAIT_S (10) seconds and gives up after --timeout SECS (3600), exit 1.
+HO_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handover
+# ho_live: list_sessions' live ones (not failed, stopped or done) into $live; fails when an account's listing did.
+ho_live() {
+  TMP=$(mktemp -d); live=$(list_sessions | awk -F'\t' '$3 !~ /^(failed|stopped|done)$/'); local f=; [ ! -e "$TMP/ask.failed" ] || f=1
+  rm -rf "$TMP"; unset TMP; [ -z "$f" ] || { echo "couldn't list an account's sessions; try again" >&2; return 1; }
+}
+ho_field() { awk -F'\t' -v k="$1" -v v="$2" -v c="$3" '$k == v { print $c; exit }' <<<"$live"; }   # COLUMN VALUE OUTPUT_COLUMN
+ho_base() { local b=$1; [[ $b =~ ^(.+)-prev-[0-9]+$ ]] && b=${BASH_REMATCH[1]}; echo "${b%-next}"; }
+ho_tty() { local p t; p=$(ho_field 1 "$1" 9); [ -n "$p" ] && t=$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ') && [ -n "$t" ] && [ "$t" != '??' ] && echo "$t"; }
+if [ "${1:-}" = --name-check ]; then
+  [ -n "${2:-}" ] || { echo "usage: session-status --name-check NAME" >&2; exit 2; }
+  ho_live || exit 1
+  awk -F'\t' -v me="${CLAUDE_CODE_SESSION_ID:-}" -v n="$2" '$1 == me { mine = $2 } $1 != me && $2 == n && h == "" { h = $1 }
+    END { print (h == "" ? "free" : "held") " " (mine == n "-next" ? "next" : "other") (h == "" ? "" : " " h) }' <<<"$live"
+  exit 0
+fi
+if [ "${1:-}" = --successor ]; then
+  shift; acct=${CLAUDE_CONFIG_DIR:-$HOME/.claude} fin=
+  case ${1:-} in --account) acct=${2:-}; shift 2 || true ;; --done) fin=1; shift ;; esac
+  acct=${acct/#\~/$HOME}; acct=${acct%/}
+  [ $# = 0 ] && [ -d "$acct" ] || { echo "usage: session-status --successor [--account CONFIG_DIR] | --successor --done"; exit 2; }
+  ho_live || exit 1; id=${CLAUDE_CODE_SESSION_ID:-}; me=$(ho_field 1 "$id" 2)
+  [ -n "$id" ] && [ -n "$me" ] || { echo "this session isn't listed (CLAUDE_CODE_SESSION_ID ${id:-unset}): hand over by hand"; exit 2; }
+  n=$(ho_base "$me"); mkdir -p "$HO_DIR"
+  if [ -n "$fin" ]; then
+    [ "$me" != "$n" ] || { echo "you still hold \"$n\": rename first (name_session with what --prev-name prints)"; exit 3; }
+    # the done stamp names the session whose terminal the successor closes: only the renamed old one writes it
+    [[ $me =~ -prev-[0-9]+$ ]] || { echo "\"$me\" isn't a renamed old coordinator (NAME-prev-K): no done stamp written"; exit 2; }
+    echo "$id" > "$HO_DIR/$n.done"
+    echo "done: end your turn; the successor closes this session's terminal once it is idle (forward anything still arriving first)."; exit 0
+  fi
+  [ "$me" = "$n" ] || { echo "\"$me\" isn't a coordinator's own name: not handed over"; exit 2; }
+  nx=$(ho_field 2 "$n-next" 1)
+  [ -z "$nx" ] || { echo "\"$n-next\" (${nx:0:8}) runs already: arm \`$SELF --await ready\` in the background"; exit 3; }
+  rm -f "$HO_DIR/$n.ready" "$HO_DIR/$n.done"
+  # The name goes into a command typed into a shell: only the characters name_session and open_pane give one.
+  [[ $n =~ ^[A-Za-z0-9._-]+$ ]] || { echo "\"$n\" has characters a shell would read (a /rename?): not handed over; rename it with name_session first"; exit 2; }
+  # SESSION_STATUS_CLAUDE: the claude command, for a dev build's successor (`claude --plugin-dir DIR`)
+  cmd="${SESSION_STATUS_CLAUDE:-claude} -n $n-next 'Act as a coordinator. You succeed \"$n\" (${id:0:8}): end your Start with the successor step (the coordinator skill, Handing over).'"
+  case $acct in "$HOME/.claude") pre='env -u CLAUDE_CONFIG_DIR ' ;; *) pre="CLAUDE_CONFIG_DIR=$(tilde "$acct") " ;; esac
+  load_terminal; out=$(open_view --account "$acct" "$n-next" "$ROOT" "$cmd"); rc=$?; q=$(printf %q "$ROOT")
+  # open_view selects an open tab with the title instead: a successor that exited left it, and nothing was started
+  [ "$rc" != 0 ] || [ "${out#reused}" = "$out" ] ||
+    { echo "a tab titled \"$n-next\" is open already ($out), so nothing started: close it (a successor that exited?), then run this again"; exit 3; }
+  next="Then arm \`$SELF --await ready\` (Bash, run_in_background) and end your turn. From now on act on no message: forward each to the inbox (\`$SELF --inbox-add --from '<sender name> (<id8>)'\`, its text on stdin)."
+  case $rc in
+    0) echo "started \"$n-next\" under $(tilde "$acct") ($out)."; echo "$next" ;;
+    2) echo "nothing opened (terminal $(config terminal)): hand the user this command (hand_command, key coordinator), then go on:"
+       echo "  cd $q && $pre$cmd"; echo "$next" ;;
+    *) echo "the terminal failed (exit $rc): $out. Not started: hand the user \`cd $q && $pre$cmd\`, or try again" ;;
+  esac
+  exit "$rc"
+fi
+if [ "${1:-}" = --await ]; then
+  what=${2:-}; shift 2 2>/dev/null || shift $#; tmo=3600; [ "${1:-}" = --timeout ] && { tmo=${2:-}; shift 2 2>/dev/null || shift $#; }
+  case $what in ready|renamed|name|done) ;; *) what= ;; esac
+  [ -n "$what" ] && [[ $tmo =~ ^[1-9][0-9]*$ ]] && [ $# = 0 ] || { echo "usage: session-status --await ready|renamed|name|done [--timeout SECS]"; exit 2; }
+  every=${SESSION_STATUS_AWAIT_S:-10}; end=$(( $(date +%s) + tmo )); id=${CLAUDE_CODE_SESSION_ID:-}
+  ho_live || exit 1; me=$(ho_field 1 "$id" 2)
+  [ -n "$id" ] && [ -n "$me" ] || { echo "this session isn't listed (CLAUDE_CODE_SESSION_ID ${id:-unset})"; exit 2; }
+  n=$(ho_base "$me"); mkdir -p "$HO_DIR"
+  [ "$what" = ready ] || [ "$what" = renamed ] || [ "$me" != "$n" ] || [ "$what" = done ] || { echo "you are \"$me\", not \"$n-next\": no handover to wait on"; exit 2; }
+  [ "$what" != name ] || echo "$id" > "$HO_DIR/$n.ready"
+  while :; do
+    if [ -z "$live" ]; then :   # this poll's listing failed: nothing is known, wait for the next
+    elif [ "$what" != ready ] && [ "$what" != renamed ] && u=$(inbox_unread) && [ -n "$u" ]; then
+      echo "unread in the inbox ($(inbox_file)): act on each, mark it read (\`$SELF --inbox --read N\`), then arm \`$SELF --await $what\` again:"
+      echo "$u"; exit 0
+    else case $what in
+      ready) s=$(cat "$HO_DIR/$n.ready" 2>/dev/null)
+        if [ -n "$s" ] && [ "$(ho_field 1 "$s" 2)" = "$n-next" ]; then
+          echo "ready: \"$n-next\" (${s:0:8}) has finished its Start. Now: rename yourself (name_session with the name \`$SELF --prev-name --title\` prints; it also titles your tab), arm \`$SELF --await renamed\` (Bash, run_in_background) and end your turn."
+          exit 0
+        fi ;;
+      # the rename lands when the turn ends, and nothing else would wake the old one after it
+      renamed) r=$(ho_field 1 "$id" 2)
+        [ -z "$r" ] || [ "$r" = "$n" ] || { echo "renamed: you are \"$r\". Now stop your watcher (TaskStop), forward to the inbox what you got meanwhile, then \`$SELF --successor --done\` and end your turn."; exit 0; } ;;
+      name) h=$(awk -F'\t' -v me="$id" -v n="$n" '$1 != me && $2 == n { print $1; exit }' <<<"$live")
+        # its tab drops the NAME-next title, or its own successor's open_view would select this tab
+        [ -n "$h" ] || { load_terminal; ! declare -F title_tty >/dev/null || ! t=$(ho_tty "$id") || title_tty "$t" "$n" >/dev/null 2>&1
+          echo "\"$n\" is free: call name_session with name $n, then arm \`$SELF --await done\` (Bash, run_in_background)."; exit 0; } ;;
+      done) o=$(cat "$HO_DIR/$n.done" 2>/dev/null); st=; [ -z "$o" ] || st=$(ho_field 1 "$o" 8)
+        if [ "$o" = "$id" ]; then echo "the done stamp names you (${id:0:8}), not the old coordinator: nothing closed"; exit 2
+        elif [ -n "$o" ] && [ "$st" != busy ] && [ "$st" != waiting ]; then
+          if [ -z "$(ho_field 1 "$o" 1)" ]; then msg="the old coordinator (${o:0:8}) has exited: nothing to close"
+          elif t=$(ho_tty "$o"); then
+            load_terminal; c=$(close_tty "$t" 2>&1); rc=$?
+            case $rc in
+              0) msg="$c of the old coordinator ($t)" ;;
+              1) msg="no $(config terminal) tab holds the old coordinator's terminal ($t): left open; tell the user to close it" ;;
+              2) msg="the $(config terminal) terminal closes nothing: the old coordinator's terminal ($t) is left open; tell the user to close it" ;;
+              *) msg="closing failed ($c): the old coordinator's terminal ($t) is left open; tell the user" ;;
+            esac
+          else msg="the old coordinator (${o:0:8}) has no terminal: left running; tell the user to close it"
+          fi
+          rm -f "$HO_DIR/$n.ready" "$HO_DIR/$n.done"; echo "handover done: $msg."; exit 0
+        fi ;;
+    esac; fi
+    [ "$(date +%s)" -lt "$end" ] || { echo "--await $what: nothing after ${tmo}s; check the other coordinator (session-status --activity) and arm it again or hand over by hand"; exit 1; }
+    sleep "$every"; ho_live 2>/dev/null || live=
+  done
+fi
+
 # --start [args]: what a coordinator reads at Start, in one run, so it needn't pick files: the status (args as for a
 # sweep), the handoff file (the adapter's pending), the last handover note, the replies written since that note (else
 # in the last day; 20 at most, newest first, each with its first line) and the coordination config (setup's check:
@@ -422,12 +596,14 @@ if [ "${1:-}" = --start ]; then
   [ ! -s "$TMP/ids" ] || echo "Resume them one at a time, after one ask (approvals.md): session-status --resume-ended $(sed 's/ $//' "$TMP/ids")"
   if [ -n "$h" ] && [ -f "$h" ]; then printf '\n## Handover (%s, written %s)\n' "$h" "$(epochfmt "$(mtime "$h")" '%m-%d %H:%M')"; cat "$h"
   else printf '\n## Handover\n(none%s)\n' "${h:+: no $h}"; fi
+  u=$(inbox_unread)
+  [ -z "$u" ] || printf '\n## Coordinator inbox, unread (%s): act on each, then mark it read: %s --inbox --read N\n%s\n' "$(inbox_file)" "$SELF" "$u"
   if [ -z "$rd" ]; then printf '\n## Replies\n(none: the CLAUDE.md section names no replies folder)\n'
   else
     # The last coordinator saw what came before its handover, however old the note.
     if [ -f "$h" ]; then since=(-newer "$h") what='since the handover'; else since=(-mtime -1) what='in the last day'; fi
     printf '\n## Replies written %s (%s), newest first\n' "$what" "$rd"
-    r=(); while IFS= read -r -d '' f; do r+=("$f"); done < <(find "$rd" -maxdepth 1 -type f -name '*.md' ! -name coordinator-handover.md "${since[@]}" -print0 2>/dev/null)
+    r=(); while IFS= read -r -d '' f; do r+=("$f"); done < <(find "$rd" -maxdepth 1 -type f -name '*.md' ! -name coordinator-handover.md ! -name coordinator-inbox.md "${since[@]}" -print0 2>/dev/null)
     [ ${#r[@]} != 0 ] || echo '(none)'
     [ ${#r[@]} = 0 ] || mtime_named "${r[@]}" | sort -rn | head -20 | while read -r m f; do
       # The last `## ` section too: a log or handoff under the header may be newer than its status line.
@@ -531,6 +707,9 @@ if [ "${1:-}" = --changes ]; then
     # This account past 90% of its weekly limit while another has headroom: wake the coordinator once to move.
     w=$(weekly_warn); [ -z "$w" ] || new+=$'\nWeekly limit:\n  * '"$w"
   fi
+  # The coordinator inbox's unread headings (a message no live coordinator took): one appearing is news.
+  u=$(inbox_unread | grep '^## ' | cut -c4-)
+  [ -z "$u" ] || { new+=$'\nInbox (session-status --inbox):'; while IFS= read -r l; do new+=$'\n  * '"$l"; done <<<"$u"; }
   # PR events: an open PR of a row with an owner newly failing CI (CI-FAILED), in conflict (CONFLICT) or with changes
   # requested (!NAME, `changes requested by`) is a line `* REPO#ID EVENT @SHA (KEY) → "NAME" ID`, for the coordinator
   # to send the owner (SKILL.md, PR events). At most once per PR, event and head SHA ($last.pr-events): CI and a
@@ -592,7 +771,7 @@ if [ "${1:-}" = --changes ]; then
         /^was:   ".*" \(.*attach [0-9a-f]+\)( — blocked: .*)?$/ { match($0, /attach [0-9a-f]+\)/); id = substr($0, RSTART + 7, RLENGTH - 8)
           if (id in live && live[id] != "done") drop[NR] }
         END {
-          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Reports:|Weekly limit:)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
+          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Reports:|Weekly limit:|Inbox \(session-status --inbox\):)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
           for (i = 1; i <= NR; i++) if (!(i in drop)) print line[i] }'; echo "$ev"; } | grep . || echo "no changes"
   else
     echo "$new"; [ -z "$ev" ] || printf '\n%s\n' "$ev"
@@ -1147,7 +1326,7 @@ if [ -n "$COORD" ]; then
   { IFS=$'\n' read -d '' -ra w < "$TMP/watchers"; [ ${#w[@]} = 0 ] || mtime_named "${w[@]}"; } | sort -rn | sed -E 's#.*/##; s#\.jsonl$##' |
     while read -r id; do
       [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] ||
-        awk -F'\t' -v id="$id" '$1==id && $4=="claude" {print $2}' "$TMP/agents"
+        awk -F'\t' -v id="$id" '$1==id && $4=="claude" && $2 !~ /-prev-[0-9]+$/ {print $2}' "$TMP/agents"
     done
   exit 0
 fi

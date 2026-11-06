@@ -35,7 +35,9 @@ watcher.)
    Read a reply whole only when its header line or its `last section` needs you. Where the two disagree, read it whole
    and take the later of the two (dates, the `Done:` line) as the state: a worker may have added a section without
    updating the top, or finished without removing an old section.
-4. Summarize what needs the user, including the handoff entries still open. Then arm the watcher (Watching).
+   Act on each unread coordinator inbox entry it lists, then mark it read (Handing over).
+4. Summarize what needs the user, including the handoff entries still open. Then arm the watcher (Watching). A
+   successor (first prompt `You succeed "NAME"`) then does the successor's step (Handing over).
 
 ## Which sessions
 
@@ -138,10 +140,33 @@ otherwise live in your conversation alone, so the next coordinator can pick it u
 - **A PR waiting for a human reviewer is "waiting on review", not "on you"**, until a human approved it and the
   merge call is due. Before passing on an "on you" entry a day or more old, recheck it: the task may have moved.
 
-**Handing over** (at the context-watch hook's mark, or a restart): overwrite `<replies>/coordinator-handover.md` with
-the state that's in no file: live sessions worth knowing and what each waits on, why the restart (pane asks carry over
-by themselves). No rules and no files to read: the next coordinator's Start reads those, and each restated rule is
-re-sent on its every wake.
+**Handing over** (at the context-watch hook's mark, at `Weekly limit:`, or a restart): overwrite
+`<replies>/coordinator-handover.md` with the state that's in no file: live sessions worth knowing and what each waits
+on, why the restart (pane asks carry over by themselves). No rules and no files to read: the next coordinator's Start
+reads those, and each restated rule is re-sent on its every wake. Then hand over to a successor you start yourself
+(the status command is session-status here; each step prints the next):
+1. `session-status --successor` (`--account DIR` for the weekly-limit move): it opens a tab running an interactive
+   `claude -n NAME-next 'Act as a coordinator. You succeed …'`. Nothing opened: hand the user the command it prints
+   (`hand_command`, key `coordinator`). Then arm `--await ready` (Bash, background) and end your turn. From here act
+   on no message: forward each, text on stdin, with `session-status --inbox-add --from '<name> (<id8>)'`.
+2. When `--await ready` wakes you, call `name_session` with what `session-status --prev-name --title` prints
+   (`NAME-prev-K`; it titles your tab too), arm `--await renamed` (background) and end your turn: the rename lands
+   then. When it wakes you, stop your watcher (TaskStop), forward what came meanwhile, run
+   `session-status --successor --done` and end.
+   Your terminal closes once you are idle.
+
+**The successor's step** (your name is `NAME-next` and your first prompt says whom you succeed): run Start as usual
+(`open_pane` keeps your name while the old one holds `NAME`), then arm `--await name`. It wakes you when `NAME` is
+free: `name_session NAME`, then arm `--await done`, which closes the old coordinator's tab (only its split, when the
+tab has others) once it is idle and done forwarding. Tell the user what was left open, if anything. Any `--await`
+also wakes you on an unread coordinator inbox entry: act on each, mark it read (`session-status --inbox --read N`),
+and arm the same `--await` again. A live session other than the one you succeed holding `NAME` (`open_pane` says so):
+stop and ask the user. An `--await` that times out: check the other coordinator (`--activity`), then re-arm or finish
+by hand.
+
+**The coordinator inbox** (`<replies>/coordinator-inbox.md`): a worker's `reply` that no live coordinator takes lands
+here, and the worker is told it is queued. `--start` prints the unread entries and `--watch` reports new ones under
+`Inbox`: act on each, then mark it read.
 
 ## Project memory
 

@@ -6,6 +6,9 @@
 # as claude then reads ~/.claude.json). A DIR that's gone (a removed worktree) opens in $HOME.
 # Prints: [reused ]window <id> tab <id> terminal <id>. Returns 0 opened, 2 Ghostty not running (the pane copies CMD),
 # 3 AppleScript error (message on stderr).
+# grep without -q: -q stops at the match, ps then dies of SIGPIPE, and under the caller's pipefail (session-status)
+# the check failed 14 times in 20 (2026-11-06)
+_ghostty_running() { ps -axo ucomm= | grep '^ghostty *$' >/dev/null; }
 open_view() { _ghostty tab 1 "$@"; }
 open_split() { _ghostty right 0 "$@"; }
 
@@ -17,7 +20,7 @@ _ghostty() {
   [ "${account%/}" != "$HOME/.claude" ] || account=
   # ps, not pgrep: pgrep missed the running Ghostty from a background session (2026-10-19)
   command -v osascript >/dev/null || { echo "no osascript: the ghostty terminal is macOS only" >&2; return 2; }
-  ps -axo ucomm= | grep -q '^ghostty *$' || { echo "Ghostty is not running" >&2; return 2; }
+  _ghostty_running || { echo "Ghostty is not running" >&2; return 2; }
   out=$(osascript -e "$_ghostty_script" "$mode" "$dir" "$title" "$account" "$reuse" "$*" 2>&1) ||
     { echo "AppleScript error: $(head -1 <<<"$out")" >&2; return 3; }
   echo "$out"
@@ -64,5 +67,47 @@ on run argv
 		if title is not "" then perform action ("set_tab_title:" & title) on term
 		return "window " & (id of w) & " tab " & (id of t) & " terminal " & (id of term)
 	end tell
+end run
+APPLESCRIPT
+
+# title_tty TTY TITLE: the tab holding the terminal on TTY (ttys005) gets TITLE as its name override (a title the
+# program in it sets doesn't replace it). close_tty TTY: that terminal's tab closed when it is the tab's only
+# terminal, else only that split; prints `closed tab` or `closed split`. Both: 0 done, 1 no Ghostty terminal on TTY,
+# 2 Ghostty not running, 3 AppleScript error.
+title_tty() { _ghostty_tty title "$1" "$2"; }
+close_tty() { _ghostty_tty close "$1" ""; }
+_ghostty_tty() {
+  local out
+  command -v osascript >/dev/null || { echo "no osascript: the ghostty terminal is macOS only" >&2; return 2; }
+  _ghostty_running || { echo "Ghostty is not running" >&2; return 2; }
+  out=$(osascript -e "$_ghostty_tty_script" "$1" "${2#/dev/}" "$3" 2>&1) || { echo "AppleScript error: $(head -1 <<<"$out")" >&2; return 3; }
+  [ "$out" != none ] || { echo "no Ghostty terminal on $2" >&2; return 1; }
+  echo "$out"
+}
+read -r -d '' _ghostty_tty_script <<'APPLESCRIPT' || true
+on run argv
+	set {op, tname, title} to argv
+	tell application "Ghostty"
+		repeat with w in windows
+			repeat with t in tabs of w
+				repeat with term in terminals of t
+					set y to tty of term
+					if y is tname or y is ("/dev/" & tname) then
+						if op is "title" then
+							set name override of t to title
+							return "titled tab " & (id of t)
+						end if
+						if (count of terminals of t) is 1 then
+							close tab t
+							return "closed tab"
+						end if
+						close term
+						return "closed split"
+					end if
+				end repeat
+			end repeat
+		end repeat
+	end tell
+	return "none"
 end run
 APPLESCRIPT
