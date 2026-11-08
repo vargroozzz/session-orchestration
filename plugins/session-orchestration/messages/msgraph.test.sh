@@ -24,7 +24,9 @@ echo "{\"value\":[$(chat dm1 oneOnOne null "$(iso 60)" m1 u-ann Ann 'hi about PR
 echo "{\"value\":[$(msg q1 u-x Xi 'Ops, can someone look?' "$(iso 10)")]}" > "$F/q"
 echo "{\"value\":[$(msg t1 u-tm Tim 'deploy done' "$(iso 10)")]}" > "$F/team"
 echo "{\"value\":[$(msg s0 u-cu Cu hello "$(iso 300)"), $(msg s1 u-cu Cu 'could you check PROJ-3?' "$(iso 120)")]}" > "$F/sup"
-echo "{\"results\":[{\"id\":\"x1\",\"chatId\":\"g\",\"from\":\"bob@ex.org\",\"content\":\"@Max see\",\"createdDateTime\":\"$(iso 10)\"}]}" > "$F/mentions"
+echo "{\"results\":[{\"id\":\"x1\",\"chatId\":\"g\",\"from\":\"bob@ex.org\",\"content\":\"@Max see\",\"createdDateTime\":\"$(iso 10)\"},
+  {\"id\":\"xy\",\"teamId\":\"t\",\"channelId\":\"c\",\"from\":\"bob@ex.org\",\"content\":\"@Max yday\",\"createdDateTime\":\"$(iso $(( ($(date +%s) - $(epoch "$(dayfmt "$(date +%F)" %F -1)") - 43200) / 60 )))\"},
+  {\"id\":\"x0\",\"teamId\":\"t\",\"channelId\":\"c\",\"from\":\"bob@ex.org\",\"content\":\"@Max old\",\"createdDateTime\":\"$(iso 4320)\"}]}" > "$F/mentions"
 echo '{"id":"x1","body":{"content":"@Max see <a href=\"https://h/p/repos/app/pull-requests/5\">PR</a>"},"from":{"user":{"displayName":"Bob"}}}' > "$F/x1"
 mail() { printf '{"id":"%s","isRead":false,"receivedDateTime":"%s","from":{"emailAddress":{"address":"%s","name":"%s"}},"subject":"%s","bodyPreview":"%s"}' "$@"; }
 echo "{\"values\":[$(mail a1 "$(iso 60)" alerts@noise.io Noise x x), $(mail a2 "$(iso 60)" acc@books.io Acc Invoice x),
@@ -41,7 +43,7 @@ case "\$1" in
   message) cat $F/mentions ;;
   mail) cat $F/mail ;;
   calendar) echo "\$3" >> $F/accepted ;;
-  raw) case "\$4" in /me/chats*) cat $F/chats ;; /me/events*) cat $F/events ;; /chats/g/messages/x1) cat $F/x1 ;;
+  raw) echo "\$4" >> $F/raw; case "\$4" in /me/chats*) cat $F/chats ;; /me/events*) cat $F/events ;; /chats/g/messages/x1) cat $F/x1 ;;
          /chats/*) p=\${4#/chats/}; cat "$F/\${p%%/*}" ;; esac ;;
 esac
 EOF
@@ -59,15 +61,18 @@ run() { (cd "$tmp/proj" && HOME=$tmp PATH=$tmp/bin:$PATH NOTICE_DIR=$tmp/cache N
 
 want='teams DM  Ann: hi about PROJ-7 [PROJ-7]
 teams @   General · bob: @Max see [PROJ-9]
+teams @   channel · bob: @Max yday
 teams ?   Support · Cu: could you check PROJ-3? [PROJ-3]
 teams ?   Questions · Xi: Ops, can someone look? — asks the team
 mail      Acc: Invoice
 mail      Lee: Question on PROJ-7 [PROJ-7] — asks about PROJ-7'
 out=$(run); [ "$out" = "$want" ] || { echo "lines differ:"; diff <(echo "$want") <(echo "$out"); exit 1; }
+# The 3-day-old mention is outside the window: not shown, and its body not fetched.
+! grep -q x0 "$F/raw" || { echo "fetched the out-of-window mention's body"; exit 1; }
 [ "$(cat "$F/accepted")" = ev1 ] || { echo "OOO accept: $(cat "$F/accepted")"; exit 1; }
 grep -q 'for Max, a developer on the Ops team' "$F/prompt" && grep -q '^PROJ-7    In Progress - Fix login' "$F/prompt" ||
   { echo "triage prompt:"; head -3 "$F/prompt"; exit 1; }
-[ "$(jq -c .mine "$tmp/cache/notices.jsonl" | paste -sd' ' -)" = '["PROJ-7"] ["PROJ-9"] [] [] [] ["PROJ-7"]' ] ||
+[ "$(jq -c .mine "$tmp/cache/notices.jsonl" | paste -sd' ' -)" = '["PROJ-7"] ["PROJ-9"] [] [] [] [] ["PROJ-7"]' ] ||
   { echo "mine: $(jq -c .mine "$tmp/cache/notices.jsonl")"; exit 1; }
 grep -q '"line":"teams ?   Team · Tim: deploy done' "$tmp/cache/dropped.jsonl" || { echo "dropped.jsonl"; exit 1; }
 [ "$(grep -c . "$tmp/cache/prs.tsv")" = 1 ] || { echo "prs.tsv"; exit 1; }
