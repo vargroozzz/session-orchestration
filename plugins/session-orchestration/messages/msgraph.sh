@@ -71,8 +71,9 @@ messages_notices() {
 
   local day; day=$(date +%F)
   msgraph_call "$T/chats" raw --method GET '/me/chats?$expand=lastMessagePreview&$top=50&$orderby=lastMessagePreview/createdDateTime desc' &
-  # KQL sent> is exclusive: this is yesterday and today.
-  msgraph_call "$T/mentions" message search --mentioned-me --sent-after "$(dayfmt "$day" %F -2)" --limit 25 &
+  # Newest first; the jq keeps yesterday and today. Not --sent-after: Graph's search answers mentions: with any sent>
+  # or sent< as a 400 BadRequest (FanoutExternalBadRequest, every call from 2026-11-08), while each alone works.
+  msgraph_call "$T/mentions" message search --mentioned-me --limit 25 &
   # Mail: unread inbox from the last 7 days (the jq; --since doesn't narrow --unread), all to triage. A GET only: never marked read.
   # ponytail: 150 covers a busy week; raise it if the oldest fetched is under 7 days old.
   msgraph_call "$T/mail" mail list --folder inbox --unread --limit 150 --include-body &
@@ -82,6 +83,10 @@ messages_notices() {
     msgraph_call "$T/events" raw --method GET "/me/events?\$filter=createdDateTime ge $(TZ=UTC epochfmt $(( $(date +%s) - 14 * 86400 )) %FT%TZ)&\$select=id,subject,organizer,responseStatus,isOrganizer&\$top=100" &
   wait
   msgraph_failed && return 1
+  # The mentions' window, yesterday and today from local midnight; a hit without a time stays (Graph decides then).
+  jq --argjson since "$(epoch "$(dayfmt "$day" %F -1)")" '(if .results then "results" else "values" end) as $k
+    | .[$k] |= (. // [] | map(select(.createdDateTime == null or (.createdDateTime | sub("\\.[0-9]+"; "") | try fromdate catch 0) >= $since)))' \
+    "$T/mentions" > "$T/mentions.in" 2>/dev/null && mv "$T/mentions.in" "$T/mentions"
 
   # accept_ooo_invites: a colleague's (domain) OOO invite from the last 2 weeks is accepted without a reply to the
   # organizer (inbox rules can't accept meetings). The invite mail is dropped in the mail jq below either way.
