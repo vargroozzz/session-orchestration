@@ -6,6 +6,8 @@
 With `"messages": "msgraph"` in `.claude/coordination.local.json`, the sweep's **Notices** footer gets one line per
 Teams or mail item that needs you, through a Microsoft Graph CLI. Its calls are GETs: nothing is sent, reacted to or
 marked read (the one write is `accept_ooo_invites`, below). It runs beside the tracker calls, capped at 60s.
+A session's own sends (`msgraph message send`, `mail send|reply|forward`) are gated by `hooks/approved-action.sh`
+like a PR comment post: they need the user's relayed approval naming the body's sha256 and the recipients.
 
 ```
 teams DM  <sender>: <first 60 chars>             unread 1:1 or untitled group chat (its last message)

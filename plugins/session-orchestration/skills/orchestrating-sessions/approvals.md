@@ -94,8 +94,10 @@ gave you in one of the ways below, naming the task key or answering your last me
   the one for this action before acting; Run on a withdrawn command runs nothing. Don't point the user at Run for an
   action you relay, nor relay one they already ran.
 - **Hook-gated posts and merges** (PR and Jira comments, PR merges through `gh`, `bitbucketdc-cli`, `forgejo-cli`
-  and `jiradc-cli`): the worker's blocked report carries `needs your approval: <action>`, e.g. `merge app#271` or
-  `post comment <file> on PROJ-4849 (sha256 <hex>)`. Ask the user about exactly that, and for a post show the body
+  and `jiradc-cli`, and Teams and mail sends through `msgraph`): the worker's blocked report carries `needs your
+  approval: <action>`, e.g. `merge app#271`, `post comment <file> on PROJ-4849 (sha256 <hex>)` or `send mail <file>
+  to --to ann@example.com --subject Weekly report (sha256 <hex>)`. A send's action names every recipient, mention
+  and subject: show them to the user with the body, and keep them word for word in the Action. Ask the user about exactly that, and for a post show the body
   file (`ask_approval` with `body_file` set to that file, `target`, and `kind` for a review finding; in plain text,
   its text). Relay with that action as the Action line, verbatim, plus the task key: `Action: merge app#271
   (PROJ-5164)`. Use the hook's words, not the CLI command: an Action naming the command fails the hook even when

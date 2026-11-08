@@ -32,6 +32,11 @@ typed() { jq -nc --arg ts "$2" --arg t "$1" '{type: "user", origin: {kind: "huma
   typed "yes, approve PROJ-13" "$now"
   typed "yes, request changes on PROJ-14" "$now"
   typed "yes, merge PROJ-15 (app#305)" "$now"
+  typed "yes, send the PROJ-20 message" "$now"
+  typed "yes, send the PROJ-21 mail" "$now"
+  typed "yes, reply to AAMk+x/y= for everyone" "$now"
+  typed "yes, send the PROJ-22 mail" "$now"
+  typed "yes, send the PROJ-23 mail" "$now"
 } > "$proj/$cid.jsonl"
 export CLAUDE_CODE_SESSION_ATTENDED=0 # unattended (a --bg session) unless a check says otherwise
 printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
@@ -64,6 +69,11 @@ w=$tmp/worker.jsonl
   relay "yes, approve PROJ-13" "approve org/app#303 (PROJ-13)"
   relay "yes, request changes on PROJ-14" "post request-changes review $tmp/body.txt on org/app#304 (sha256 $sha) for PROJ-14"
   relay "yes, merge PROJ-15 (app#305)" "merge app#305 (PROJ-15)"
+  relay "yes, send the PROJ-20 message" "send teams message $tmp/body.txt to 19:abc@thread.v2 --mention ann@ex.org (sha256 $sha) for PROJ-20"
+  relay "yes, send the PROJ-21 mail" "send mail $tmp/body.txt to --to ann@ex.org bob@ex.org --subject Weekly report (sha256 $sha) for PROJ-21"
+  relay "yes, reply to AAMk+x/y= for everyone" "reply to mail $tmp/body.txt to AAMk+x/y= --reply-all (sha256 $sha)"
+  relay "yes, send the PROJ-22 mail" "send mail $tmp/body.txt to --to boss@ex.org --reply-to 19:xyz@thread.v2 (sha256 $sha) for PROJ-22"
+  relay "yes, send the PROJ-23 mail" "send mail $tmp/body.txt to --to ann@ex.org --subject UTF-8 fix (sha256 $sha) for PROJ-23"
 } > "$w"
 
 run() { # $1 command → allow | deny | pass | blocked (exit 2)
@@ -130,6 +140,51 @@ CLAUDE_CODE_SESSION_ATTENDED=1 check "$fj pr merge 309 --repo org/app" ask "atte
 got=$(jq -nc --arg c "$fj pr merge 309 --repo org/app" --arg cwd "$root" --arg tp "$w" '{tool_input: {command: $c}, cwd: $cwd, transcript_path: $tp}' |
   (cd "$root" && HOME=$home CLAUDE_CONFIG_DIR=$home/.claude PATH=$tmp/bin:$PATH bash "$here/approved-action.sh") | jq -r .hookSpecificOutput.permissionDecisionReason)
 grep -qF 'needs your approval: merge org/app#309' <<<"$got" || { echo "FAIL: forgejo deny doesn't name the action: $got"; exit 1; }
+# Teams and mail sends (msgraph): the action names the body's sha256 and everything else sent, word for word.
+mg='npx -y @acme/msgraph-cli@latest'
+check "msgraph mail list --unread" pass "read-only msgraph call"
+check "bash messages/msgraph.test.sh" pass "a file named after msgraph"
+check "grep -rn 'msgraph mail send --to a@b.c' docs" pass "grep pattern naming a send"
+check "msgraph raw /me/messages" pass "msgraph raw GET"
+check "msgraph raw /me/sendMail --method POST --body-file $tmp/body.txt" deny "msgraph raw write"
+check "msgraph message send 19:abc@thread.v2 --body-file $tmp/body.txt --mention ann@ex.org bob@ex.org" deny "teams send, a mention the relay doesn't name"
+check "msgraph message send 19:abc@thread.v2 --body-file $tmp/body.txt" deny "teams send, the relay's mention dropped"
+check "msgraph message send 19:abc@thread.v2 --body-file $tmp/other.txt --mention ann@ex.org" deny "teams send, other body file"
+check "msgraph message send 19:abc@thread.v2 --body 'Looks good to me.' --mention ann@ex.org" deny "teams send, inline body"
+check "msgraph message send 19:zzz@thread.v2 --body-file $tmp/body.txt --mention ann@ex.org" deny "teams send, other chat"
+check "msgraph message send 19:abc@thread.v2 --body-file $tmp/body.txt --mention ann@ex.org && msgraph mail list" deny "teams send with another msgraph call"
+check "$mg message send 19:abc@thread.v2 --body-file $tmp/body.txt --format markdown --mention ann@ex.org" allow "teams send with a relay"
+check "msgraph message send 19:abc@thread.v2 --body-file $tmp/body.txt --mention ann@ex.org" deny "teams send, relay used once already"
+check "msgraph mail send --to ann@ex.org bob@ex.org --cc eve@ex.org --subject 'Weekly report' --body-file $tmp/body.txt" deny "mail send, a cc the relay doesn't name"
+check "msgraph mail send --to ann@ex.org --subject 'Weekly report' --body-file $tmp/body.txt" deny "mail send, a recipient dropped"
+check "msgraph mail send --to ann@ex.org bob@ex.org --subject 'Weekly report' --body-file $tmp/body.txt --attachments /tmp/a.pdf" deny "mail attachments"
+check "msgraph mail send --to ann@ex.org bob@ex.org --subject 'Weekly report' --body-file $tmp/body.txt" allow "mail send with a relay"
+check "msgraph mail send --to ann@ex.org --subject x --body-file $tmp/body.txt --draft" pass "a draft sends nothing"
+check "msgraph mail reply AAMk+x/y= --reply-all --body-file $tmp/body.txt" allow "mail reply with a relay, no task key"
+check "msgraph mail forward AAMk+x/y= --to eve@ex.org" deny "mail forward, no comment file"
+check "msgraph mail draft send AAMk1" deny "draft send: nothing to name"
+check "msgraph calendar respond AAMk1 --response accept" deny "calendar respond mails the organizer"
+check "\$(which msgraph) message send 19:abc@thread.v2 --body-file $tmp/body.txt" deny "msgraph through \$(which)"
+check "M=msgraph; \$M message send 19:abc@thread.v2 --body-file $tmp/body.txt" deny "msgraph through a variable"
+check "\"\$bin\" mail send --to a@ex.org --body-file $tmp/body.txt" deny "a send verb after a variable"
+check "\$(which msgraph) raw /me/sendMail --method POST" deny "msgraph raw write through \$(which)"
+check "M=\$(which msgraph); \$M mail list" pass "msgraph through a variable, read-only"
+check "msgraph mail send --to \$(cat /tmp/r) --subject s --body-file $tmp/body.txt" deny "recipients from \$(…)"
+check "msgraph mail rule create --name x --forward-to eve@evil.org" deny "a mail rule that forwards"
+check "msgraph file grant ITEM --emails eve@ex.org" deny "file grant mails an invite"
+check "npx -y -p @acme/msgraph-cli msgraph message send 19:abc@thread.v2 --body-file $tmp/body.txt --mention ann@ex.org" deny "npx -p form, relay used once already (read as one call)"
+got=$(jq -nc --arg c "npx -y -p @acme/msgraph-cli msgraph message send 19:p@thread.v2 --body-file $tmp/body.txt" --arg cwd "$root" --arg tp "$w" '{tool_input: {command: $c}, cwd: $cwd, transcript_path: $tp}' |
+  (cd "$root" && HOME=$home CLAUDE_CONFIG_DIR=$home/.claude PATH=$tmp/bin:$PATH bash "$here/approved-action.sh") | jq -r .hookSpecificOutput.permissionDecisionReason)
+grep -qF "needs your approval: send teams message $tmp/body.txt to 19:p@thread.v2 (sha256" <<<"$got" ||
+  { echo "FAIL: npx -p form not read as one send: $got"; exit 1; }
+check "msgraph message send 19:xyz@thread.v2 --body-file $tmp/body.txt" deny "another send's Action ending in this target"
+check "msgraph mail send --to ann@ex.org --subject 'UTF-8 fix' --body-file $tmp/body.txt" allow "a key-like subject: the key comes from outside the action"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "msgraph message send 19:zzz@thread.v2 --body-file $tmp/body.txt" ask "attended, unapproved teams send"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "msgraph mail draft send AAMk1" ask "attended, draft send"
+got=$(jq -nc --arg c "msgraph message send 19:zzz@thread.v2 --body-file $tmp/body.txt --mention ann@ex.org" --arg cwd "$root" --arg tp "$w" '{tool_input: {command: $c}, cwd: $cwd, transcript_path: $tp}' |
+  (cd "$root" && HOME=$home CLAUDE_CONFIG_DIR=$home/.claude PATH=$tmp/bin:$PATH bash "$here/approved-action.sh") | jq -r .hookSpecificOutput.permissionDecisionReason)
+grep -qF "needs your approval: send teams message $tmp/body.txt to 19:zzz@thread.v2 --mention ann@ex.org (sha256 $sha)" <<<"$got" ||
+  { echo "FAIL: teams deny doesn't name the action: $got"; exit 1; }
 # Attended (an interactive session): the missing approval asks instead of denying; anything else on the signal denies.
 # GitHub: OWNER/REPO#ID from -R/--repo or the PR's URL, never from a remote.
 git -C "$root" init -q && git -C "$root" remote add origin git@github.com:acme/app.git

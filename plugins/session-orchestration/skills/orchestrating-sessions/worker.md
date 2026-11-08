@@ -115,8 +115,9 @@ EOF
 
 ## Posting and merging
 
-PR and Jira comment posts and PR merges through `gh`, `bitbucketdc-cli`, `forgejo-cli` and `jiradc-cli` are
-hook-gated: they run only on a relayed approval naming exactly that action, which the hook verifies itself, one run
+PR and Jira comment posts and PR merges through `gh`, `bitbucketdc-cli`, `forgejo-cli` and `jiradc-cli`, and Teams
+and mail sends through `msgraph` (`message send|update`, `mail send|reply|forward`; a mail send from `--body-file`,
+a forward from `--comment-file`, no attachments) are hook-gated: they run only on a relayed approval naming exactly that action, which the hook verifies itself, one run
 per relay (a run failed: check whether it landed before asking again). Post from `--body-file <absolute path>`, as the
 only CLI call in its command, and don't edit the file after asking: the approval names its sha256. Any send (a
 comment, chat message or mail) is drafted whole before you ask: every message's exact text, an attachment's caption

@@ -26,13 +26,21 @@
 # call this hook never links to it. Gate at execution (a wrapper for gh and the CLIs on PATH) if that matters.
 # ponytail: gh subcommands outside pr/issue/api (release, repo, workflow) aren't gated; add them when a project
 # reserves them. A name split by quotes (g''h) isn't seen.
+# A Teams or mail send under the user's name (msgraph message send|update, mail send|reply|forward) is gated like a
+# post: the action names the body file's sha256 and everything else the call sends (chat or message id, recipients,
+# mentions, subject, …) word for word. A --draft or --dry-run sends nothing and passes. What can't be named by a
+# sha256 is denied (asked, when attended): mail attachments, mail draft|scheduled send, mail rule create|update (a
+# rule can forward), calendar create|update|cancel|respond (they mail the attendees), file grant (mails an invite),
+# msgraph raw with a write method, and msgraph through a variable or $(…).
+# shortcut: the CLI is known by the names msgraph and msgraph-cli; a wrapper under another name (msgraph.cli in the
+# config, node …/dist/index.js) isn't gated. Read the config's cli name here if a project uses one.
 # TODO: GitLab. glab mr merge|note|approve and glab issue note pass ungated; gate them like gh (glab has no body-file
 # flag: -m "$(cat /abs/file)").
 # The other gated way to post: skills/orchestrating-sessions/review-inbox/post-approved.sh, whose CLI call this hook
 # doesn't see. It posts only review-inbox rows the user approved on the page, each checked by verify-row.sh.
 input=$(cat)
 # (The raw JSON: a newline before gh is the two characters \n.)
-pre='bitbucketdc-cli|forgejo-cli|jiradc-cli|(^|[^A-Za-z0-9_.-]|\\[nrt])gh([^A-Za-z0-9_.-]|$)'
+pre='bitbucketdc-cli|forgejo-cli|jiradc-cli|msgraph|\$[^[:space:]]*[[:space:]]+(message|mail|calendar|file)[[:space:]]|(^|[^A-Za-z0-9_.-]|\\[nrt])gh([^A-Za-z0-9_.-]|$)'
 [[ $input =~ $pre ]] || exit 0
 
 done=
@@ -81,8 +89,8 @@ coordinated || pass
 # anything else (a shell, awk, a variable, a path or `.` as the command, read, set, sudo, sort, uniq, tee) fails
 # closed. git counts only as git [-C DIR] [--no-pager] add|commit|status|log|diff|show|branch|push|fetch, not with
 # --output, and push/fetch not with --r…, --e…, --u… (-c, aliases, other subcommands can run text); npx only for the
-# three CLIs (any npm scope); rg not with --pre; no option word with an escape in it. Shared by both passes.
-SAFE=' cat echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli '
+# four CLIs (bitbucketdc, forgejo, jiradc, msgraph; any npm scope); rg not with --pre; no option word with an escape in it. Shared by both passes.
+SAFE=' cat echo printf grep egrep fgrep rg git claude head tail wc ls cd mkdir touch test [ true false cut tr diff jq gh bitbucketdc-cli forgejo-cli jiradc-cli msgraph '
 # lex(S): S with quoting resolved: quote marks dropped, and each separator, < and ( inside quotes made `_`, so what
 # is left splits into commands as the shell would (unclosed quote: the rest counts as quoted). A # at a word start
 # becomes its own command `#`, which safe() refuses: where a comment starts (x\ #y, ${x/ #/}) is the shell's call,
@@ -112,7 +120,7 @@ function safe(u, cat,   n, seg, x, m, w, y, t) {
     if (t == "") continue
     if (cat && t != "cat") return 0
     if (t == "npx") { for (y++; w[y] == "-y" || w[y] == "--yes"; y++); t = w[y]; sub(/@[^@\/]*$/, "", t); sub(/^@[^\/]*\//, "", t)
-      if (t !~ /^(bitbucketdc|forgejo|jiradc)-cli$/) return 0 }
+      if (t !~ /^(bitbucketdc|forgejo|jiradc|msgraph)-cli$/) return 0 }
     if (t == "rg" && seg[x] ~ /--pre/ || t == "printf" && seg[x] ~ /(^|[ \t])-v/) return 0
     if (t == "git") { for (y++; w[y] == "-C" || w[y] == "--no-pager"; y += w[y] == "-C" ? 2 : 1);
       if (!index(" add commit status log diff show branch push fetch ", " " w[y] " ") || seg[x] ~ /--output/) return 0
@@ -140,7 +148,14 @@ cmd=$(printf '%s\n' "$cmd" | awk "${awkv[@]}" "$awklib"'
     op = cut && !safe(lex(d), 1); print op
     for (x = 1; x <= n; x++) if (op || !B[x]) print O[x] }') || exit 1
 opaque=${cmd:0:1} cmd=${cmd:2}
-ops='bitbucketdc-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|comment[[:space:]]+(create|reply|update))([[:space:]]|$)|forgejo-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|review|comment[[:space:]]+(create|update))([[:space:]]|$)|jiradc-cli[^[:space:]]*.*[[:space:]]issue[[:space:]]+comment[[:space:]]+(create|update)([[:space:]]|$)'
+# The msgraph CLI by name: msgraph, a path to it, or its npx package; not a file named after it (msgraph-body.md).
+msw='(^|[^A-Za-z0-9_.-])msgraph(-cli)?(@[^[:space:]]*)?'
+# Its commands that send or forward under the user's name (a mail rule can forward, a file grant mails an invite).
+msv='(message[[:space:]]+(send|update)|mail[[:space:]]+((draft|scheduled)[[:space:]]+)?(send|reply|forward)|mail[[:space:]]+rule[[:space:]]+(create|update)|calendar[[:space:]]+(create|update|cancel|respond)|file[[:space:]]+grant)([[:space:]]|$)'
+ops='bitbucketdc-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|comment[[:space:]]+(create|reply|update))([[:space:]]|$)|forgejo-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|review|comment[[:space:]]+(create|update))([[:space:]]|$)|jiradc-cli[^[:space:]]*.*[[:space:]]issue[[:space:]]+comment[[:space:]]+(create|update)([[:space:]]|$)|'"$msw"'[[:space:]](.*[[:space:]])?'"$msv"
+# msgraph named through a variable or $(…) ($(which msgraph), M=msgraph), or a send verb right after a variable or
+# $(…) ($M mail send, "$bin" message send: a wrapper whose name isn't known here).
+msind='(=["'"'"']?|\$\(|`)[[:space:]]*((which|command[[:space:]]+-v|type[[:space:]]+-p)[[:space:]]+)?([^[:space:]]*/)?msgraph(-cli)?([^A-Za-z0-9_.-]|$)|\$[^[:space:]]*[[:space:]]+'"$msv"
 ghw='(^|[^A-Za-z0-9_.-])gh([^A-Za-z0-9_.-]|$)'
 # gh, then pr/issue and a merge, comment or review, or api, in the same command (flags may sit between): what a gated
 # gh call looks like. gh pr view or gh issue list don't.
@@ -174,15 +189,21 @@ bbops=; grep -qE "$ops" <<<"$uq" && bbops=1
 # forgejo-cli raw with a write method: the gh api twin.
 grep -qiE 'forgejo-cli[^[:space:]]*.*[[:space:]]raw[[:space:]].*--method[=[:space:]]+["'"'"']?(POST|PUT|PATCH|DELETE)' <<<"$uq" &&
   attended "Blocked: a forgejo-cli raw call that writes can't be named as an approved action. Use forgejo-cli pr merge|review|comment, or hand the user the command with hand_command."
+grep -qiE "$msw"'[[:space:]](.*[[:space:]])?raw[[:space:]].*--method[=[:space:]]+["'"'"']?(POST|PUT|PATCH|DELETE)' <<<"$uq" &&
+  attended "Blocked: a msgraph raw call that writes can't be named as an approved action. Use msgraph message send or mail send|reply|forward, or hand the user the command with hand_command."
+grep -qE "$msind" <<<"$uq" && grep -qiE "(^|[[:space:]])($msv|raw[[:space:]].*--method[=[:space:]]+(POST|PUT|PATCH|DELETE))" <<<"$uq" &&
+  attended "Blocked: msgraph reached through a variable or \$(…) can't be checked by the approval hook. Run it by its name (msgraph …, or npx -y <package> …), as one plain command."
 [ -n "$bbops" ] || [ "$ghn" -gt 0 ] || pass
 grep -qE "$ghind" <<<"$scan" &&
   attended "Blocked: gh reached through a variable or \$(…) can't be checked by the approval hook. Run it by its name (gh …), as one plain command."
 alone="Run that CLI call alone, as one plain command (the CLI, then its subcommand, then the arguments)."
 # Fails closed on anything it can't read as exactly one call: a second CLI call (chained, or glued to a token), a
 # subcommand behind global flags or a variable.
-bbn=$(grep -oE 'bitbucketdc-cli|forgejo-cli|jiradc-cli' <<<"$scan" | wc -l | tr -d ' ')
+# (npx -p PKG msgraph …: the package and the binary it runs are one call.)
+bbn=$(sed -E 's/msgraph-cli(@[^[:space:]]*)?[[:space:]]+msgraph([[:space:]]|$)/msgraph-cli /g' <<<"$scan" |
+  grep -oE "bitbucketdc-cli|forgejo-cli|jiradc-cli|$msw([[:space:]]|$)" | wc -l | tr -d ' ')
 [ -z "$bbops" ] || [ "$bbn" = 1 ] ||
-  decide deny "Blocked: a PR/Jira comment post, review or PR merge must be the only bitbucketdc-cli/forgejo-cli/jiradc-cli call in its command. $alone"
+  decide deny "Blocked: a PR/Jira comment post, review, PR merge or Teams/mail send must be the only bitbucketdc-cli/forgejo-cli/jiradc-cli/msgraph call in its command. $alone"
 
 # Tokens, quotes honoured (xargs fails on an unbalanced quote: a heredoc's text, say). An unquoted ; becomes a token
 # of its own first, so x; ends a call and a quoted 'x;' (a --subject value) doesn't.
@@ -209,6 +230,7 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     env|command|rtk|proxy|exec|time|nohup|sudo|xargs|then|do|else|'!'|'{'|if|while|until|[A-Za-z_]*=*) ;; *) st= ;; esac
   case "$t" in
     *bitbucketdc-cli*|*forgejo-cli*|*jiradc-cli*) h= ;;
+    msgraph|*/msgraph|*msgraph-cli|*msgraph-cli@*) h=ms ;;
     *) [ "${b##*/}" = gh ] || continue
        [ -n "$st" ] || [ "$t" != "$b" ] || continue
        [ "$prev" != xargs ] || attended "Blocked: gh run through xargs can't be checked by the approval hook. $alone"
@@ -219,6 +241,45 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     a=${toks[$i]}; case "$a" in '|'|'||'|'&&'|';'|'&') break ;; esac
     i=$((i + 1)); args+=("${a%)}")
   done
+  if [ "$h" = ms ]; then
+    [ "${args[0]:-}" != msgraph ] || args=("${args[@]:1}")   # npx -p PKG msgraph …
+    case "${args[*]:0:3}" in
+      'message send'*|'message update'*) mv="${args[1]} teams message" ;;
+      'mail send'*) mv="send mail" ;; 'mail reply'*) mv="reply to mail" ;; 'mail forward'*) mv="forward mail" ;;
+      'mail draft send'*|'mail scheduled send'*|'mail rule create'*|'mail rule update'*|'calendar create'*|'calendar update'*|'calendar cancel'*|'calendar respond'*|'file grant'*)
+        attended "Blocked: msgraph ${args[*]:0:3} sends or forwards under the user's name, and what it sends can't be named by a body file's sha256. Hand the user the command with hand_command." ;;
+      *) continue ;;
+    esac
+    # Its words go into the action: a variable or $(…) there could change after the approval.
+    case "${args[*]}" in *'$'*|*'`'*) attended "Blocked: msgraph with a variable or \$(…) in its words can't be checked by the approval hook. Write every recipient and value out. $alone" ;; esac
+    calls=$((calls + 1)); host= kind=send target= repo= bodyfile= body= mode= modes=0 cm= fj= att= msx=()
+    # Everything the call sends but the body goes into the action word for word, in the command's order; the first
+    # plain word is the chat or message id.
+    set -- "${args[@]:2}"
+    while [ $# -gt 0 ]; do
+      case "$1" in --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}" ;; esac
+      case "$1" in
+        -h|--help|--draft|--dry-run) help=1 ;;
+        --body-file|--comment-file) bodyfile=${2:-}; shift ;;
+        --body|--comment) body=1; shift ;;
+        --format) shift ;;
+        --pretty) ;;
+        --importance|--reply-to|--subject|--team-id|--message-id|--send-at|--mailbox) msx+=("$1 ${2:-}"); shift ;;
+        # Variadic: every word up to the next option.
+        --to|--cc|--bcc|--add-to|--remove-to|--add-cc|--remove-cc|--mention|--attachments)
+          [ "$1 ${args[0]}" != '--attachments mail' ] || att=1
+          v=$1; while [ $# -gt 1 ] && [[ $2 != -* ]]; do v="$v $2"; shift; done; msx+=("$v") ;;
+        -*) msx+=("$1") ;;
+        *) if [ -z "$target" ]; then target=$1; else msx+=("$1"); fi ;;
+      esac
+      shift
+    done
+    # The key a relay with no tracker key is verified with: the chat or message id, or the first --to address.
+    mshort=$target
+    for v in ${msx[@]+"${msx[@]}"}; do [ -n "$mshort" ] || [[ $v != '--to '* ]] || { mshort=${v#--to }; mshort=${mshort%% *}; }; done
+    what="${target:+$target }${msx[*]:-}"; what=${what% } target=$what
+    continue
+  fi
   if [ -z "$h" ]; then
     sub="${args[*]:0:3}"
     case "$cli:$sub" in
@@ -309,9 +370,9 @@ if [ "$calls" = 0 ]; then
   decide deny "Blocked: the approval hook can't read this as one PR/Jira comment post or PR merge. $alone"
 fi
 [ "$calls" = 1 ] && [ $((bbn + ghn)) = 1 ] ||
-  decide deny "Blocked: a PR/issue comment post, review or merge must be the only bitbucketdc-cli/forgejo-cli/jiradc-cli/gh call in its command. $alone"
+  decide deny "Blocked: a PR/issue comment post, review, merge or Teams/mail send must be the only bitbucketdc-cli/forgejo-cli/jiradc-cli/msgraph/gh call in its command. $alone"
 [ -z "$help" ] || pass
-[ -n "$target" ] || decide deny "Blocked: no PR id or issue key in this command."
+[ -n "$target" ] || decide deny "Blocked: no PR id, issue key, chat, message id or recipient in this command."
 short=
 if [ -n "$host" ]; then
   # OWNER/REPO, from -R ([HOST/]OWNER/REPO or a URL) or the target's URL; the two must agree. A host other than
@@ -336,6 +397,8 @@ else
                   [ -z "$fj" ] || [[ $repo == */* ]] || decide deny "Blocked: name the repository as --repo OWNER/REPO, so the approval can name OWNER/REPO#ID."
                   what="$repo#$target"; [ -z "$fj" ] || short="${repo##*/}#$target" ;;
     jirapost) what=$target ;;
+    send) short=$mshort
+          [ -z "$att" ] || decide deny "Blocked: mail attachments can't be named by the body file's sha256. Send the text alone, or hand the user the command with hand_command." ;;
   esac
 fi
 if [ "$kind" = review ]; then
@@ -349,13 +412,14 @@ fi
 if [ "$kind" = merge ] || [ "$kind" = approve ]; then
   action="$kind $what"
 else
-  bf='--body-file <absolute path>'
+  bf='--body-file <absolute path>'; [ "$kind" != send ] || bf="$bf (mail forward: --comment-file)"
   [ -z "$body" ] || decide deny "Blocked: post the comment with $bf, not inline text, so the approval can name the file's sha256."
   [ -n "$bodyfile" ] && [ "$bodyfile" != - ] || decide deny "Blocked: post the comment with $bf, so the approval can name the file's sha256."
   case "$bodyfile" in /*) ;; *) decide deny "Blocked: give the body file as an absolute path: $bf." ;; esac
   [ -f "$bodyfile" ] || decide deny "Blocked: no such body file: $bodyfile"
   sha=$(shasum -a 256 "$bodyfile" | cut -d' ' -f1); [ "${#sha}" = 64 ] || exit 1
   if [ "$kind" = review ]; then action="post $mode review $bodyfile on $what (sha256 $sha)"
+  elif [ "$kind" = send ]; then action="$mv $bodyfile to $what (sha256 $sha)"
   else action="post comment $bodyfile on $what (sha256 $sha)"; fi
 fi
 
@@ -374,8 +438,9 @@ tried=
 while IFS= read -r r; do
   [ -n "$r" ] || continue
   act=$(jq -r .action <<<"$r")
-  w=${what//./\\.}
-  grep -qE "(^|[^A-Za-z0-9#/.-])$w([^A-Za-z0-9]|$)" <<<"$act" || continue
+  # A send names all it sends: the whole action, word for word (none dropped or added, not another verb or target).
+  if [ "$kind" = send ]; then grep -qF -- "$action" <<<"$act" || continue
+  else w=${what//./\\.}; grep -qE "(^|[^A-Za-z0-9#/.-])$w([^A-Za-z0-9]|$)" <<<"$act" || continue; fi
   if [ "$kind" = merge ] || [ "$kind" = approve ]; then
     grep -qiE "(^|[^a-z])$kind([^a-z]|$)" <<<"$act" && ! grep -qE '[0-9a-f]{64}' <<<"$act" || continue
   else
@@ -384,7 +449,9 @@ while IFS= read -r r; do
     [ "$kind" != prpost ] || [ -z "$host$fj" ] || ! grep -qiw review <<<"$act" || continue
     [ "$kind" != review ] || { grep -qiE "(^|[^a-z-])$mode([^a-z-]|$)" <<<"$act" && grep -qiw review <<<"$act"; } || continue
   fi
-  key=$target; [ "$kind" = jirapost ] || key=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$act" | head -1)
+  # (A send's key from outside its action: a subject or id there may hold words like UTF-8.)
+  a=$act; [ "$kind" != send ] || a=${act/"$action"/}
+  key=$target; [ "$kind" = jirapost ] || key=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$a" | head -1)
   # No tracker key (session-name keys): the user's words must name the target itself (REPO#ID; OWNER/ may precede).
   [ -n "$key" ] || key=$short
   [ -n "$key" ] || { tried="the matching relay's Action names no task key"; continue; }

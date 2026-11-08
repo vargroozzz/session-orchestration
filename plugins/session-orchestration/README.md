@@ -77,7 +77,8 @@ every change. Delegation, accounts, terminal and personal memory always stay per
 Installing the plugin adds these to every Claude Code session, in every project:
 
 - **Approval gate** (`hooks/approved-action.sh`): a PR merge, review or comment post (`gh pr merge|comment|review`,
-  `gh issue comment`, and the Bitbucket, Forgejo and Jira CLIs named above) needs your approval, relayed by the
+  `gh issue comment`, and the Bitbucket, Forgejo and Jira CLIs named above) or a Teams or mail send (`msgraph message
+  send|update`, `mail send|reply|forward`) needs your approval, relayed by the
   coordinator; without it an interactive session asks you and a background one is denied. It acts only on
   coordinated work: a project setup has written files for (an adapter, `.claude/coordination.local.json` or
   `.claude/coordination/`, in the folder or one above), or a session a coordinator started or messaged. Elsewhere,
