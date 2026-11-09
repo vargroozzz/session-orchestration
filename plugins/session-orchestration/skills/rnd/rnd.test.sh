@@ -94,6 +94,26 @@ out=$(rnd replies 7 2>&1)
 grep -q $'eeeeeeee\tGHI-3\t2026-10-11T09:00\tquiet' <<<"$out" || fail "replies: the lost one" "$out"
 grep -q 'DEF-2' <<<"$out" && fail "replies: a written reply isn't lost" "$out"
 grep -q "{'task': 2, 'wrote': 1, 'lost': 1, 'open': 0}" <<<"$out" || fail "replies: totals" "$out"
+# A reply written through Bash (sed -i, a python3 heredoc) is a write too; removed again so later counts stay put.
+cat > "$a/rrrrrrrr-0001.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-11T08:00:00.000Z","message":{"content":"Work on JKL-4"}}
+{"type":"assistant","timestamp":"2026-10-11T08:00:05.000Z","requestId":"f1","message":{"content":[{"type":"tool_use","id":"f2","name":"Bash","input":{"command":"sed -i '' 's/coding/PR #3 open/' /p/replies/JKL-4.md"}}]}}
+EOF
+cat > "$a/rrrrrrrr-0002.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-11T08:00:00.000Z","message":{"content":"Work on JKL-5"}}
+{"type":"assistant","timestamp":"2026-10-11T08:00:05.000Z","requestId":"f3","message":{"content":[{"type":"tool_use","id":"f4","name":"Bash","input":{"command":"python3 - <<'X'\np = '/p/replies/JKL-5.md'\nopen(p, 'w').write('done')\nX"}}]}}
+EOF
+# Not writes: a cp on an earlier line, a python3 that only reads the reply.
+cat > "$a/rrrrrrrr-0003.jsonl" <<'EOF'
+{"type":"user","timestamp":"2026-10-11T08:00:00.000Z","message":{"content":"Work on MNO-6"}}
+{"type":"assistant","timestamp":"2026-10-11T08:00:05.000Z","requestId":"f5","message":{"content":[{"type":"tool_use","id":"f6","name":"Bash","input":{"command":"cp a b\ncat /p/replies/MNO-6.md"}}]}}
+{"type":"assistant","timestamp":"2026-10-11T08:00:06.000Z","requestId":"f7","message":{"content":[{"type":"tool_use","id":"f8","name":"Bash","input":{"command":"python3 -I x.py /p/replies/MNO-6.md"}}]}}
+EOF
+out=$(rnd replies 7 2>&1)
+grep -q 'JKL-' <<<"$out" && fail "replies: a reply written by sed -i or python3 isn't lost" "$out"
+grep -q $'\tMNO-6\t' <<<"$out" || fail "replies: a cp on another line or a python3 read isn't a write" "$out"
+grep -q "'wrote': 3," <<<"$out" || fail "replies: Bash writes count as written" "$out"
+rm "$a/rrrrrrrr-0001.jsonl" "$a/rrrrrrrr-0002.jsonl" "$a/rrrrrrrr-0003.jsonl"
 
 # Added after the counts above too: a headless permission test (-p) with a denial; a review session that posted a
 # comment and whose user ran a `!` command; a task session with a merge that ran, one that was denied, and a heredoc
@@ -146,6 +166,13 @@ grep -q $'^post\tapp#9\tgggggggg' <<<"$out" || fail "units: a review session's p
 grep -q $'^merge\tacme/app#21\tkkkkkkkk' <<<"$out" && grep -q $'^merge\t22\tkkkkkkkk' <<<"$out" &&
   grep -q $'^post\tacme/app#23\tllllllll' <<<"$out" || fail "units: gh -R, glab, gh pr review" "$out"
 grep -q 'merge=3 .*post=2 per_post=2.5' <<<"$out" || fail "units: totals, per post over review sessions" "$out"
+# --merged: the adapter's `yesterday` merges of a session's key count, whoever merged; one a session ran isn't
+# counted twice (app#22 was run as a bare `merge 22`); another key's, or one before the window, isn't counted; another repo's same number (lib#21 beside acme/app#21) is.
+printf 'ABC-9\tIn Review\tt\n  1791804600\tapp#30 merged by Rev\n  1791804600\tapp#11 merged\n  1791804600\tapp#22 merged\n  1791804600\tlib#21 merged\n  1000\tapp#31 merged\nZZZ-1\tOpen\tt\n  1791804600\tapp#32 merged\n' > "$tmp/merged.txt"
+out=$(rnd units 7 --merged "$tmp/merged.txt" --keys "$tmp/keys.txt" 2>&1)
+grep -qw 'ABC-9' "$tmp/keys.txt" && [ "$(wc -l < "$tmp/keys.txt")" -eq 1 ] || fail "units: --keys writes the sessions' keys on one line" "$(cat "$tmp/keys.txt")"
+grep -q $'^merge\tapp#30\thost\t2026-10-12T11:30\tABC-9' <<<"$out" && grep -q $'^merge\tlib#21\thost' <<<"$out" && ! grep -qE $'^merge\tapp#(11|22|31|32)\thost' <<<"$out" &&
+  grep -q 'merge=5 .* merge_ran=3$' <<<"$out" || fail "units: --merged counts reviewer merges once" "$out"
 # The hook's heredoc rule: a body is dropped only after a safe line that ends there.
 python3 -I -B - "$here" <<'PY' || fail "units: heredoc_text_dropped follows the hook" ""
 import sys; sys.path.insert(0, sys.argv[1]); from rnd import heredoc_text_dropped as d
@@ -155,7 +182,7 @@ for c in ("cat <<<X\nmerge\nX", "cat <<X |\nmerge\nX\nbash", "npx -p x sh <<X\nm
           "cat > .git/hooks/pre-commit <<X\nmerge\nX\ngit commit -m m", "A=1 cat <<X\nmerge\nX"):
     assert "merge" in d(c), c
 PY
-[ "$(rnd units 7 --project nomatch 2>&1 >/dev/null)" = 'usd=0 review_usd=0.0 merge=0 done=0 post=0' ] || fail "units: --project filters" "$(rnd units 7 --project nomatch 2>&1)"
+[ "$(rnd units 7 --project nomatch 2>&1 >/dev/null)" = 'usd=0 review_usd=0.0 merge=0 done=0 post=0 merge_ran=0' ] || fail "units: --project filters" "$(rnd units 7 --project nomatch 2>&1)"
 out=$(rnd context 7 2026-10-12T10:30 other)
 grep -q $'^over\thhhhhhhh\t1\t50000\t250000' <<<"$out" || fail "context: the session over 200K" "$out"
 grep -q $'^fork\tiiiiiiii\tjjjjjjjj\t10' <<<"$out" || fail "context: the fork" "$out"

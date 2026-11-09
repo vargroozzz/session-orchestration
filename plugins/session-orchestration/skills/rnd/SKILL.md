@@ -54,7 +54,12 @@ schedules it.
    - `context 7 <split> <project> > context.tsv` (split: last run's end, so the slice after it gets its own
      row; project: the regex for the project's folder, e.g. `myproj`) and `units 7 --project <project>
      > units.tsv 2> units.txt`, adding `units <slice days>` for the slice. Pass the brief's regexes with
-     `--merge`/`--done`/`--post` when its commands differ from the defaults (`rnd.py` usage).
+     `--merge`/`--done`/`--post` when its commands differ from the defaults (`rnd.py` usage). Where
+     reviewers press merge, a session's merge command never runs: write the window's task keys with
+     `units 7 --project <project> --keys keys.txt > /dev/null 2>&1`, then from the project root the
+     adapter's merges for them to `merged.txt` (`.claude/session-status-adapter yesterday <window start,
+     epoch s> $(cat keys.txt)`), and pass `--merged merged.txt` to both `units` calls. An adapter without `yesterday`, or a non-zero
+     exit: leave it out and say merges count only the ones sessions ran (`merge_ran`).
    - `start 7 > start.tsv` (each coordinator's Start by part, the medians last) and `loads 7 > loads.tsv`
      (messages, skill, `worker.md`, card and reply loads by session kind).
    - `triggers <coordinator> 7`: the coordinator is the first name
