@@ -4,7 +4,8 @@
 # NAME/SLUG.history.md (append-only: `- YYYY-MM-DD HH:MM (ID8) LINE` per wording, `… resolved: REASON` when it
 # leaves); resolved entries' two files in NAME-archive/, one line each in the index NAME-archive.md:
 #   - ADDED → YYYY-MM-DD HH:MM TEXT · reason: REASON → NAME-archive/SLUG.history.md
-# Entries: the `- ` lines up to the first heading or other text after them (the pane's rule). LABEL: the entry after
+# Entries: the `- ` lines up to the first heading or other text after them (the pane's rule); an indented line
+# continues the entry above, and `done` drops it with it. LABEL: the entry after
 # its date, up to the first ` (` or `:`; SLUG: LABEL with each run of anything but A-Za-z0-9._- as one `-`, at most
 # 60 characters (pending-diff.jq has the same rules).
 #   pending hook                 PostToolUse, every tool: when FILE changed since the last look (its mtime and
@@ -19,6 +20,7 @@
 #                                A Bash write to FILE: TIME ID8 <empty> <empty> gap COMMAND (LABEL and SLUG empty).
 #   pending history --seed       the scan written out, once when adopting: a history for each open entry without
 #                                one, and each entry gone for good archived with the scan's dates and reason.
+#   pending entries              LABEL<TAB>SLUG<TAB>LINE<TAB>LAST per entry, LAST its history's last change.
 #   pending notices              a line per detail file over 4 KB.
 #   pending yesterday EPOCH KEYRE  index lines resolved since EPOCH: KEY (else "LABEL")<TAB>EPOCH<TAB>TEXT.
 # Self-test: bash pending.test.sh
@@ -60,6 +62,7 @@ entries() {
   awk '/^- / { e = 1; line = substr($0, 3); l = line; sub(/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] /, "", l)
       i = index(l, " ("); j = index(l, ":"); k = (i && (!j || i < j)) ? i : j; if (k) l = substr(l, 1, k - 1)
       s = l; gsub(/[^A-Za-z0-9._-]+/, "-", s); gsub(/^-+|-+$/, "", s); print l "\t" substr(s, 1, 60) "\t" line; next }
+    e && /^[[:space:]]+[^[:space:]]/ { next }   # an indented continuation of the entry above (the pane folds it in)
     e && (/^#/ || /[^[:space:]]/) { exit }' "$1" 2>/dev/null
 }
 # The lock FILE's writers share (this hook in every session, done, seed). ponytail: one lock per FILE, stale after a minute.
@@ -117,7 +120,9 @@ archive() {
 }
 # FILE without LINE (exact text): its first copy among the entries, not one in a log below them; swapped in
 drop_lines() {
-  awk -v d="- $1" 'b != 2 && /^- / { b = 1; if ($0 == d && !x) { x = 1; next } }
+  # An indented line continues the entry above: it goes with it, and ends nothing.
+  awk -v d="- $1" 'b != 2 && /^- / { b = 1; s = 0; if ($0 == d && !x) { x = 1; s = 1; next } }
+    b == 1 && /^[[:space:]]+[^[:space:]]/ { if (s) next; print; next }
     b == 1 && !/^- / && (/^#/ || /[^[:space:]]/) { b = 2 } { print }' "$P" > "$P.$$" && mv "$P.$$" "$P"
 }
 
@@ -222,6 +227,10 @@ case ${1:-} in
         if [ "${2:-}" = --last ] && [[ ${3:-} =~ ^[0-9]+$ ]]; then head -1 "$f"; grep '^- ' "$f" | tail -n "$3"
         else cat "$f"; fi ;;
     esac ;;
+  entries)   # LABEL<TAB>SLUG<TAB>LINE<TAB>LAST: LAST the history's last change (YYYY-MM-DD HH:MM), for stale.jq
+    entries "$P" | while IFS=$'\t' read -r l sl line; do
+      printf '%s\t%s\t%s\t%s\n' "$l" "$sl" "$line" "$(grep '^- ' "$D/$sl.history.md" 2>/dev/null | tail -1 | cut -c3-18)"
+    done ;;
   notices)
     for f in "$D"/*.md; do
       case $f in *.history.md) continue ;; esac
@@ -238,5 +247,5 @@ case ${1:-} in
         l=$(entries <(printf -- '- %s\n' "$text") | cut -f1); k=$(grep -m1 -oE -- "$kre" <<<"$l" | head -1)
         printf '%s\t%s\tresolved from pending: %s\n' "${k:-\"$l\"}" "$e" "$why"
       done ;;
-  *) echo "usage: pending hook | done LABEL [--] REASON | history … | notices | yesterday EPOCH KEYRE"; exit 2 ;;
+  *) echo "usage: pending hook | done LABEL [--] REASON | history … | entries | notices | yesterday EPOCH KEYRE"; exit 2 ;;
 esac

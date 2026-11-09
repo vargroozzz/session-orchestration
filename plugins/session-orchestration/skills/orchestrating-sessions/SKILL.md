@@ -52,7 +52,9 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
 
 1. Run the status command. It prints one line per task (status, the local worktree's dirty files and unpushed
    commits, the owning session live or closed), then the footers, each with the command it needs: **Waiting on
-   you**, **Stale prompts**, **Leftovers**, **Notices**, **Other sessions**, and at most once a day `plugin
+   you**, **Stale prompts**, **Leftovers**, **Notices**, **Other sessions**, **Stale** (queued asks and handoff
+   entries whose facts moved on: cancel, reword or archive them on the user's word, never on your own;
+   `session-status --stale` lists them alone), and at most once a day `plugin
    feedback: N open … — apply?`: pass that to the user, and on a yes start an apply session
    ([feedback.md](feedback.md)); its `project feedback` part waits for the next R&D run. Act on a messages module's Notices line per that module's doc (its feature line
    names it); one the user calls handled: `session-status --dismiss "LINE"`, for every session, not passed on again.

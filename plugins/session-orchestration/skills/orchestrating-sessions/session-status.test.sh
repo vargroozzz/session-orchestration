@@ -29,6 +29,9 @@ ABC-12    -              wt dirty:1 unpushed:? | sess:"fix it" blocked
 
 Waiting on you:
   "fix it" (claude attach 11111111)
+
+Stale:
+  * session "fix it" (11111111) ABC-12: decision not on the pane
 EOF
 ABC-12    -              wt dirty:1 unpushed:? | sess:"fix it" blocked
 EOF2
@@ -39,7 +42,11 @@ sent() { sed '$d' "$tmp/t.keep" > "$proj/$sid.jsonl"; run | grep -c 'Waiting on 
   run | grep -c 'Waiting on you'; }
 [ "$(sent mcp__session-orchestration__reply '{"text":"ABC-12 · b · blocked\nBlocker: A or B? your call"}')" = "$(printf '0\n1')" ] &&
   [ "$(sent SendMessage '{"to":"c","summary":"A or B?","message":"x"}')" = "$(printf '0\n1')" ] &&
-  [ "$(sent mcp__session-orchestration__reply '{"text":"ABC-12 · b · coding"}')" = "$(printf '0\n0')" ] || { echo "an ask in a reply failed"; exit 1; }
+  [ "$(sent mcp__session-orchestration__reply '{"text":"ABC-12 · b · coding"}')" = "$(printf '0\n0')" ] &&
+  [ "$(sent mcp__session-orchestration__reply '{"text":"ABC-12 · b · merged; the release is on you"}')" = "$(printf '0\n1')" ] &&
+  [ "$(sent mcp__session-orchestration__reply '{"text":"ABC-12 · b · merged; the release is on you","done":true}')" = "$(printf '0\n0')" ] &&
+  [ "$(sent mcp__session-orchestration__reply '{"text":"ABC-12 · b · merged. Release now?","done":true}')" = "$(printf '0\n1')" ] &&
+  [ "$(sent mcp__session-orchestration__reply '{"text":"ABC-12 · b · done\n! plugin-release b","done":true}')" = "$(printf '0\n1')" ] || { echo "an ask in a reply failed"; exit 1; }
 mv "$tmp/t.keep" "$proj/$sid.jsonl"
 
 # Notices: a new one is a change, one going away isn't; a failure keeps the last good ones; exit 2 = unsupported.
@@ -824,6 +831,9 @@ grep -qxF '  "probe" (claude attach a4000004) — blocked: Bash `curl -sI https:
   grep -q 'sess:"done-turn" idle$' <<<"$out" && grep -q 'sess:"limited" busy$' <<<"$out" && grep -q 'sess:"landed" idle$' <<<"$out" &&
   grep -q '^  "replaced" idle .* · superseded by a7000007' <<<"$out" && grep -q '^  "ABC-85-review" idle .* · reviews ABC-85' <<<"$out" ||
   { echo "not-on-you rules failed: $out"; exit 1; }
+# One at rest (blocked) stays under Other sessions past the age cut-off: the pane folds it, rather than it vanishing.
+out=$(SESSION_STATUS_OTHER_HOURS=0 run)
+grep -q '^  "ABC-85-review" idle .* · reviews ABC-85' <<<"$out" || { echo "an at-rest session aged out"; exit 1; }
 # A conflict on its row keeps it on you however its turn ended.
 printf '#!/bin/sh\ncase $1 in tasks) printf "ABC-81\\t-\\t\\t%%s  \\n" "$(cat %s)" ;; *) exit 2 ;; esac\n' "$tmp/extra" > "$root/.claude/session-status-adapter"
 chmod +x "$root/.claude/session-status-adapter"; : > "$tmp/extra"
@@ -1198,4 +1208,43 @@ printf '#!/bin/sh\necho junk\n' > "$tmp/bin/claude"
 [ "$(run --plan "$pd/PROJ-10.md" --next 2>&1 >/dev/null)" = "couldn't list an account's sessions: a running chunk may show as not running" ] ||
   { echo "--plan --next, failed listing"; exit 1; }
 mv "$tmp/claude.saved" "$tmp/bin/claude"; rm "$tmp/.config/session-orchestration/config.json"
+# Stale (stale.jq): one fixture per signal. 1 ticket done (not while a PR of it is open), 2 a PR it names settled
+# (reword while another is open), 3 a session it names gone, 4 a worktree it names gone, 5 an ask it names not queued,
+# 6 its key's ask queued, 7 age alone as "recheck:", 8 a session asking with no ask queued. The rest flag nothing.
+sj() { jq -nr --arg asks "$1" --arg entries "$2" --arg rows "$3" --arg done "$4" --arg gone "$5" --arg wtgone "$6" \
+  --arg asking "$7" --arg keyre '[A-Z][A-Z0-9]+-[0-9]+' --arg now "$now" -f "$here/stale.jq"; }
+now=$(date +%s); old=$(( (now - 4 * 86400) * 1000 )); fresh=$(( now * 1000 )); today=$(date '+%Y-%m-%d %H:%M')
+asks='[{"id":"41","key":"ABC-1","question":"Remove worktree .claude/worktrees/gone-wt?","options":["y","n"],"at":'$fresh'},
+{"id":"35","key":"ABC-2","question":"Merge #322 and repo#323?","options":["y","n"],"at":'$fresh'},
+{"id":"49","key":"ABC-3","question":"Stop 40a5565a?","options":["y","n"],"at":'$old'},
+{"id":"50","key":"ABC-4","question":"Post the comment on repo#323?","options":["y","n"],"at":'$fresh'},
+{"id":"51","key":"ABC-9","question":"Ship it?","options":["y","n"],"at":'$fresh'},
+{"id":"52","key":"ABC-10","question":"Rebase .claude/worktrees/gone-wt-ui?","options":["y","n"]}]'
+# Not flagged either: ask 52 names a worktree whose path only starts with a gone one's (and has no time), ABC-8's
+# entry has a history time that doesn't parse.
+entries=$(printf 'ABC-3\tABC-3\t2026-10-27 ABC-3: waits on its stop\t%s\nworktree-cleanup\tworktree-cleanup\tworktree-cleanup: asks 41 and 22\t2026-10-01 10:00\nABC-5\tABC-5\tABC-5: deploy\t%s\nABC-6\tABC-6\tABC-6: see ask 50, session 51ab51ab\t%s\nABC-8\tABC-8\tABC-8: fine\tjunk\n' \
+  "$today" "$today" "$today")
+rows=$(printf 'ABC-2\tIn Review\tt\trepo#322 MERGED repo#323 OPEN\nABC-9\tDone\tt\trepo#9 OPEN\n')
+out=$(sj "$asks" "$entries" "$rows" "$(printf 'ABC-1\nABC-5')" 40a5565a .claude/worktrees/gone-wt "$(printf 'abcd1234\tfix it\tABC-7\nbcde2345\tother\tABC-4')")
+[ "$out" = 'ask 41 ABC-1: ticket done; worktree .claude/worktrees/gone-wt gone
+ask 35 ABC-2: reword: #322 merged
+ask 49 ABC-3: names 40a5565a, gone; recheck: queued over 3d
+pending "ABC-3": = ask 49
+pending "worktree-cleanup": reword: names ask 22, not queued; recheck: unchanged over 7d
+pending "ABC-5": ticket done
+session "fix it" (abcd1234) ABC-7: decision not on the pane' ] && [ -z "$(sj '' '' '' '' '' '' '')" ] && [ -z "$(sj 'junk' '' '' '' '' '' '')" ] ||
+  { echo "stale.jq signals: $out"; exit 1; }
+# In the sweep: the pane's asks store and the handoff file feed a Stale section; --stale prints its items alone;
+# --changes says an item once.
+mkdir -p "$tmp/.cache/session-status/asks" "$root/.claude"
+af=$tmp/.cache/session-status/asks/$(printf %s "$root" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-16).json
+echo '{"pending": {"file": "pend.md"}}' > "$root/.claude/coordination.local.json"
+printf '# Pending\n\n- 2026-11-01 ABC-12: waits on ask 99\n' > "$root/pend.md"
+run --changes >/dev/null
+echo '[{"id":"7","key":"ABC-12","question":"Remove .claude/worktrees/nope?","options":["y","n"],"at":'$fresh'}]' > "$af"
+out=$(run --stale | grep -v '^session ')   # earlier fixtures' sessions asking: covered by the signals above
+[ "$out" = 'ask 7 ABC-12: worktree .claude/worktrees/nope gone
+pending "ABC-12": reword: names ask 99, not queued; = ask 7' ] && grep -qxF '  * ask 7 ABC-12: worktree .claude/worktrees/nope gone' <<<"$(run)" &&
+  [ "$(run --changes | grep -c '^now:   \* ask 7 ')" = 1 ] && [ "$(run --changes | grep -c 'ask 7')" = 0 ] || { echo "Stale section failed: $out"; exit 1; }
+rm -r "$af" "$root/pend.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
 echo ok

@@ -19,6 +19,7 @@ cat > "$P" <<'EOF'
 # Pending
 
 - 2026-10-01 ABC-1 (waits on review): first wording
+  continued: an indented line of the same entry
 - 2026-10-02 deploy window: ask ops
 - 2026-10-03 ABC-2: something
 - 2026-10-03 ABC-3a: one
@@ -31,6 +32,10 @@ hook
 [ "$(grep -c '^- ' "$root/notes/pending/ABC-1.history.md")" = 1 ] && [ ! -f "$root/notes/pending/not-an-entry.history.md" ] ||
   fail "first hook run didn't record the entries"
 grep -qF '(aaaabbbb) 2026-10-01 ABC-1 (waits on review): first wording' "$root/notes/pending/ABC-1.history.md" || fail "history line"
+# entries (stale.jq's feed): LABEL, SLUG, LINE, and the history's last change. A continuation line ends nothing.
+run entries > "$tmp/entries"
+[ "$(grep -c . "$tmp/entries")" = 5 ] && [ "$(sed -n 1,2p "$tmp/entries" | cut -f1-3)" = "$(printf 'ABC-1\tABC-1\t2026-10-01 ABC-1 (waits on review): first wording\ndeploy window\tdeploy-window\t2026-10-02 deploy window: ask ops')" ] &&
+  sed -n 1p "$tmp/entries" | cut -f4 | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$' || fail "entries: $(cat "$tmp/entries")"
 hook   # unchanged: nothing more
 [ "$(grep -c '^- ' "$root/notes/pending/ABC-1.history.md")" = 1 ] || fail "an unchanged file was recorded again"
 

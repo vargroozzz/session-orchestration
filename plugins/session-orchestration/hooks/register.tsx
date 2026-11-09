@@ -117,6 +117,9 @@ export const answerText = (a: Ask, option: string) =>
   `Approval pane answer for ${a.key}: ${oneLine(option)}. Asked: ${oneLine(a.question)}`
 // An item's Ask button. Never starts "Approval pane answer for ", so verify-approval.sh never takes it.
 export const askText = (about: string) => `Coordinator pane: where does ${about} stand, and what's next? Answer briefly.`
+// A stale ask's Cancel. Never starts "Approval pane answer for ": not an answer, nothing is approved.
+export const cancelText = (a: Ask, why: string) =>
+  `Coordinator pane: the user cancelled the stale ask ${a.id} for ${a.key} (${why}). Asked: ${oneLine(a.question)}. Don't act on it; tell a session waiting on it.`
 // A card action (Resolve conflicts, Fix CI, Address comments): the user's instruction for the owning session,
 // which the coordinator relays. Never starts "Approval pane answer for ". Keep in sync with pane.md.
 export const fixText = (key: string, says: string, prs: string) =>
@@ -174,12 +177,13 @@ export function parseStatus(text: string): Status {
 // The `- ` items of the pending text up to the first heading after them (a log there isn't pending), an
 // indented line continuing one; undefined when it has none.
 export function parsePending(text: string) {
-  const items: { date?: string; text: string }[] = []
-  let last: { date?: string; text: string } | undefined
+  const items: { date?: string; text: string; label: string }[] = []
+  let last: { date?: string; text: string; label: string } | undefined
   for (const line of text.split('\n')) {
     if (items.length > 0 && line.startsWith('#')) break
     const m = /^- (?:(\d{4}-\d\d-\d\d) )?(.*)$/.exec(line)
-    if (m) items.push(last = { date: m[1], text: m[2] ?? '' })
+    // label: from the first line only, as `pending entries` reads it.
+    if (m) items.push(last = { date: m[1], text: m[2] ?? '', label: pendingLabel(m[2] ?? '') })
     else if (last && /^\s+\S/.test(line)) last.text += ` ${line.trim()}`
     else last = undefined
   }
@@ -263,7 +267,7 @@ export const fixesOf = (all: Fact[]) => FIXES.filter(f => all.some(x => x.fix ==
 // ponytail: the card actions' letters below are the act(...) calls' in the render hook; keep the two in step.
 export const BUILTIN_KEYS: Record<string, string> = {
   r: 'Refresh', ...Object.fromEntries(FIXES.map(f => [f.hotkey, f.label])), a: 'Attach', u: 'Refresh (row)',
-  k: 'Ask', x: 'Dismiss', c: 'Copy command', z: 'Compact', p: 'Peek', d: 'Diff', w: 'All projects',
+  k: 'Ask', x: 'Dismiss', c: 'Copy command', z: 'Compact', p: 'Peek', d: 'Diff', w: 'All projects', e: 'Archive',
   t: 'Attach in tab', l: 'Logs in split', y: 'Yesterday', b: 'Earlier day', n: 'Later day', s: 'Summary or list',
 }
 const taken = (key: string) => /^\d$/.test(key) ? 'a 1-9 item key' : BUILTIN_KEYS[key]
@@ -273,7 +277,7 @@ const taken = (key: string) => /^\d$/.test(key) ? 'a 1-9 item key' : BUILTIN_KEY
 // path, label of the project's own or command text.
 // ponytail: one bash + lib.sh config read per press even with telemetry off; presses are human-paced. Cache the
 // setting in pane state if a press ever feels slow.
-export const USAGE_EXTRA = ['Stop', 'Run handed','Copy handed', 'Dismiss handed', 'Approval answer', 'Project action']
+export const USAGE_EXTRA = ['Stop', 'Run handed','Copy handed', 'Dismiss handed', 'Approval answer', 'Project action', 'Cancel stale']
 export const usageName = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 const logPress = ($: EngineInterface, label: string) => void $.process
   .run(['bash', '-c', '. "$0" && usage "$1" press', `${$.plugin.root}/lib.sh`, usageName(label)], { timeoutMs: 10_000 })
@@ -353,11 +357,49 @@ export function notice(line: string): { label: string; text: string; color?: Col
 }
 // A leftover's cleanup command: after the first colon outside the quoted session name.
 export const leftoverCommand = (text: string) => /—[^":]*(?:"[^"]*")?[^":]*: (.+)$/.exec(text)?.[1]
+// A session's attach command made its stop command.
+const stopOf = (command: string) => command.replace(/ attach (\S+)$/, ' stop $1')
 // A pending item: its task key, and whether its own words put it on the user.
 export const pendingOf = (text: string) => ({
   key: /^[A-Z][A-Z0-9]+-\d+/.exec(text)?.[0],
   onYou: /\b(the user|on you|your call)\b/i.test(text),
 })
+// A handoff entry's label, as `pending` (and stale.jq's lines) name it: the text up to the first ` (` or `:`.
+export const pendingLabel = (text: string) => text.split(/ \(|:/)[0] ?? text
+// The status footer of flagged asks and handoff entries (session-status, stale.jq): `ask ID KEY: WHY`, `pending
+// "LABEL": WHY`, anything else (a session asking with no ask queued) drawn as an item. WHY's reasons join with "; ".
+export const STALE_ITEMS = 'Stale'
+export function staleOf(st: Status | undefined) {
+  const asks = new Map<string, string>(), pending = new Map<string, string>(), rest: string[] = []
+  for (const i of st?.sections.find(s => s.title === STALE_ITEMS)?.items ?? []) {
+    const a = /^ask (\S+) \S+: (.*)$/.exec(i)
+    const p = /^pending "(.*?)": (.*)$/.exec(i)
+    if (a) asks.set(a[1] ?? '', a[2] ?? '')
+    else if (p) pending.set(p[1] ?? '', p[2] ?? '')
+    else rest.push(i)
+  }
+  return { asks, pending, rest }
+}
+// Age alone ("recheck: …") is the weakest signal: a chip, but never a one-press Cancel or Archive. For Archive a
+// "reword: …" reason is weak too: the entry is half out of date, to be edited, not gone.
+export const weakStale = (why: string, archive = false) =>
+  why.split('; ').every(r => r.startsWith('recheck:') || (archive && r.startsWith('reword:')))
+// The pane's own folds: a section's items that need no look one by one, drawn as one row.
+// Leftovers: clean+merged worktrees, removable as a batch.
+export const mergedLeftover = (text: string) => / — worktree clean\+merged: /.test(text)
+export const LEFTOVERS = 'Leftovers (task finished)'
+// Other sessions: superseded, or not running a day or more (`3d`); at-rest ones session-status keeps past its age
+// cut-off land here, listed in the fold's card.
+export const restingOther = (text: string) => {
+  const o = otherOf(text)
+  return !!o && !isRunning(o.state) && (!!o.superseded || /^\d+d$/.test(o.age))
+}
+// A section's items with the foldable ones (2 or more) taken out: `fold` is them, `rest` the others in order.
+export function foldOf(title: string, items: string[]) {
+  const is = title === LEFTOVERS ? mergedLeftover : title === OTHER ? restingOther : undefined
+  const fold = is ? items.filter(is) : []
+  return fold.length >= 2 ? { fold, rest: items.filter(i => !fold.includes(i)) } : { fold: [], rest: items }
+}
 // The 8-character ids of the sessions session-status --agents lists, a done one left out.
 export const liveIds = (agents: string) =>
   new Set(agents.split('\n').map(l => l.split('\t')).filter(f => f[0] && f[2] !== 'done').map(f => (f[0] ?? '').slice(0, 8)))
@@ -575,7 +617,7 @@ export const RESOLVED = 'Resolved (idle a week)'
 export const STALE = 'Stale prompts'
 // Each section's accent; a footer section the status command adds later gets suggestion.
 const ACCENT = {
-  'Waiting on you': 'warning', Decisions: 'warning', [STALE]: 'inactive', 'Needs action': 'error', 'In review': 'ide', Working: 'suggestion', Landing: 'success',
+  'Waiting on you': 'warning', Decisions: 'warning', [STALE]: 'inactive', [STALE_ITEMS]: 'inactive', 'Needs action': 'error', 'In review': 'ide', Working: 'suggestion', Landing: 'success',
   Idle: 'inactive', Notices: 'ide', Actions: 'claude', Pending: 'planMode', [RESOLVED]: 'inactive', [OTHER_PROJECTS]: 'inactive',
 } as const satisfies Record<string, Color>
 const accentOf = (title: string): Color => (ACCENT as Record<string, Color>)[title] ?? 'suggestion'
@@ -588,17 +630,19 @@ const DAY = 86_400_000
 
 // What needs the user, one per task where a key ties them: approvals, blocked tasks, sessions waiting on the
 // user, pending items on the user. A waiting session is counted under the task whose row names it, a task key
-// in its name, or itself.
+// in its name, or itself. A waiting session whose task has an ask queued counts as that ask (the pane says `→ ask N`).
 export function onYouOf(list: Ask[], st: Status | undefined, pend: ReturnType<typeof parsePending>, hs: Handed[] = []) {
   const taskKeys = new Set(st?.tasks.map(t => t.key))
   const waitKey = (name: string) => st?.tasks.find(t => t.sess.name === name)?.key ?? keyIn(name, taskKeys)
   const waitSec = st?.sections.find(s => s.title === 'Waiting on you')
   const set = new Set(list.map(a => `ask ${a.id}`))
   for (const h of hs) set.add(h.key) // a handed-over command counts under its task
-  for (const t of st?.tasks ?? []) if (t.sess.state === 'blocked') set.add(t.key)
+  // A blocked or waiting session whose task has an ask queued is that ask's decision: counted once, as the ask.
+  for (const t of st?.tasks ?? []) if (t.sess.state === 'blocked' && !list.some(a => a.key === t.key)) set.add(t.key)
   for (const i of waitSec?.items ?? []) {
     const w = waitingOf(i)
-    if (w) set.add(waitKey(w.name) ?? `session ${w.name}`)
+    const k = w && waitKey(w.name)
+    if (w && !(k && list.some(a => a.key === k))) set.add(k ?? `session ${w.name}`)
   }
   for (const p of pend ?? []) {
     const { key, onYou: mine } = pendingOf(p.text)
@@ -1681,7 +1725,7 @@ export const register: Register = on => {
     }
     const act = (hotkey: string, label: string, onPress: (p: UiPressArgument) => unknown) =>
       <Button key={`act-${hotkey}`} plain hotkey={hotkey} label={label} onPress={async p => {
-        logPress($, label === 'Stop' ? label : BUILTIN_KEYS[hotkey] ?? 'Project action')  // a card's s is Stop
+        logPress($, /^Stop\b/.test(label) ? 'Stop' : BUILTIN_KEYS[hotkey] ?? 'Project action')  // a card's s is Stop (all)
         try {
           await onPress(p)
         } catch (err) {
@@ -1703,6 +1747,7 @@ export const register: Register = on => {
       detail(accent, '└', <Box columnGap={2} flexWrap="wrap">{items.filter((i): i is RenderElement => !!i)}</Box>)
 
     const st = b ? parseStatus(b.status) : undefined
+    const stale = staleOf(st)
     // Each task's facts and group, worked out once per drawing.
     const factsBy = new Map(st?.tasks.map(t => [t, facts(t)]))
     const factsOf = (t: Task) => factsBy.get(t) ?? facts(t)
@@ -1825,17 +1870,20 @@ export const register: Register = on => {
         const wa = acts_.find(a => a.id.startsWith(w.id))
         const wctx = ctxOf(wa)
         // A prompt unanswered for hours (session-status): not counted on you; Stop instead of Compact.
-        const stale = title === STALE
-        const chip = stale ? wordChip('stale', 'inactive') : claim(key ?? `session ${w.name}`) ? solidChip('session') : wordChip('session', 'warning')
+        const unanswered = title === STALE
+        // Its decision is queued in APPROVE already: that ask is what counts, this row points to it.
+        const queued = key ? list.filter(a => a.key === key).map(a => a.id) : []
+        const chip = unanswered ? wordChip('stale', 'inactive') : !queued.length && claim(key ?? `session ${w.name}`) ? solidChip('session') : wordChip('session', 'warning')
         return row(id, wrap, accent, chip, [
           ...(key ? [keySeg(id, key), seg(' '), seg(rest, { dimColor: true })] : [keySeg(id, w.name)]),
+          ...(queued.length ? [seg(` → ask ${queued.join(', ')}`, { color: 'permission' })] : []),
           ...(wctx.length > 0 ? [seg(' '), ...wctx] : []),
           ...(w.blocked ? [seg(' '), seg(w.blocked, { dimColor: true })] : []),
         ], () => [
           ...(w.blocked ? [detail(accent, '│', <Text wrap="wrap">{w.blocked}</Text>)] : []),
           detail(accent, '│', <Text dimColor wrap="truncate-end">{w.command}</Text>),
           bar(accent, ...sessActs(w.command, w.name, wa, true).all,
-            stale ? act('s', 'Stop', copy(/; stop: (.+)$/.exec(w.blocked)?.[1] ?? w.command.replace(/ attach (\S+)$/, ' stop $1'))) : compactAct(wa, w.id),
+            unanswered ? act('s', 'Stop', copy(/; stop: (.+)$/.exec(w.blocked)?.[1] ?? stopOf(w.command))) : compactAct(wa, w.id),
             ...viewActs(id, w.id, [...(key ? [key] : []), w.id]),
             act('k', 'Ask', ask(`the session "${w.name}" that waits on me`))),
           ...peekView(id, accent),
@@ -1865,7 +1913,7 @@ export const register: Register = on => {
           ...(o.review ? [link(accent, linkFor(b?.urls ?? '', 'ticket', { key: o.review }), o.review)].filter((l): l is RenderElement => !!l) : []),
           // Superseded: its task moved on, so Stop (no need to ask, resuming.md) rather than Compact.
           bar(accent, ...sessActs(o.command, o.name, oa).all,
-            o.superseded ? act('s', 'Stop', copy(o.command.replace(/ attach (\S+)$/, ' stop $1'))) : compactAct(oa, o.id),
+            o.superseded ? act('s', 'Stop', copy(stopOf(o.command))) : compactAct(oa, o.id),
             ...viewActs(id, o.id, [o.id]),
             act('k', 'Ask', ask(`the session "${o.name}"`))),
           ...peekView(id, accent),
@@ -1881,8 +1929,14 @@ export const register: Register = on => {
       )])
     }
     // A pending item. `top`: its copy in WAITING ON YOU (an item on the user that no waiting session covers).
-    const pendRow = (p: { date?: string; text: string }, wrap: Wrap, accent: Color, top = false, hotkey?: string) => {
+    // Flagged stale (stale.jq): a STALE chip and why; in Pending, Archive (`--pending-done LABEL -- WHY`) unless the
+    // only reason is its age.
+    const pendRow = (p: { date?: string; text: string; label: string }, wrap: Wrap, accent: Color, top = false, hotkey?: string) => {
       const { key, onYou: mine } = pendingOf(p.text)
+      const label = p.label
+      const why = stale.pending.get(label)
+      // Two entries with one label: the flag can't say which, and `pending done` would take the first. Chip only.
+      const twin = (pend ?? []).filter(q => q.label === label).length > 1
       const text = key ? p.text.slice(key.length).replace(/^[\s:]+/, '') : p.text
       // The date at local midnight (no Z: local time), so the age is in the user's calendar days.
       const days = p.date === undefined ? undefined : Math.max(Math.floor((now - new Date(`${p.date}T00:00`).getTime()) / DAY), 0)
@@ -1893,8 +1947,27 @@ export const register: Register = on => {
       return row(id, wrap, accent, lead, [
         ...(key ? [keySeg(id, key), seg(' ')] : []),
         ...(mine && days !== undefined ? [seg(`${days}d`, { dimColor: true }), seg(' ')] : []),
+        ...(why ? [seg('STALE', { color: 'warning', bold: true }), seg(` · ${why} `, { color: 'warning' })] : []),
         seg(text, mine ? undefined : { dimColor: true }),
-      ], () => [bar(accent, act('k', 'Ask', ask(`the pending item ${JSON.stringify(p.text)}`)))], hotkey)
+      ], () => [bar(accent,
+        why && !top && !twin && !weakStale(why, true) && act('e', 'Archive', archive(label, why)),
+        act('k', 'Ask', ask(`the pending item ${JSON.stringify(p.text)}`)))], hotkey)
+    }
+    // A press archives the entry: `pending done` moves its line and history to the archive, then a sweep shows it gone.
+    const archive = (label: string, why: string) => async () => {
+      const out = await runStatus($, ['--pending-done', label, '--', `stale: ${why}`], { cwd: acts?.root })
+      $.ui.toast(oneLine(out) || `Archived ${label}`)
+      await update($, selected, () => null)
+      await refresh($)
+    }
+    // A press drops the ask and tells the coordinator, which tells a session waiting on it. Never starts "Approval
+    // pane answer for ": nothing takes it as the user's answer.
+    const cancelStale = (a: Ask, why: string) => async () => {
+      logPress($, 'Cancel stale')
+      const same = (x: Ask) => x.id === a.id && x.key === a.key && x.question === a.question
+      if (!(await dropAsks($, same)).length) return $.ui.toast('That ask is gone: withdrawn or answered.')
+      await $.prompt.submit({ text: cancelText(a, why) })
+      $.ui.toast(`Cancelled ask ${a.id} (${a.key})`)
     }
     // WAITING ON YOU lists everything the header counts but the approvals: the sessions, then the pending items
     // on the user whose key no session there carries (one per key).
@@ -1911,12 +1984,30 @@ export const register: Register = on => {
     const live = liveIds(b?.agents ?? '')
     const decisions: typeof topPend = [], behind: typeof topPend = []
     for (const p of topPend) (liveBehind(p.text, st, live) ? behind : decisions).push(p)
+    // A fold (foldOf): one row for the items, their copied commands joined, each item's text in its card.
+    const foldRow = (title: string, fold: string[], wrap: Wrap, accent: Color) => {
+      const leftovers = title === LEFTOVERS
+      const cmds = fold.map(i => {
+        const c = leftovers ? leftoverCommand(i) : otherOf(i)?.command
+        return c && !leftovers ? stopOf(c) : c
+      }).filter((c): c is string => !!c)
+      return row(`fold-${title}`, wrap, accent, wordChip(`${fold.length}`, accent), [
+        seg(leftovers ? `${fold.length} worktrees clean+merged` : `${fold.length} sessions idle over a day or superseded`, { dimColor: true }),
+      ], () => [
+        ...fold.map(i => detail(accent, '│', <Text dimColor wrap="truncate-end">{i}</Text>)),
+        bar(accent, act(leftovers ? 'c' : 's', leftovers ? 'Clean up all' : `Stop all ${cmds.length}`, copy(cmds.join('; ')))),
+      ])
+    }
     const footer = (s: { title: string; items: string[] }) => {
-      const shown = s.items.filter(i => !(s.title === 'Notices' && hidden.includes(i)))
+      // Stale: the asks and handoff entries it flags show on their own rows (askItem, pendRow); the rest here.
+      const shown = s.title === STALE_ITEMS ? stale.rest : s.items.filter(i => !(s.title === 'Notices' && hidden.includes(i)))
       // Other sessions: running first, then idle, then the rest (done).
       const rank = (i: string) => { const st = otherOf(i)?.state ?? ''; return isRunning(st) ? 0 : st === 'idle' ? 1 : 2 }
-      const items = s.title === OTHER ? [...shown].sort((a, c) => rank(a) - rank(c)) : shown
-      return items.length > 0 && section(s.title, items.length, (wrap, accent) => items.flatMap(i => footerItem(s.title, i, wrap, accent)), s.title === RESOLVED)
+      const { fold, rest } = foldOf(s.title, s.title === OTHER ? [...shown].sort((a, c) => rank(a) - rank(c)) : shown)
+      return shown.length > 0 && section(s.title, shown.length, (wrap, accent) => [
+        ...rest.flatMap(i => footerItem(s.title, i, wrap, accent)),
+        ...(fold.length ? foldRow(s.title, fold, wrap, accent) : []),
+      ], s.title === RESOLVED)
     }
 
     // APPROVE: the asks grouped by task key, each group and ask one line until pressed open. A group alone in
@@ -2019,6 +2110,7 @@ export const register: Register = on => {
     }
     const askItem = (a: Ask) => {
       const aOpen = askOpen(a)
+      const why = stale.asks.get(a.id)
       return (
         <Box key={`ask-${a.id}`} flexDirection="column" paddingLeft={2}>
           <Button key={`askrow-${a.id}`} plain onPress={setOpen(`ask-${a.id}`, !aOpen)}>
@@ -2026,6 +2118,7 @@ export const register: Register = on => {
               seg(aOpen ? '▾ ' : '▸ ', { color: 'permission' }),
               ...(isNew(a) ? [seg('NEW ', { color: 'permission', bold: true })] : []),
               ...(isOld(a, now) ? [seg('OLD ', { color: 'warning', bold: true })] : []),
+              ...(why ? [seg(`STALE · ${why} `, { color: 'warning', bold: true })] : []),
               ...kindBadge(a),
               seg(shortShas(oneLine(clean(a.question))), aOpen ? { bold: true } : undefined),
               seg(` ${ago(now - a.at)}`, isOld(a, now) ? { color: 'warning' } : { dimColor: true }),
@@ -2034,6 +2127,12 @@ export const register: Register = on => {
           {aOpen && (
             <Box flexDirection="column" paddingLeft={2}>
               {isOld(a, now) && <Text color="warning" wrap="wrap">Queued {ago(now - a.at)}: check it still applies before you answer (the PR or ticket may have moved).</Text>}
+              {why && (
+                <Box columnGap={2}>
+                  <Text color="warning" wrap="wrap">Stale: {why}</Text>
+                  {!weakStale(why) && <Button key={`ask-${a.id}-cancel`} plain label="Cancel" onPress={cancelStale(a, why)} />}
+                </Box>
+              )}
               <Text bold wrap="wrap">{draw(kindBadge(a))}{clean(a.question)}</Text>
               {a.target && <Text wrap="wrap"><Text dimColor>target </Text>{a.target}</Text>}
               {a.body && <Text dimColor wrap="wrap">body {clean(a.body.path)} · sha256 {a.body.sha256}</Text>}
