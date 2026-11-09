@@ -108,7 +108,6 @@ rm -r "$root/.claude/coordination.local.json" "$root/.claude/coordination.local"
 touch "$tmp/fix"
 [ "$(run ABC-12)" = "$(printf '%s\nfix: Sign in → gh auth login' "$(rm "$tmp/fix"; run ABC-12)")" ] || { echo "fix line failed"; exit 1; }
 [ "$(run --root)" = "$root" ] || { echo "--root failed"; exit 1; }
-
 # An adapter with only `pending` (tasks exits 2): the no-adapter rows, and its pending text. A tasks failure with no
 # output names the adapter and its exit code.
 cp "$root/.claude/session-status-adapter" "$tmp/adapter.keep"
@@ -539,6 +538,14 @@ for st in busy waiting; do setacct cfg "$(sess "$hid" "fix it" $st 1)"
   out=$(run --handover "$hid" 'Do X.') && rc=0 || rc=$?
   [ "$rc" = 3 ] && grep -q "$( [ $st = busy ] && echo mid-turn || echo 'waiting on a prompt')" <<<"$out" && ! calls | grep -q 'stop\|--bg' ||
     { echo "handover $st not refused: $out"; exit 1; }; done
+# Busy with state done: mid-turn while its transcript was written in the last minute, or its last message didn't
+# end the turn (a long tool call); a stale flag once both are past (the other account's handover below).
+setacct cfg "$(sess "$hid" "fix it" busy 1 | sed 's/"state":"blocked"/"state":"done"/')"
+out=$(run --handover "$hid" 'Do X.') && rc=0 || rc=$?
+[ "$rc" = 3 ] && grep -q mid-turn <<<"$out" || { echo "busy, done, fresh transcript not refused: $out"; exit 1; }
+echo '{"type":"assistant","message":{"stop_reason":"tool_use"}}' >> "$proj/$hid.jsonl"
+touch -t 202001010000 "$proj/$hid.jsonl"; out=$(run --handover "$hid" 'Do X.') && rc=0 || rc=$?
+[ "$rc" = 3 ] && grep -q mid-turn <<<"$out" && ! calls | grep -q 'stop\|--bg' || { echo "busy, done, a turn not ended not refused: $out"; exit 1; }
 setacct cfg "$(sess "$hid" "fix it" idle 1)"
 [ "$(run --handover "${hid:0:8}" -- 'Do X.')" = 'handed ABC-40 over: "fix it" (88888888) stopped, superseded by "ABC-40-fix-it" (abcdef12)' ] &&
   [ "$(calls | grep -v ' agents ')" = "$(printf 'cfg stop 88888888\ncfg --bg -n ABC-40-fix-it Work on ABC-40: continue from replies/ABC-40.md. Do X. Supersedes: %s (transcript %s; read only the parts you need, never whole).' "$hid" "$proj/$hid.jsonl")" ] ||
@@ -546,9 +553,10 @@ setacct cfg "$(sess "$hid" "fix it" idle 1)"
 # One under the other account is stopped there, and its successor starts under this one (that one may be at its
 # weekly limit, and only this account's sessions can message the coordinator).
 oid=bbbbbbbb-2222-3333-4444-555555555555
-echo '{"type":"user","message":{"content":"Work on ABC-43"}}' > "$proj/$oid.jsonl"; echo report > "$root/replies/ABC-43.md"
+printf '%s\n' '{"type":"user","message":{"content":"Work on ABC-43"}}' '{"type":"assistant","message":{"stop_reason":"stop_sequence"}}' > "$proj/$oid.jsonl"
+touch -t 202001010000 "$proj/$oid.jsonl"; echo report > "$root/replies/ABC-43.md"
 echo '{"features":{"accounts":true}}' > "$root/.claude/coordination.local.json"
-setacct cfg ""; setacct .claude-work "$(sess "$oid" "ABC-43-x" idle 1)"; calls >/dev/null
+setacct cfg ""; setacct .claude-work "$(sess "$oid" "ABC-43-x" busy 1 | sed 's/"state":"blocked"/"state":"done"/')"; calls >/dev/null
 out=$(run --handover "$oid" -- 'Do Y.') && [ "$(calls | grep -v ' agents ' | cut -d' ' -f1-4)" = "$(printf '.claude-work stop bbbbbbbb\ncfg --bg -n ABC-43-x')" ] ||
   { echo "handover from the other account: $out"; calls; exit 1; }
 # Unless this account is past 90% of its weekly limit and the old one's is under it: the successor stays there.
@@ -706,6 +714,13 @@ ib=$root/replies/coordinator-inbox.md
 for i in 1 2 3 4; do printf 'race %s' "$i" | as "$z" --inbox-add >/dev/null & done; as "$x" --inbox --read all >/dev/null & wait
 [ "$(grep -c '^## ' "$ib")" = 7 ] && [ "$(grep '^## ' "$ib" | cut -d' ' -f2 | sort -u | wc -l | tr -d ' ')" = 7 ] && [ ! -e "$ib.lock" ] ||
   { echo "inbox adds racing a --read"; cat "$ib"; exit 1; }
+# A lock a killed run left is taken over: its owner is gone, or it has no pid and is older than 5s.
+mkdir "$ib.lock" && touch -t 202001010000 "$ib.lock"
+printf 'after a stale lock' | as "$z" --inbox-add >/dev/null && [ "$(grep -c '^## ' "$ib")" = 8 ] && [ ! -e "$ib.lock" ] ||
+  { echo "inbox add over a stale lock"; exit 1; }
+bash -c 'exit 0' & dead=$!; wait "$dead"; mkdir "$ib.lock" && echo "$dead" > "$ib.lock/pid"
+printf 'after a dead owner' | as "$z" --inbox-add >/dev/null && [ "$(grep -c '^## ' "$ib")" = 9 ] && [ ! -e "$ib.lock" ] ||
+  { echo "inbox add over a dead owner's lock"; exit 1; }
 as "$x" --inbox --read all >/dev/null
 [ "$(as "$o" --successor --done; echo $?)" = "$(printf 'you still hold "p-coordinator": rename first (name_session with what --prev-name prints)\n3')" ] &&
   ! as "$o" --await renamed --timeout 1 >/dev/null || { echo "--successor --done or --await renamed before the rename"; exit 1; }

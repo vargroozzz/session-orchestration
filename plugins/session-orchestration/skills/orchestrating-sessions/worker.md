@@ -50,7 +50,10 @@ stale), say so in the report and send it without `done`.
 
 Always write every status report to `<TASK>.md` (overwrite it) in the project's replies folder, if its `CLAUDE.md`
 names one: a new coordinator reads it there. Anything else you write to that file (a `## Handoff`, a round of
-questions, a log entry) updates the status report at its top in the same write: a reader takes the top as the state. A report you send unasked: `reply` without `to`. It sends to this
+questions, a log entry) updates the status report at its top in the same write: a reader takes the top as the state.
+Keep it to the report and the newest `## Handoff` (under ~8 KB): every successor reads it. When you write a new
+handoff, move the older one and anything past (drafts, settled decisions, logs) to `<TASK>-archive.md` beside it,
+newest first, and name that file in the handoff for a successor that needs it. A report you send unasked: `reply` without `to`. It sends to this
 project's live coordinators in turn, newest first (`session-status --coordinator`, run from the project root), until
 one takes it. The coordinator's name in your brief (e.g. `myproj-coordinator`) is a hint, not an address, since
 coordinators get restarted: pass it as `to` only when `reply` finds none. Without the tool, run `bash <this file's
@@ -184,6 +187,8 @@ in your report, and don't wait on it: the coordinator passes on the outcome.
   Approvals says.
 - Do it yourself after all (a relayed approval came): withdraw it first, `hand_command` with the same key and command
   and `withdraw: true`, or the user's Run does it again.
+- A command the pane already has as a project action (a sign-in button, say) is refused: don't hand it over, ask for
+  it or give its `!` line. Say in your report that you wait on that button, by its label, and do what doesn't need it.
 - Tool missing: call `reload_plugins`; meanwhile the `!` line alone.
 
 ## Project memory
