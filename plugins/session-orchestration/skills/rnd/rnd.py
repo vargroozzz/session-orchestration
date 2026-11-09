@@ -11,8 +11,11 @@ usage: python3 -I rnd.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args]
                                   a headless test session (leave those out of refusal counts), else empty
   context [days=7] [split_iso] [project_rx]  context per request (avg, median, >200K and excess, base median) for
                                   all, since split, and matching projects; `over` rows per session; `fork` rows
-  units [days=7] [--project RX] [--merge|--done|--post RX]  merged PRs, finished tickets, review posts whose
-                                  command ran, one row each; USD per unit on stderr
+  units [days=7] [--project RX] [--merge|--done|--post RX] [--merged FILE] [--keys FILE]  merged PRs, finished
+                                  tickets, review posts whose command ran, one row each; USD per unit on stderr.
+                                  --merged: the adapter's `yesterday EPOCH KEY…` output, whose merges of the sessions'
+                                  keys count too (a reviewer pressed merge); merge_ran on stderr is the ones a session
+                                  ran. --keys: also write the sessions' task keys to FILE, one line, for `yesterday`
   waits [days=7] [min=5]          tool calls whose result came back >= min minutes later (prompts, hangs)
   bgtasks REGEX [days=7]              background Bash launches vs. their completion notices (SILENT = died with
                                   its session); totals on stderr
@@ -315,7 +318,7 @@ def units(days=7, *opts):
     o_ = dict(zip(opts[::2], opts[1::2]))
     rx = {k: re.compile(o_.get(f"--{k}", v)) for k, v in UNITS.items()}
     proj = re.compile(o_.get("--project", ""))
-    found, total, review = {}, 0.0, 0.0
+    found, total, review, keys = {}, 0.0, 0.0, set()
     print("kind\tid\tsession\tts\tcommand")
     for f in transcripts():
         if not proj.search(os.path.basename(os.path.dirname(f))):
@@ -324,16 +327,53 @@ def units(days=7, *opts):
         cost = sum(usd(u.get("input_tokens", 0), u.get("output_tokens", 0), u.get("cache_read_input_tokens", 0),
                        u.get("cache_creation_input_tokens", 0)) for _, _, u in requests(f))
         total += cost
-        hits, is_review = unit_hits(f, rx)
+        hits, is_review, first = unit_hits(f, rx)
+        if k := TASK.search(first):
+            keys.add(k.group(1))
         for key, ts, cmd in hits:
             if key not in found:
                 found[key] = sid
                 print("\t".join([key[0], key[1], sid, ts[:16], clip(cmd, 120)]))
         if is_review:
             review += cost
+    ran = sum(1 for key in found if key[0] == "merge")
+    if o_.get("--keys"):
+        with open(o_["--keys"], "w", encoding="utf-8") as fh:
+            fh.write(" ".join(sorted(keys)) + "\n")
+    if o_.get("--merged"):
+        # Same PR: same number, and the same repo when both name one (a merge run as `merge 22` names none).
+        def same(a, b):
+            (ra, _, na), (rb, _, nb) = a.rpartition("#"), b.rpartition("#")
+            ra, rb = ra.split("/")[-1], rb.split("/")[-1]
+            return na == nb and (not ra or not rb or ra == rb)
+        ours = [key[1] for key in found if key[0] == "merge"]
+        for key, ts, ref in host_merges(o_["--merged"], keys):
+            if not any(same(ref, o) for o in ours):
+                ours.append(ref)
+                found[("merge", ref)] = "host"
+                print("\t".join(["merge", ref, "host", ts, f"{key}: merged on the code host"]))
     n = {k: sum(1 for key in found if key[0] == k) for k in UNITS}
     per = lambda k, v: f"{k}={v} per_{k}={(review if k == 'post' else total) / v:.1f}" if v else f"{k}=0"
-    print(f"usd={total:.0f} review_usd={review:.1f} " + " ".join(per(k, v) for k, v in n.items()), file=sys.stderr)
+    print(f"usd={total:.0f} review_usd={review:.1f} " + " ".join(per(k, v) for k, v in n.items()) + f" merge_ran={ran}",
+          file=sys.stderr)
+
+
+def host_merges(path, keys):
+    """PRs merged in the window, whoever pressed merge, from an adapter's `yesterday EPOCH KEY…` output (rows
+    `KEY<TAB>…`, events `  EPOCH<TAB>REPO#N merged[ by NAME]`): [(key, ts, REPO#N)] for the keys sessions worked on."""
+    out, key = [], None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            if not line[0].isspace():
+                key = line.split("\t")[0].strip()
+                continue
+            ep, _, text = line.strip().partition("\t")
+            m = re.match(r"(\S+#\d+) merged\b", text)
+            if m and key in keys and ep.isdigit() and CUT <= int(ep) <= END:
+                out.append((key, time.strftime("%Y-%m-%dT%H:%M", time.gmtime(int(ep))), m.group(1)))
+    return out
 
 
 def unit_hits(f, rx):
@@ -365,7 +405,7 @@ def unit_hits(f, rx):
                 for uid in r.findall(cmd):
                     uid = f"{repo.group(1)}#{uid}" if repo and k != "done" else uid  # PR numbers repeat across repos
                     hits.append(((k, uid, sid) if k == "post" else (k, uid), ts, cmd))  # a later review round is another post
-    return hits, bool(re.search("review", name + first, re.I))
+    return hits, bool(re.search("review", name + first, re.I)), first
 
 
 # The approved-action hook's heredoc rule (hooks/approved-action.sh, lex, safe with CAT), so units counts what the
@@ -720,7 +760,7 @@ TASK = re.compile(r"(?:Session task:|Work on)\s+(?:https?://\S+/browse/)?([A-Z]+
 
 def replies(days=7):
     """Lost replies: task sessions (first prompt "Work on KEY", or "Session task: KEY") idle > 6 h that never wrote
-    replies/<KEY>* (Write/Edit on it, or `>`, mv, cp, open() onto it)."""
+    replies/<KEY>* (Write/Edit on it, or a Bash command that names it after `>`, mv, cp, tee, sed -i or python)."""
     window(days)
     tot = {"task": 0, "wrote": 0, "lost": 0, "open": 0}
     for f in transcripts():
@@ -746,9 +786,13 @@ def replies(days=7):
                 path = rf"replies/{re.escape(key)}(?!\d)"  # ABC-12 isn't ABC-123
                 for b in m.get("content") or []:
                     i = (b.get("input") or {}) if isinstance(b, dict) and b.get("type") == "tool_use" else {}
-                    # ponytail: `cp replies/KEY… elsewhere` still counts as a write; rare in practice
+                    cmd = i.get("command", "")
+                    # shortcut: `cp replies/KEY… elsewhere`, or a script that reads the reply and writes another file,
+                    # still counts as a write; parse the command if that shows up
                     if re.search(path, i.get("file_path", "")) or \
-                            re.search(rf"(>\s*|\bmv\b.*|\bcp\b.*|open\(.*)\S*{path}", i.get("command", "")):
+                            re.search(rf"(>\s*|\b(?:mv|cp|tee|sed\s+-i)\b[^\n]*)\S*{path}", cmd) or \
+                            re.search(rf"open\([^)]*{path}[^)]*,\s*['\"][wa]", cmd) or \
+                            (re.search(r"\.write(?:_text)?\(|writeFile", cmd) and re.search(path, cmd)):
                         wrote = True
         if not key:
             continue

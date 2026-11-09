@@ -87,6 +87,9 @@ check() { got=$(run "$1"); [ "$got" = "$2" ] || { echo "FAIL ($3): '$1': got $go
 bb='npx -y bitbucketdc-cli@latest' jd='npx jiradc-cli@latest'
 
 check "git status" pass "unrelated command"
+dot=$(printf '\302\267')
+utf=$(locale -a 2>/dev/null | awk 'tolower($0) ~ /utf-?8$/ && !u { u = $0 } END { print u }'); [ -n "$utf" ] || { echo "FAIL: no UTF-8 locale here to test with"; exit 1; }
+LC_ALL=$utf check "echo 'a $dot gh pr view 1'" pass "a multibyte character in quotes, under a UTF-8 locale"
 check "$bb pr list --repo app" pass "other bitbucket call"
 check "$bb pr merge --help" pass "help"
 check "$bb pr merge 271 --project PROJ --repo app 2>&1 | head -5" allow "approved merge"

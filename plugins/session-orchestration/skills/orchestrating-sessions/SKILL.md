@@ -120,8 +120,11 @@ coordinator topic file so the next coordinator follows it. Without one, **propos
 work that needs new sessions, list the sessions you'd start, one per line (the task key or a 3–5 word name, what it
 does, its done-when), then stop and wait. "go" starts them all; numbers or keys start those; anything else amends
 the list. Never start one the user hasn't named. **Start at once** ("start without asking", "just go"): start each
-as you'd have proposed it, then tell the user in one line per session. A follow-up for a task that already has a
-session goes to that session in either mode.
+as you'd have proposed it, then tell the user in one line per session. The mode can differ by kind of work (keep
+that in the topic file too): e.g. "read-only at once", where a session that only reads and writes local files (a PR
+review into the review inbox, an investigation, a draft) starts at once with its one line, and one that would push,
+post, send or move a ticket is proposed. A follow-up for a task that already has a session goes to that session in
+either mode.
 
 ## Handoff file
 
