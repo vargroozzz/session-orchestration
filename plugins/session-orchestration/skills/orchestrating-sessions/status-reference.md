@@ -2,8 +2,7 @@
 
 Read when writing or debugging a project's `session-status-adapter`, editing
 `.claude/coordinator-actions.json`, when a status line, a pane group or a pane word is unclear, for an
-option the coordinator's [SKILL.md](SKILL.md) doesn't name, or as a chunk session
-([A chunk session's steps](#a-chunk-sessions-steps)). The rules a coordinator acts on every day are in
+option the coordinator's [SKILL.md](SKILL.md) doesn't name. The rules a coordinator acts on every day are in
 [SKILL.md](SKILL.md).
 
 ## Contents
@@ -166,17 +165,7 @@ State lives in `KEY-build.md` in the plan file's own folder (KEY: the plan file'
 `## cN: done` when it lands, or `## cN: handoff` when it stops early. Nothing else marks state. `--handover` and the
 context-watch hook look for it in the replies folder, so keep plans in the replies folder.
 
-#### A chunk session's steps
-
-A `Chunk: KEY/N` line in a session's first prompt marks it as one chunk of a plan:
-- Stay within your brief's est and touches.
-- A clean stop point: everything committed, no background task, no question waiting.
-- At the context-watch hook's soft line, reach the stop point, append `## cN: handoff ID8` (ID8: the first 8 characters of
-  `$CLAUDE_CODE_SESSION_ID`, so `--handover` knows the heading is yours) to `KEY-build.md` in the replies folder, rename yourself (call `name_session` with the name `session-status --prev-name` prints, `KEY-cN-prev-K`: your
-  successor takes `KEY-cN`), message the coordinator `handoff ready: KEY cN`, and end the turn. With no coordinator
-  (`session-status --coordinator` prints nothing), finish with `session-status --handover --self -- '<next step>'`
-  instead: its last line names the rename, and with no `--model`/`--effort` it takes them from your plan row.
-- After landing, append `## cN: done` and run `session-status --plan FILE --done N`.
+A chunk session's own steps: [worker.md](worker.md#chunk-sessions).
 
 ## Context watch
 
@@ -192,7 +181,7 @@ watcher or opened the pane), `Session task: KEY review` a review (no messages), 
   prints, message the coordinator `handoff ready: KEY[ cN]`,
   end the turn. A chunk or task is also told to finish with `session-status --handover --self` when `--coordinator`
   prints nothing. A coordinator is told to write its handover note and start its successor with
-  `session-status --successor`, then follow what it prints (SKILL.md, Handing over): it hands itself over without the
+  `session-status --successor`, then follow what it prints ([handover.md](handover.md)): it hands itself over without the
   user, and the coordinator inbox holds what workers send meanwhile.
 - **Hard** (past `handoff.hard_after` further, never closer than `handoff.stop_room` to the compaction): once, "stop now",
   from what's on disk.
@@ -256,7 +245,7 @@ The phrases `approved by NAME` and `changes requested by NAME` read without a le
 
 Without an adapter, rows are the keys in running sessions' names and worktree branches (no tracker
 status, no Leftovers). Transcripts that ran `session-status` (or a `status-names` command) with
-`--changes` or `--watch` are a coordinator's and never own a task; a plain run (a worker checking its
+`--start`, `--changes`, `--watch` or `--owner`, or that called `open_pane`, are a coordinator's and never own a task; a plain run (a worker checking its
 own task) or reading the docs doesn't count. **Owner:** the key a session's first prompt starts with
 (`Work on KEY`, `Session task: KEY`, `KEY:` on its first line; a key further on, history or an
 example, doesn't count), else a `Session task: KEY` marker. A first-prompt owner beats a marker owner
@@ -417,7 +406,7 @@ that line from later runs; exit 1 when no current line is LINE. The plugin ships
 - `open_split [--account DIR] DIR CMD…`: run CMD in a split beside the current view.
 
 Return 0 when it opened; 2 when nothing opened, with the reason on stderr (the pane copies CMD); anything else is an
-error, shown with stderr. Two more are optional, for a coordinator's handover (SKILL.md, Handing over); a module
+error, shown with stderr. Two more are optional, for a coordinator's handover ([handover.md](handover.md)); a module
 without them gets `plain`'s, which return 2:
 - `title_tty TTY TITLE`: title the tab holding the terminal on TTY (`ttys012`, as `ps -o tty=` prints it), so the
   user sees which tab is the old coordinator (`--prev-name --title`);

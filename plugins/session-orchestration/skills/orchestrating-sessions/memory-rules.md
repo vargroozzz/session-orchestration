@@ -31,10 +31,8 @@ demand, and entries leave once they've proved themselves. A flat file past a scr
 session you start: it builds the topic files and the new index as copies, re-checks for lines appended meanwhile,
 and swaps the index in with one `mv`, so no worker's append is lost.
 
-- You edit memory files only; edits to any other file go to a session. So prune in passing: delete an entry that is
-  wrong, superseded, about a task state that has since resolved, or already in a `CLAUDE.md`, a doc or a skill, and
-  merge two about the same trap. You and whoever the index names for graduation are the only ones who delete or
-  rewrite entries; sessions only append.
+- Prune in passing, as [SKILL.md](SKILL.md) (Project memory) says. You and whoever the index names for graduation
+  are the only ones who delete or rewrite entries; sessions only append.
 - **Team memory** (shared mode): a line true and useful to a collaborator on another machine, with another account
   and coordinator, is tagged `[team]` (`- <date> <TASK>: [team] …`); in doubt, it's personal. Read the repo's
   `.claude/coordination/memory.md` too when it exists. `[team]` lines never go into it directly: when you prune,

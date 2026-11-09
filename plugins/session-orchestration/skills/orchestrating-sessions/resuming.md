@@ -9,7 +9,8 @@ the project root, after confirming the session owns the task (`session-status --
 |------|---------|
 | Session is live | `SendMessage` to its name |
 | Session was stopped with `claude stop` | `claude attach <id>` (its conversation is kept) |
-| Session is closed and not listed in `claude agents --json` | `claude --bg --resume <session-id> '<task>'` (single quotes). **Check the list first.** Resuming a session that's still listed starts a duplicate |
+| Session is closed and not listed in `claude agents --json` | `claude --bg --resume <session-id> '<task>'` (single quotes). **Check the list first.** Resuming a session that still runs starts a duplicate under a new id |
+| Session is retired (listed, `blocked`, no process) | `session-status --send-when-idle <id> '<text>'` ([below](#follow-ups-for-later); never a relayed approval in the text), or by hand ([Reviving](#reviving-a-retired-session)) |
 | Sessions ended while the background service was off (a reboot) or crashed | `session-status --resume-ended ID…`, after the one ask ([below](#after-a-restart)) |
 | The user must answer a prompt or approve a plan | Tell them: `claude attach <id>` |
 | Finished session | `claude stop <id>` (the user's go first; a session replaced through `--handover` is stopped without asking, below) |

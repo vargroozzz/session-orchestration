@@ -45,8 +45,9 @@ session under another account.
   resumes applies (read its `ctx` first).
 - **Waking or stopping** a session under another account (a retired one, a `claude stop` that can't confirm):
   run the command under that account's prefix, as `session-status` prints it.
-- **A worker under another account** (one the user started there) finds no coordinator (`reply` delivers nothing) and
-  can't message it: it writes its report to the replies folder only. `session-status --changes` (so `--watch`)
+- **A worker under another account** (one the user started there) finds no coordinator and can't message it: its
+  `reply` queues the report in the coordinator inbox (`--watch` reports it under `Inbox`), and it writes the report
+  to the replies folder as always (one report, shown both ways: act on it once). `session-status --changes` (so `--watch`)
   lists each `<KEY>.md` written there in the last day under `Reports:` (not a key a session of your account works
   on: that one messages), so a new one wakes you; read it there whole: where the status report at the top and a
   section below it disagree, the later of the two is the state.
@@ -62,7 +63,7 @@ another is under it, it adds `accounts weekly limit:` "`<yours>` is past 90% of 
 is under it: hand over to a coordinator under `<other>`", and `--watch` wakes you with it under `Weekly limit:`, once.
 Then:
 - Start no new task session: it would run under your account.
-- Write your handover (the coordinator skill's Handing over), saying the move is why, and hand over with
+- Write your handover (the coordinator skill's handover.md), saying the move is why, and hand over with
   `session-status --successor --account <other>`: it starts the next coordinator under that account and the handover
   goes on as there. With no terminal configured it prints the command for the user to run (their usual command with
   its `CLAUDE_CONFIG_DIR`; `env -u CLAUDE_CONFIG_DIR` for `~/.claude`). The two coordinators can't message each other

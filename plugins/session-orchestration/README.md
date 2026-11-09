@@ -94,7 +94,7 @@ plugin depends on.
 
 - `skills/setting-up-coordination/SKILL.md`: setup, the config keys, shared mode.
 - `skills/orchestrating-sessions/SKILL.md`: the coordinator's playbook, with `approvals.md`, `resuming.md`,
-  `plans.md`, `pane.md` and `memory-rules.md` beside it, each read when its event comes up; `worker.md`: the rules
+  `handover.md`, `plans.md`, `pane.md` and `memory-rules.md` beside it, each read when its event comes up; `worker.md`: the rules
   for a session that receives messages (`hooks/reply-card.txt` is its short form); `status-reference.md`: the status
   command, the adapter contract, writing your own terminal module.
 - Tests: every `*.test.sh` prints `ok`.

@@ -7,7 +7,7 @@ short form of Replying; the rest of this file is by situation: read the section 
 ## Replying
 
 Reply with the `reply` tool (ToolSearch: `mcp__session-orchestration__reply`), `to` the message's `from` attribute;
-it returns who got it, or why nobody did. No such tool (the plugin's module didn't load): `SendMessage` to the same
+it returns who got it or where it was queued. No such tool (the plugin's module didn't load): `SendMessage` to the same
 `from`. By what the message asks:
 - **Status:** the status report below.
 - **A task, sent while you're running** (not your first prompt: a `claude --bg` launch is its own ack): now one line,
@@ -48,19 +48,21 @@ git runs in the session's cwd; pass `worktree` (absolute) when the task's worktr
 show (no adapter, a failed lookup) isn't held against you. If a check is still wrong (the board's PR words are
 stale), say so in the report and send it without `done`.
 
-Always write every status report to `<TASK>.md` (overwrite it) in the project's replies folder, if its `CLAUDE.md`
-names one: a new coordinator reads it there. Anything else you write to that file (a `## Handoff`, a round of
-questions, a log entry) updates the status report at its top in the same write: a reader takes the top as the state.
-Keep it to the report and the newest `## Handoff` (under ~8 KB): every successor reads it. When you write a new
-handoff, move the older one and anything past (drafts, settled decisions, logs) to `<TASK>-archive.md` beside it,
-newest first, and name that file in the handoff for a successor that needs it. A report you send unasked: `reply` without `to`. It sends to this
-project's live coordinators in turn, newest first (`session-status --coordinator`, run from the project root), until
+**The replies file.** Write every status report to `<TASK>.md` (overwrite it) in the project's replies folder, if
+its `CLAUDE.md` names one: a new coordinator reads it there. Anything else you write to that file (a `## Handoff`, a
+round of questions, a log entry) updates the status report at its top in the same write: a reader takes the top as
+the state. Keep it to the report and the newest `## Handoff` (under ~8 KB): every successor reads it. When you write
+a new handoff, move the older one and anything past (drafts, settled decisions, logs) to `<TASK>-archive.md` beside
+it, newest first, and name that file in the handoff.
+
+**A report you send unasked:** `reply` without `to`. It tries this project's live coordinators, newest first, until
 one takes it. The coordinator's name in your brief (e.g. `myproj-coordinator`) is a hint, not an address, since
-coordinators get restarted: pass it as `to` only when `reply` finds none. Without the tool, run `bash <this file's
-folder>/session-status --coordinator` from the project root and `SendMessage` the first name it prints, then the next.
-No coordinator takes it (none runs, one is mid-handover, or it is under another Claude account): `reply` queues it in
-the coordinator inbox (`<replies>/coordinator-inbox.md`) and says so; the next coordinator reads it there. Don't send
-it again. When it can't queue either, the replies-folder file is the report, and the coordinator's `--watch` sees it.
+coordinators get restarted: pass it as `to` only when `reply` says it could neither send nor queue. No coordinator takes it (none runs, one is
+mid-handover, or it is under another Claude account): `reply` queues it in the coordinator inbox
+(`<replies>/coordinator-inbox.md`) and says so; the next coordinator reads it there, so don't send it again. When it
+can't queue either, the replies file is the report, and the coordinator's `--watch` sees it. Without the tool, run
+`bash <this file's folder>/session-status --coordinator` from the project root and `SendMessage` the first name it
+prints, then the next.
 
 ## Approvals
 
@@ -155,9 +157,9 @@ the file's path. That is a plain-text ask, not a plan approval, so a relay can a
 - A task session whose first prompt didn't name its key (it had to find the ticket, or a message handed it the task)
   calls `name_session` (ToolSearch: `mcp__session-orchestration__name_session`) once it knows the key, with
   `<KEY>-<short-desc>` (e.g. `PROJ-1234-fix-settler`; a review session `<KEY>-review-<short-desc>`), so `claude
-  agents` and the coordinator pane list it by ticket. The rename lands when the turn ends. Once per task; subagents
-  never call it. Tool missing: call `reload_plugins`, then load it next turn.
-
+  agents` and the coordinator pane list it by ticket. The rename lands when the turn ends. Once per task, plus the
+  `-prev-K` rename a handoff asks for (the name `session-status --prev-name` prints); subagents never call it. Tool
+  missing: call `reload_plugins`, then load it next turn.
 - **A PR event on your PR** (`PR REPO#ID (KEY): ci-failed | conflict | changes-requested on SHA`): it's your task, so
   start on it without asking. Read the failed build's log, merge the base branch in, or read the review comments,
   then fix, commit and push. A rebase needs a force-push, which is Reserved ([Approvals](#approvals)): ask first.
@@ -170,9 +172,14 @@ the file's path. That is a plain-text ask, not a plan approval, so a relay can a
 A `Chunk: KEY/N` line in your first prompt marks you as one chunk of a plan:
 - Stay within your brief's est and touches.
 - Keep a clean stop point in reach: everything committed, no background task, no question waiting.
-- The context-watch hook's soft line says how to hand off: follow it.
-- After landing, append `## cN: done` to `KEY-build.md` in the replies folder and run `session-status --plan FILE
-  --done N`.
+- At the context-watch hook's soft line (it prints these steps): reach the stop point, append `## cN: handoff ID8`
+  to `KEY-build.md` in the replies folder (ID8: the first 8 characters of `$CLAUDE_CODE_SESSION_ID`, so `--handover`
+  knows the heading is yours), call `name_session` with the name `session-status --prev-name` prints
+  (`KEY-cN-prev-K`: your successor takes `KEY-cN`), message the coordinator `handoff ready: KEY cN`, and end the
+  turn. With no coordinator (`session-status --coordinator` prints nothing), finish with `session-status --handover
+  --self -- '<next step>'` instead: its last line names the rename, and with no `--model`/`--effort` it takes them
+  from your plan row.
+- After landing, append `## cN: done` to `KEY-build.md` and run `session-status --plan FILE --done N`.
 
 ## Handing the user a command
 
@@ -183,12 +190,14 @@ key, the command and one line on what it does. It shows in the coordinator pane 
 in your report, and don't wait on it: the coordinator passes on the outcome.
 - One plain line, no `cd`: the coordinator runs it from its own folder, so use absolute paths. A compound command is
   fine here; it's the user's to approve.
-- Never hand over a step you could take yourself, or one that needs an approval you haven't got: ask for that as
-  Approvals says.
+- Never hand over a step you could take yourself, or one a relayed approval can cover (a hook-gated post or merge,
+  a Reserved action): ask for that as Approvals says. Where no relay can verify (your cwd is outside the
+  coordinator's project, or [feedback.md](feedback.md)'s apply session), the handed command is the ask and the
+  user's Run their approval.
 - Do it yourself after all (a relayed approval came): withdraw it first, `hand_command` with the same key and command
   and `withdraw: true`, or the user's Run does it again.
-- A command the pane already has as a project action (a sign-in button, say) is refused: don't hand it over, ask for
-  it or give its `!` line. Say in your report that you wait on that button, by its label, and do what doesn't need it.
+- A command the pane already has as a project action (a sign-in button, say) is refused. None of these: handing it
+  over, asking for it, giving its `!` line. Say in your report that you wait on that button, by its label, and do what doesn't need it.
 - Tool missing: call `reload_plugins`; meanwhile the `!` line alone.
 
 ## Project memory
