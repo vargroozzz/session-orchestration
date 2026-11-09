@@ -11,6 +11,7 @@ like a PR comment post: they need the user's relayed approval naming the body's 
 
 ```
 teams DM  <sender>: <first 60 chars>             unread 1:1 or untitled group chat (its last message)
+teams DM  <sender>: <text> — read, unanswered: … the same, read, yesterday or today, and the triage kept it
 teams @   <chat> · <sender>: <text>              unread @mention of you, chats and channels, yesterday and today
 teams ?   <chat> · <sender>: <text>              a question to your team in a watched chat (rules A, B, C)
 mail      <sender>: <subject>                    unread inbox mail from the last week that needs action
@@ -19,7 +20,8 @@ mail      <sender>: <subject>                    unread inbox mail from the last
 
 `auth_error` means the CLI's login lapsed: the user signs in again. A line can end in `[PROJ-12,PROJ-40]`: the
 tasks the whole message refers to (keys, and PR links mapped to their tasks), and in ` — <why>`: the triage's
-reason.
+reason. A DM line means the chat's last message isn't the user's: it goes once they answer there. A read one
+(Teams is often read first) shows only when the triage says it needs the user or the team.
 
 A mail line stays while Outlook has it unread (Graph's `isRead`), for its whole week: one read only in Jira or
 another client that doesn't sync the flag keeps coming back. When the user says it's handled, hide it for every
@@ -72,10 +74,10 @@ The person's file only (the repo file can't set `messages` or `msgraph`):
 - `accept_ooo_invites`: `true` accepts a colleague's (`domain`) OOO calendar invite from the last two weeks, without
   a reply to the organizer. Off by default.
 
-The triage asks Haiku (`claude -p --model haiku`, no tools, no session saved) about each rule A, C and mail line
-once, 8 per call, 40s at most; it keeps what needs you or the team, with why. A question to the team someone else
-has answered in the chat is dropped. A failed call keeps the lines (rule C: only those naming a key or replying to
-you; mail: only from a person) and asks again next run.
+The triage asks Haiku (`claude -p --model haiku`, no tools, no session saved) about each rule A, C, read-DM and mail
+line once, 8 per call, 40s at most; it keeps what needs you or the team, with why. Unread DMs aren't triaged. A
+question to the team someone else has answered in the chat is dropped. A failed call keeps the lines (rule C: only
+those naming a key or replying to you; mail: only from a person; read DMs: none) and asks again next run.
 
 Cache, per project, in `~/.cache/session-status/<project>.messages/`: `notices.jsonl` (below), `people.json` (who's
 who, a day), `bodies/` and `triage/` (a week), `dismissed/` (30 days), `prs.tsv` (a PR's tasks, decided once), `dropped.jsonl` (what the
