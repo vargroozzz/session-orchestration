@@ -63,7 +63,9 @@
 # "Other sessions": live sessions that own no row (no task, a reviewer, a session dir) and aren't blocked (Waiting
 # on you has those), coordinators (ran --start, --changes, --watch or --owner, or opened the pane) left out: `"NAME" STATE AGE[ · reviews KEY][ — LAST TEXT] (PREFIX attach ID)`.
 # AGE is since start while working, else since its transcript was last written; idle or done ones drop off at
-# SESSION_STATUS_OTHER_HOURS (3). --changes doesn't compare it either.
+# SESSION_STATUS_OTHER_HOURS (3), unless at rest (blocked: still running) or superseded. --changes doesn't compare it either.
+# "Stale": `* ask ID KEY: REASONS`, `* pending "LABEL": REASONS`, `* session "NAME" (ID8)[ KEY]: decision not on the
+# pane` (stale.jq). --changes reports an item once per wording (a new reason is a new wording), not one going away.
 # Owners: a review session (`Session task: KEY review`, "review" ending the marker) never owns KEY. Task markers
 # count only from a session's own text and the messages it received (its prompts, a SendMessage brief), not its
 # tool inputs (a brief it sends names another session's task). A first prompt names a key only at its start, and
@@ -82,6 +84,8 @@
 #        session-status --resume-ended [--pause SECS] ID…   resume those one at a time, SECS (60) apart, each checked
 #                       against the live list first
 #        session-status --changes [args]   only lines changed since the previous --changes run
+#        session-status --stale [args]   the sweep's "Stale" section alone: queued asks and handoff entries whose facts
+#                       moved on, sessions asking the user with no ask queued (stale.jq has the signals); flags only
 #        session-status --watch [--every SECS] [args]   block until --changes reports something at two polls in a
 #                       row (or fails 3 in a row), print it and exit; checks every SECS (default 1800). Run it in
 #                       the background, re-arm; no loop around it.
@@ -687,6 +691,12 @@ if [ "${1:-}" = --watch ]; then
   done
 fi
 
+# --stale [args]: the sweep's Stale section alone (stale.jq), one item a line.
+if [ "${1:-}" = --stale ]; then
+  shift; out=$(SESSION_STATUS_NO_FEEDBACK=1 "$SELF" "$@"); rc=$?
+  awk '$0 == "Stale:" { s = 1; next } s && /^  \* / { print substr($0, 5); next } { s = 0 }' <<<"$out"; exit "$rc"
+fi
+
 # --changes: print only lines that differ from the previous --changes run (for --watch). Idle/busy and
 # "closed Nh" ages are stripped first, since they change on every run, and so are a `(PRs as of HH:MM)` marker (the
 # adapter adds and drops it as lookups fail and recover) and a `(maybe …)` guess (not an
@@ -779,10 +789,11 @@ if [ "${1:-}" = --changes ]; then
         /^now: / && /sess:"[^"]*" working/ && (key($0) in was) { drop[NR]; drop[was[key($0)]] }
         /^now: / && (key($0) in was) && st($0) != wst[key($0)] && flip(st($0)) && flip(wst[key($0)]) { drop[NR]; drop[was[key($0)]] }
         /^now:   ".*" \(.*attach [0-9a-f]+\)$/ { drop[NR] }
+        /^now:   \* session ".*" \([0-9a-f]+\).*: decision not on the pane$/ { drop[NR] }   # a waiting session again, as above
         /^was:   ".*" \(.*attach [0-9a-f]+\)( — blocked: .*)?$/ { match($0, /attach [0-9a-f]+\)/); id = substr($0, RSTART + 7, RLENGTH - 8)
           if (id in live && live[id] != "done") drop[NR] }
         END {
-          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Reports:|Weekly limit:|Inbox \(session-status --inbox\):)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
+          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(session-status --inbox\):)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
           for (i = 1; i <= NR; i++) if (!(i in drop)) print line[i] }'; echo "$ev"; } | grep . || echo "no changes"
   else
     echo "$new"; [ -z "$ev" ] || printf '\n%s\n' "$ev"
@@ -1314,7 +1325,7 @@ fi
 
 dirs=$( { echo "$ROOT"; adapter session-dirs 2>/dev/null | sed "s#^~#$HOME#"; } | grep .)
 [ -z "$ALLP" ] || dirs=/
-list_sessions | DIRS=$dirs awk -F'\t' 'BEGIN { n = split(ENVIRON["DIRS"], D, "\n") } { for (i = 1; i <= n; i++) if (index($6, D[i]) == 1) { print; next } }' > "$TMP/agents.all"
+list_sessions | tee "$TMP/agents.every" | DIRS=$dirs awk -F'\t' 'BEGIN { n = split(ENVIRON["DIRS"], D, "\n") } { for (i = 1; i <= n; i++) if (index($6, D[i]) == 1) { print; next } }' > "$TMP/agents.all"
 # A session-dir session never owns a task: rows, owners and leftovers read only the root's sessions.
 awk -F'\t' -v r="$ROOT" 'index($6, r) == 1' "$TMP/agents.all" > "$TMP/agents"
 
@@ -1466,8 +1477,10 @@ asks_user() {  # TRANSCRIPT
     | (map(.type == "user" and ((.message.content | type) == "string" or any(.message.content[]?; .type? == "text"))) | indices(true) | last) as $i
     | .[($i // -1) + 1:][] | select(.type == "assistant") | .message.content[]?
     | if .type == "text" then .text elif .type != "tool_use" then empty elif .name == "SendMessage" then .input.summary // ""
-      elif .name == "mcp__session-orchestration__reply" then .input.text // "" else empty end' 2>/dev/null)
+      elif .name == "mcp__session-orchestration__reply" then (.input.text // "") + (if .input.done then "\n\u0001done" else "" end) else empty end' 2>/dev/null)
   grep -qE '^[[:space:]]*! [a-z~./]' <<<"$t" && return
+  # A turn that reported its task done (a reply with done) and asks no question nor hands a command waits on no one.
+  grep -q $'\001done' <<<"$t" && ! grep -q '?' <<<"$t" && return 1
   awk '/^[[:space:]]*```/ { f = !f; next } !f' <<<"$t" | sed 's/`[^`]*`//g' > "$TMP/asks"
   grep -qiE '\?([[:space:]*)]|$)|(^|[^a-z])(blocked (on|by|until)|blocked:|(is|am|still|stays) blocked|(you|to) decide|decision for you|on you|your (call|go-ahead|go|approval|decision|answer|input|ok)|waiting (on|for) (you|your))([^a-z]|$)' "$TMP/asks"
 }
@@ -1636,9 +1649,14 @@ mkdir -p ~/.cache/session-status && cp "$TMP/agents.all" ~/.cache/session-status
 touch "$TMP/in_review.ids" "$TMP/on_you.ids" "$TMP/stale" "$TMP/listed.ids"
 blocked=$(tr '\t' '\037' < "$TMP/agents.all" | while IFS=$'\037' read -r id name st pre _ _ _ status _; do
   [ "$st" = blocked ] || continue
-  v=$(verdict "$id")
+  v=$(verdict "$id"); ov=$v
   if grep -qxF "$id" "$TMP/on_you.ids"; then case $v in (on*) ;; (*) v="on	" ;; esac   # a row keeps it on you
   elif grep -qxF "$id" "$TMP/in_review.ids"; then continue   # its rows show it idle, in review
+  fi
+  # Its last turn asks the user (no prompt): for the Stale section's "decision not on the pane".
+  if [ "$ov" = "on	" ] && [ "$status" != waiting ]; then
+    k=$(awk -v n="sess:\"$name\"" 'index($0, n) { print $1; exit }' "$TMP/rows"); [ -n "$k" ] || k=$(grep -oE -m1 "$KEYRE" <<<"$name" | head -1)
+    printf '%s\t%s\t%s\n' "${id:0:8}" "$name" "$k" >> "$TMP/asking"
   fi
   # Not on you (idle, busy, superseded, a delivered review, landed): Other sessions or its row lists it.
   b=${v#*	}; case $v in
@@ -1705,12 +1723,13 @@ while IFS=$'\037' read -r id name st pre started _ _ status _; do
   grep -qxF "$id" "$TMP/listed.ids" || [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] || grep -qxF "$id" "$TMP/shown_ids" || grep -q "/$id\.jsonl$" "$TMP/watchers" ||
     grep -q "stop ${id:0:8}$" "$TMP/leftovers" && continue
   # Blocked but not on you (verdict): at rest, or busy past a session limit.
-  [ "$st" != blocked ] || { [ "$status" = busy ] && st=busy || st=idle; }
+  held=; [ "$st" != blocked ] || { held=1; [ "$status" = busy ] && st=busy || st=idle; }
   f=$(transcript_of "$id"); w=$NOW; [ -z "$f" ] || w=$(mtime "$f")
   case $st in
     working|busy) age=$(( NOW - ${started:-0} )); [ "${started:-0}" -gt 0 ] || age=$(( NOW - w )) ;;
-    # A live superseded one stays listed however long it idles: it is never a leftover, and its Stop is here.
-    *) age=$(( NOW - w )); [ "$age" -lt "$OTHER_S" ] || grep -qxF "$id" "$TMP/superseded.ids" || continue ;;
+    # A live superseded one stays listed however long it idles: it is never a leftover, and its Stop is here. So does
+    # one at rest (blocked: its process still runs), else nothing shows it; the pane folds those idle over a day.
+    *) age=$(( NOW - w )); [ "$age" -lt "$OTHER_S" ] || [ -n "$held" ] || grep -qxF "$id" "$TMP/superseded.ids" || continue ;;
   esac
   rev=$(awk -v id="$id" '$2==id {print $1; exit}' "$TMP/reviews")
   sup=$(awk -v id="$id" '$1==id {print substr($2, 1, 8)}' "$TMP/superseded" | tail -1)
@@ -1718,6 +1737,32 @@ while IFS=$'\037' read -r id name st pre started _ _ status _; do
   printf '  "%s" %s %s%s%s%s (%s attach %s)\n' "$name" "$st" "$(fmt_age "$age")" "${rev:+ · reviews $rev}" "${sup:+ · superseded by $sup}" "${last:+ — $last}" "$pre" "${id:0:8}"
 done < <(tr '\t' '\037' < "$TMP/agents.all") > "$TMP/other"
 [ -s "$TMP/other" ] && printf '\nOther sessions:\n' && cat "$TMP/other"
+
+# Stale (stale.jq): queued asks and handoff entries whose facts moved on (the ticket done, its PRs merged, a session
+# or worktree they name gone, a wrong ask number, a duplicate of an ask, old), and sessions asking the user with no ask
+# queued. Flags only: cancelling an ask or archiving an entry is the user's press. Run alone: --stale.
+af=~/.cache/session-status/asks/$(sha256_of <(printf %s "$ROOT") | cut -c1-16).json   # the pane's store (ASKS_DIR)
+[ -z "$PENDING" ] || bash "$(dirname "$SELF")/pending" entries > "$TMP/st.entries" 2>/dev/null
+touch "$TMP/st.entries" "$TMP/asking"
+{ jq -r '.[]? | .question, (.target // empty)' "$af" 2>/dev/null; cut -f3 "$TMP/st.entries"; } > "$TMP/st.text"
+# Gone: a session id named there that has a transcript in some account and isn't running (not when a listing failed).
+[ -e "$TMP/ask.failed" ] || grep -oE '\b[0-9a-f]{8}\b' "$TMP/st.text" | sort -u | while read -r id; do
+  awk -F'\t' -v id="$id" 'index($1, id) == 1 && $3 != "done" && $3 != "stopped" { f = 1 } END { exit !f }' "$TMP/agents.every" && continue
+  list_accounts | cut -f1 | while read -r d; do ls "$d"/projects/*/"$id"*.jsonl; done 2>/dev/null | grep -q . && echo "$id"
+done > "$TMP/st.gone"
+grep -oE '[^[:space:]`"'"'"'()]*worktrees/[A-Za-z0-9._-]+' "$TMP/st.text" | sort -u | while read -r w; do
+  # A relative one under the root or a session-dir (shortcut: not a repo nested deeper; add once one misfires).
+  p=${w/#\~/$HOME}; [ -e "$p" ] || while read -r d; do [ ! -e "$d/$p" ] || echo y; done <<<"$dirs" | grep -q . || echo "$w"
+done > "$TMP/st.wtgone"
+# Ask and entry keys no row has: one `done` call says which are finished.
+{ jq -r '.[]?.key' "$af" 2>/dev/null; cut -f1,3 "$TMP/st.entries" | grep -oE "$KEYRE"; } | sort -u | grep -vxF -f <(cut -f1 "$TMP/tasks") > "$TMP/st.keys"
+# Leftovers' call answered its candidates already: ask only about the others.
+cut -f1 "$TMP/done" 2>/dev/null > "$TMP/st.done"; touch "$TMP/cand"; grep -vxF -f "$TMP/cand" "$TMP/st.keys" > "$TMP/st.ask" || true
+[ ! -s "$TMP/st.ask" ] || adapter done $(cat "$TMP/st.ask") 2>/dev/null | cut -f1 >> "$TMP/st.done"
+jq -nr --arg asks "$(cat "$af" 2>/dev/null)" --rawfile entries "$TMP/st.entries" --rawfile rows "$TMP/tasks" --rawfile done "$TMP/st.done" \
+  --rawfile gone "$TMP/st.gone" --rawfile wtgone "$TMP/st.wtgone" --rawfile asking "$TMP/asking" --arg keyre "$KEYRE" --arg now "$NOW" \
+  -f "$(dirname "$SELF")/stale.jq" > "$TMP/st.out" 2>/dev/null || echo "stale.jq failed" > "$TMP/st.out"
+[ -s "$TMP/st.out" ] && printf '\nStale:\n' && sed 's/^/  * /' "$TMP/st.out"
 
 if [ -n "$NPID" ]; then
   end=$((SECONDS + 60)); while kill -0 "$NPID" 2>/dev/null && [ "$SECONDS" -lt "$end" ]; do sleep 1; done

@@ -8,6 +8,7 @@
 def entries: reduce (split("\n")[1:][]) as $x ({started: false, stop: false, e: []};
     if .stop then .
     elif $x | startswith("- ") then .started = true | .e += [$x[2:]]
+    elif .started and ($x | test("^\\s+\\S")) then .   # an indented continuation of the entry above
     elif .started and ($x | test("^#") or test("\\S")) then .stop = true
     else . end) | .e;
 def lab: sub("^[0-9]{4}-[0-9]{2}-[0-9]{2} "; "") | if test(" \\(|:") then capture("^(?<l>.*?)(?: \\(|:)").l else . end;

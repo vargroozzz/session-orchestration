@@ -60,7 +60,23 @@ lists live sessions that own no task row (no task, a reviewer, a session in one 
 `"NAME" STATE AGE[ · reviews KEY][ · superseded by NEWID][ — LAST TEXT] (PREFIX attach ID)`. A superseded
 session (below) at rest is listed here, not under Waiting on you; on a prompt it still waits on you. AGE counts from its start while
 it works, else from its last transcript write; an idle or done one drops off after 3 hours
-(`SESSION_STATUS_OTHER_HOURS`). `--changes` doesn't compare that section. A leftover idle a week whose
+(`SESSION_STATUS_OTHER_HOURS`), unless it is superseded or at rest (blocked): those stay, and the pane folds them
+with the ones idle a day into one row with Stop all. `--changes` doesn't compare that section.
+
+**Stale** (stale.jq) flags the pane's queued asks and the handoff file's entries whose facts moved on, and sessions
+asking the user with no ask queued, one line each, its reasons joined by `; `:
+`ask ID KEY: WHY`, `pending "LABEL": WHY`, `session "NAME" (ID8)[ KEY]: decision not on the pane`. The reasons:
+`ticket done` (the tracker calls the key finished and no PR of it is open), `[reword: ]REPO#N merged` (a PR it names
+settled; `reword:` while another it names is open), `names ID8, gone` (a session it names isn't live),
+`worktree PATH gone` (relative ones looked up under the root and the session-dirs), `reword: names ask N, not
+queued` (an entry's `ask N` / `pane id N`; prose like "ask 2 reviewers" matches too), `= ask N` (an entry whose key
+has a queued ask), and `recheck: queued over 3d` / `recheck: unchanged over 7d` (age alone: check, never a cancel by
+itself). `session-status --stale` prints the items alone; `--changes` says each new item once (a session's line
+never: Waiting on you has it). Nothing is cancelled or archived on its own: the pane draws a STALE chip on the ask
+or entry with Cancel (the ask is dropped and the coordinator told) or Archive (`--pending-done LABEL -- stale:
+WHY`), neither offered when age is the only reason; Archive not for `reword:` and age alone either, nor when two
+entries share the label. A turn that ends with a `reply` marked done, asks no `?` question and hands no `! command`
+waits on no one. A leftover idle a week whose
 removal loses nothing (a session, a clean worktree whose commits are merged or on origin) moves to
 **Resolved (idle a week)**, so Leftovers empties on its own; `--changes` ignores that section. One with
 uncommitted or unpushed work stays a leftover.
@@ -324,6 +340,13 @@ the group line counts each kind. `details`, `target` and `kind` show only in the
 over 24h ago stays, marked OLD with its age in the warning colour and, opened, a dim note to the user (not sent
 with the answer) that it may be out of date and the coordinator can recheck it. The asks are kept per project root in `~/.cache/session-status/asks/` (one file, the store every
 change goes through), so a new coordinator's pane shows what the last one queued; open_pane's result lists them.
+An ask the Stale section flags shows `STALE · WHY` on its line and, opened, the reason with **Cancel** (not for age
+alone): the ask is dropped and the coordinator told (pane.md, Stale flags). A Pending entry flagged there gets the
+same chip and, in its card, **Archive** (`e`; see Stale above for when it's left out). The Stale section itself keeps only the lines with no row of their own
+(a session asking with no ask queued). A waiting session whose task has an ask queued says `→ ask N` and isn't
+counted on you again. Leftovers' clean+merged worktrees (2 or more) fold into one row whose card copies every
+removal (**Clean up all**); Other sessions' superseded ones and those idle a day or more (never a running one) fold the
+same way (**Stop all N**), each listed in the card.
 
 ## Project actions in detail
 

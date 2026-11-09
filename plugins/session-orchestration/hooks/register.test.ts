@@ -1,7 +1,7 @@
 import type { On, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HIDDEN_BY_MARKDOWN, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, usageName } from './register'
+import { HIDDEN_BY_MARKDOWN, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, usageName, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf } from './register'
 
 test('status rows parse whatever the columns hold', async () => {
   const pad = (k: string, st: string) => `${k.padEnd(9)} ${st.padEnd(14)} `
@@ -1008,4 +1008,85 @@ test('ask_approval with no pane in this session and no project store is refused:
   on('process.run', async () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   const r = await $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-1', question: 'Merge?', options: ['Yes', 'No'] })
   expect(r.deny).toContain('no coordinator pane shows an ask from here')
+})
+
+test('stale flags: the section splits into asks, handoff entries and the rest; a fold takes 2 or more', async () => {
+  const s = staleOf(parseStatus('Stale:\n  * ask 7 ABC-1: ticket done; recheck: queued over 3d\n  * pending "deploy window": recheck: unchanged over 7d\n  * session "s" (abcd1234) ABC-7: decision not on the pane'))
+  expect([...s.asks]).toEqual([['7', 'ticket done; recheck: queued over 3d']])
+  expect([...s.pending]).toEqual([['deploy window', 'recheck: unchanged over 7d']])
+  expect(s.rest).toEqual(['session "s" (abcd1234) ABC-7: decision not on the pane'])
+  expect(weakStale('recheck: unchanged over 7d')).toBe(true)
+  expect(weakStale('ticket done; recheck: queued over 3d')).toBe(false)
+  // a reword offers Cancel on an ask, never Archive on an entry
+  expect([weakStale('reword: names ask 22, not queued'), weakStale('reword: names ask 22, not queued', true)]).toEqual([false, true])
+  // a label from the first line only, as `pending entries` reads it
+  expect(parsePending('- 2026-11-01 deploy window\n  ask ops: tomorrow')?.[0]?.label).toBe('deploy window')
+  expect([pendingLabel('ABC-1 (waits on review): x: y'), pendingLabel('deploy window: ask ops'), pendingLabel('PROJ-4842 all done.')])
+    .toEqual(['ABC-1', 'deploy window', 'PROJ-4842 all done.'])
+  const lo = ['A-1 Done — worktree clean+merged: git -C /home/u/r worktree remove a && git -C /home/u/r branch -d a',
+    'A-2 Done — worktree clean+merged: git -C /home/u/r worktree remove b && git -C /home/u/r branch -d b', 'A-3 Done — session "old": claude stop 18a61163']
+  expect(foldOf(LEFTOVERS, lo)).toEqual({ fold: lo.slice(0, 2), rest: lo.slice(2) })
+  expect(foldOf(LEFTOVERS, lo.slice(1))).toEqual({ fold: [], rest: lo.slice(1) })
+  const oth = ['"a" idle 2d (claude attach aaaaaaaa)', '"b" idle 0m · superseded by cccccccc (claude attach bbbbbbbb)',
+    '"c" idle 5h (claude attach dddddddd)', '"d" working 3d (claude attach eeeeeeee)',
+    '"e" working 5m · superseded by cccccccc (claude attach ffffffff)']
+  // a running one never folds: Stop all would stop it mid-turn
+  expect(foldOf(OTHER, oth)).toEqual({ fold: oth.slice(0, 2), rest: oth.slice(2) })
+  expect(cancelText({ id: '7', key: 'ABC-1', question: 'Merge?', options: ['y', 'n'], at: 0 }, 'ticket done').startsWith('Approval pane answer for ')).toBe(false)
+  // a blocked row whose task has an ask queued counts once, as the ask
+  const set = onYouOf([{ id: '1', key: 'PROJ-4679', question: 'Merge?', options: ['y', 'n'], at: 0 }], parseStatus(STATUS), undefined).set
+  expect([set.has('ask 1'), set.has('PROJ-4679')]).toEqual([true, false])
+})
+
+test('stale flags in the pane: a STALE chip, Cancel and Archive in one press, the section and folds', async ($, on) => {
+  mock.clock(on)
+  const runs = sweep(on, `${STATUS}
+
+Leftovers (task finished):
+  PROJ-1 Done — worktree clean+merged: git -C /home/u/r worktree remove a && git -C /home/u/r branch -d a
+  PROJ-2 Done — worktree clean+merged: git -C /home/u/r worktree remove b && git -C /home/u/r branch -d b
+
+Other sessions:
+  "old one" idle 2d (claude attach aaaaaaaa)
+  "older" idle 0m · superseded by cccccccc (claude attach bbbbbbbb)
+  "fresh" idle 5m (claude attach dddddddd)
+
+Stale:
+  * ask 1 PROJ-4679: ticket done
+  * pending "PROJ-4842 all done.": ticket done
+  * session "x" (abcd1234): decision not on the pane`)
+  const copied: string[] = [], submitted: string[] = []
+  on('ui.copy', async (_, e) => { copied.push(e.text); return { value: { isCopied: true } } })
+  on('prompt.submit', async (_, e) => { submitted.push(e.text); return { text: e.text } })
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  await $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-4679', question: 'Merge app#236?', options: ['Yes', 'No'] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  await ui.press({ key: 'refresh' })
+  expect((await ui.find({ type: 'Button', key: 'askrow-1' }))?.text).toMatch(/STALE · ticket done/)
+  // its session's waiting row points at the ask
+  expect((await ui.find({ type: 'Button', key: 'wait-61c8fb76' }))?.text).toMatch(/→ ask 1/)
+  // the Stale section keeps only what has no row of its own
+  expect(await ui.find({ type: 'Button', key: 'Stale-session "x" (abcd1234): decision not on the pane' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'Stale-ask 1 PROJ-4679: ticket done' })).toBeUndefined()
+  // Archive
+  expect((await ui.find({ type: 'Button', key: 'pend-PROJ-4842 all done.' }))?.text).toMatch(/STALE · ticket done/)
+  await ui.press({ key: 'pend-PROJ-4842 all done.' })
+  await ui.press({ key: 'act-e' })
+  expect(runs).toContainEqual(['--pending-done', 'PROJ-4842 all done.', '--', 'stale: ticket done'])
+  // the folds: one row each, a press copies every command
+  expect((await ui.find({ type: 'Button', key: 'fold-Leftovers (task finished)' }))?.text).toBe('2 worktrees clean+merged')
+  await ui.press({ key: 'fold-Leftovers (task finished)' })
+  await ui.press({ key: 'act-c' })
+  await ui.press({ key: 'fold-Other sessions' })
+  await ui.press({ key: 'act-s' })
+  expect(copied).toEqual([
+    'git -C /home/u/r worktree remove a && git -C /home/u/r branch -d a; git -C /home/u/r worktree remove b && git -C /home/u/r branch -d b',
+    'claude stop aaaaaaaa; claude stop bbbbbbbb',
+  ])
+  expect(await ui.find({ type: 'Button', key: 'other-dddddddd' })).toBeDefined()
+  // Cancel: the ask is gone, the coordinator told
+  await ui.press({ key: 'ask-1-cancel' })
+  expect(submitted).toEqual(['Coordinator pane: the user cancelled the stale ask 1 for PROJ-4679 (ticket done). Asked: Merge app#236?. Don\'t act on it; tell a session waiting on it.'])
+  expect(await ui.find({ type: 'Button', key: 'askrow-1' })).toBeUndefined()
+  await ui.unmount()
 })

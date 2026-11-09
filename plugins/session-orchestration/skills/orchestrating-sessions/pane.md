@@ -1,7 +1,7 @@
 # The coordinator pane
 
-The coordinator's rules for the pane's buttons. Read this on a `Coordinator pane action for …` or `Coordinator pane:
-the user ran the command …` prompt, before you press or set up an Actions button, and before you edit
+The coordinator's rules for the pane's buttons. Read this on a `Coordinator pane action for …`, `Coordinator pane:
+the user ran the command …` or `Coordinator pane: the user cancelled the stale ask …` prompt, before you press or set up an Actions button, and before you edit
 `.claude/coordinator-actions.json`. Groups, keys and card buttons in detail: [status-reference.md](status-reference.md#the-pane-in-detail).
 
 `open_pane` renames you `<project>-coordinator` when its turn ends (the root folder's name, lowercased, other
@@ -35,6 +35,16 @@ them. A press arrives as this plugin's prompt: `Coordinator pane action for <KEY
   or start it ([resuming.md](resuming.md)).
 - Resolving a conflict may need a rebase or force-push: the session follows its project's rules for those, as for
   any other request.
+
+## Stale flags
+
+The status output's **Stale** section ([status-reference.md](status-reference.md)) puts a STALE chip and its reason on
+a queued ask or a Pending entry whose facts moved on. Never cancel an ask or archive an entry because of a flag
+yourself: the pane offers the user **Cancel** on the ask and **Archive** on the entry, one press each, and neither
+for age alone (`recheck:`; no Archive for a `reword:` either). Archive runs `--pending-done` itself. A Cancel arrives as `Coordinator pane: the user
+cancelled the stale ask <ID> for <KEY> (<why>). Asked: <question>. …`: the ask is already gone; tell the session that
+queued it, if it waits on the answer, that it won't come. It approves nothing and is never a Quote. A `reword:`
+reason means the question is half out of date: cancel-and-requeue it with the current facts on the user's word.
 
 ## Handed-over commands
 
