@@ -46,6 +46,9 @@ pre='bitbucketdc-cli|forgejo-cli|jiradc-cli|msgraph|\$[^[:space:]]*[[:space:]]+(
 done=
 trap '[ -n "$done" ] || { echo "approved-action hook failed, so this command is blocked. Report \"needs your approval: <the exact action>\" to the coordinator and end your turn." >&2; exit 2; }' EXIT
 set -uo pipefail
+# Bytes, not characters: under a UTF-8 locale macOS awk dies on a multibyte character its substr cut in two (towc:
+# multibyte conversion failure), which blocked any gated-looking command holding one. Every separator here is ASCII.
+export LC_ALL=C
 here=$(cd "$(dirname "$0")" && pwd)
 pass() { done=1; exit 0; }
 decide() { done=1; jq -nc --arg d "$1" --arg r "$2" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}'; exit 0; }

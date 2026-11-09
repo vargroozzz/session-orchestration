@@ -175,6 +175,7 @@ test('a queued approval becomes buttons; a click submits the answer once and cle
   }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
 
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
   const bad = await $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'ABC-1', question: 'q', options: ['only one'] })
   expect(bad.deny).toBeDefined()
   await $.tool.call({
@@ -207,6 +208,7 @@ test('an ask answered in the user\'s own words submits them as the answer', asyn
   on('tool.call', { tool: 'AskUserQuestion' }, async (_, e) => (said
     ? { result: { questions: e.questions, answers: Object.fromEntries(e.questions.map(q => [q.question, said])) } }
     : { deny: 'dismissed' }))
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
   await $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'ABC-2', question: 'Post the ABC-2 comment?', options: ['Yes, post it', 'No'] })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
   await ui.press({ key: 'ask-1-words' })
@@ -533,6 +535,7 @@ test('asks group per key, one line each until opened; an open ask shows its body
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   // '## Nit\n\nUse `foo()` here.' then an ESC [31m and a newline
   on('fs.read', async () => ({ value: { base64: 'IyMgTml0CgpVc2UgYGZvbygpYCBoZXJlLhtbMzFtCg==' } }))
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
   const sha = 'fb45bdda1ae27282b4844fa4afa557cbcc9621cefc02ce030fa715a27e31006c'
   const ask = (key: string, question: string, extra = {}) => $.tool.call({
     tool: 'mcp__session-orchestration__ask_approval', key, question, options: [`Yes, ${question}`, `No, ${key}`], ...extra,
@@ -581,6 +584,7 @@ test('a review finding post names its kind; a group lists its other asks, then i
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   on('fs.read', async () => ({ value: { base64: 'IyMgTml0CgpVc2UgYGZvbygpYCBoZXJlLhtbMzFtCg==' } }))
   const sha = 'fb45bdda1ae27282b4844fa4afa557cbcc9621cefc02ce030fa715a27e31006c'
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
   const post = (kind?: string, n = '') => $.tool.call({
     tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-1', question: `post${kind === undefined ? '' : ` ${kind}`} comment${n} /tmp/c.md on app#2 (sha256 ${sha})`,
     options: ['Yes, post it', 'No, PROJ-1'], body_file: '/tmp/c.md', ...(kind === undefined ? {} : { kind }),
@@ -638,6 +642,7 @@ test('cancel_approval removes asks by key, by id or by question, and a stale cli
     return next(e)
   })
 
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
   expect((await ask('IVAN-1', 'create IVAN-1 a')).result).toMatch(/^Queued IVAN-1 \(id 1\) /)
   await ask('IVAN-1', 'create IVAN-1 b')
   await ask('IVAN-1', 'create IVAN-1 a+b')
@@ -801,7 +806,7 @@ test('queued asks live in a store per project root: a new coordinator finds them
   // The 30h-old ask is drawn as old and still answers; the answer clears it from the store.
   await ui.press({ key: 'askgrp-PROJ-1' })
   expect((await ui.find({ type: 'Button', key: 'askrow-7' }))?.text).toMatch(/OLD merge app#1 30h ago/)
-  expect(await ui.find({ type: 'Text', text: /^Queued 30h ago: check it still applies/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^⚠ Note for you, not sent with the answer: queued 30h ago, it may be out of date\. Ask the coordinator/ })).toBeDefined()
   await ui.press({ key: 'ask-7-0' })
   expect(submitted).toEqual(['Approval pane answer for PROJ-1: Yes, merge app#1. Asked: merge app#1'])
   expect(stored()).toEqual(['8 merge app#3', '9 merge app#4'])
@@ -996,4 +1001,11 @@ test('a done reply is sent only once its kind holds: clean, pushed, a PR on the 
   expect(checked).toEqual(['~/r/spike.md'])
   expect((await reply({ text: 'PROJ-1 · b · done', done: 'pushed' })).deny).toContain('isn\'t a git worktree: pass worktree')
   expect(sent.length).toBe(6)
+})
+
+test('ask_approval with no pane in this session and no project store is refused: no pane would show it', async ($, on) => {
+  mock.clock(on)
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  const r = await $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-1', question: 'Merge?', options: ['Yes', 'No'] })
+  expect(r.deny).toContain('no coordinator pane shows an ask from here')
 })

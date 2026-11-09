@@ -920,6 +920,19 @@ async function loadActions($: EngineInterface): Promise<Actions | null> {
   return { root, shown: list.filter((_, i) => checks[i]), owned: list.map(a => a.label), errors }
 }
 
+// The project action (ACTIONS_FILE) that runs the same command, if any: a sign-in the pane offers as a button is
+// never handed over too. Compared without `npx -y`, a package scope or an @version.
+// Only the program word is normalised (npx, a package scope, an @version): an argument's `@` (user@host, a ref) is kept.
+export const sameCommand = (s: string) => oneLine(s).replace(/^npx (?:-y |--yes )?/, '')
+  .replace(/^(?:@[\w.-]+\/)?([\w.-]+)(?:@(?:latest|next|[\^~]?\d[\w.-]*))?(?=\s|$)/, '$1')
+async function paneActionFor($: EngineInterface, command: string) {
+  const root = await projectRoot($)
+  const path = root && `${root}/${ACTIONS_FILE}`
+  if (!path || !(await $.fs.exists(path))) return
+  const want = sameCommand(command)
+  return parseActions(String(await $.fs.read(path))).list.find(a => sameCommand(a.command) === want)
+}
+
 // One sweep at a time: a Refresh press or a tick during one joins it.
 let inFlight: Promise<void> | undefined
 function refresh($: EngineInterface) {
@@ -964,6 +977,8 @@ function refreshActivity($: EngineInterface) {
 // permission rules, classifier and dialog like any call the user asked for, and nothing a session wrote runs unseen
 // or unpressed. Copy is the fallback where that refuses it.
 export const HANDED_DIR = '.cache/session-status/commands'
+// Per project root: the handed ids its panes listed (loadHanded).
+const HANDED_CLAIMS_DIR = '.cache/session-status/handed-claims'
 export const HANDED_TTL = 3 * 86_400_000 // ponytail: a command older than 3 days is stale; its session can hand it again
 // Unset, or no environment to read (a test that mocks none), reads as ''. $.env.get takes a literal name.
 const accountOf = async ($: EngineInterface) => (await $.env.get('CLAUDE_CONFIG_DIR').catch(() => undefined)) ?? ''
@@ -1030,7 +1045,15 @@ async function loadHanded($: EngineInterface) {
   const b = await read($, board)
   const here = new Set((b?.agents ?? '').split('\n').map(l => l.split('\t')[0]))
   const all = (await read($, allProjects)) || !b
-  const mine = (h: Handed) => all || here.has(h.session) || under(root, h.cwd)
+  // The ids this root's panes have listed, in the panes' own file (a session's command file is never rewritten): a
+  // successor coordinator keeps them after the session that handed them has gone.
+  const claimsFile = root && `${await homePath($, HANDED_CLAIMS_DIR)}/${await hex16(root)}`
+  // An unreadable claims file (not a missing one) is left alone: rewriting it would drop ended sessions' commands.
+  // shortcut: two panes on one root (a handover's overlap) can each write, the last one wins; an id still live is
+  // claimed again at the next sweep. A lock would close it if it shows up.
+  const claimsRead = claimsFile ? await $.fs.read(claimsFile).then(String, async () => ((await $.fs.exists(claimsFile).catch(() => true)) ? null : '')) : ''
+  const claimed = new Set((claimsRead ?? '').split('\n').filter(Boolean))
+  const mine = (h: Handed) => all || here.has(h.session) || under(root, h.cwd) || claimed.has(h.id)
   const files = (await $.fs.exists(dir)) ? (await $.fs.list(dir)).filter(f => f.kind === 'file' && f.name.endsWith('.json')) : []
   const read_ = await Promise.all(files.map(async f => {
     const h = parseHanded(String(await $.fs.read(`${dir}/${f.name}`).catch(() => '')))
@@ -1043,6 +1066,10 @@ async function loadHanded($: EngineInterface) {
   const found = read_
     .filter((h): h is Handed => !!h && mine(h) && h.at > (droppedHanded.get(h.id) ?? -1))
     .sort((a, b) => a.at - b.at)
+  // Ours by this sweep's sessions, kept; ids whose file is gone, dropped.
+  const ids = new Set(read_.flatMap(h => (h ? [h.id] : [])))
+  const keep = [...new Set([...claimed, ...(b ? found.filter(h => here.has(h.session)).map(h => h.id) : [])])].filter(id => ids.has(id))
+  if (claimsFile && claimsRead !== null && keep.join('\n') !== [...claimed].join('\n')) await $.fs.write(claimsFile, keep.join('\n')).catch(() => undefined)
   await update($, handed, cur => found.map(h => {
     const was = cur.find(c => c.id === h.id && c.command === h.command)
     return { ...h, ...(was?.running ? { running: true as const } : {}), ...(was?.outcome ? { outcome: was.outcome } : {}) }
@@ -1055,6 +1082,14 @@ async function dropHanded($: EngineInterface, h: Handed) {
   await $.process.run(['rm', '-f', `${await handedDir($)}/${h.id}.json`])
   await update($, handed, l => l.filter(x => x.id !== h.id))
   await syncStatus($)
+}
+// A Run's outcome line: the last line it printed, or for a failure its last few with stderr's, since the reason is
+// rarely the last line (a push's error sits above "nothing pushed").
+export function runTail(text: string, stderr: string, ok: boolean) {
+  const out = text.split('\n').map(l => l.trim()).filter(Boolean)
+  const seen = new Set(out)
+  const lines = ok ? out : [...out, ...stderr.split('\n').map(l => l.trim()).filter(l => l && !seen.has(l))]
+  return oneLine(lines.slice(ok ? -1 : -4).join(' | '))
 }
 // Run: the Bash call in this session, with the press as consent. Succeeded: the file goes; refused or failed: it
 // stays with the outcome, for another Run or Copy. One Run per command at a time. A file gone since the last read
@@ -1079,7 +1114,9 @@ async function runHanded($: EngineInterface, h: Handed) {
     if (r.deny !== undefined) line = `refused: ${oneLine(r.deny)}`
     else {
       ok = !r.isError
-      line = oneLine((r.text ?? '').split('\n').map(l => l.trim()).filter(Boolean).at(-1) ?? '')
+      const res = r.result
+      const stderr = typeof res === 'object' && res !== null && 'stderr' in res && typeof res.stderr === 'string' ? res.stderr : ''
+      line = runTail(r.text ?? '', stderr, ok)
     }
   } catch (err) {
     line = err instanceof Error ? err.message : String(err)
@@ -1398,6 +1435,8 @@ export const register: Register = on => {
     }
     const bad = handedProblem(key, command, what)
     if (bad) return { deny: `hand_command: ${bad}.` }
+    const act = await paneActionFor($, String(command)).catch(() => undefined)
+    if (act) return { deny: `hand_command: this is the pane's "${act.label}" action${act.hotkey ? ` (key ${act.hotkey})` : ''}, shown whenever it is needed. Don't hand it over or ask: say in your report that it waits on that button, and carry on with what doesn't need it.` }
     const h: Handed = {
       id: await handedId(session, String(command)), key: String(key), session, cwd: await $.session.cwd(),
       account: await accountOf($), command: String(command), what: String(what), at: await $.clock.now(),
@@ -1494,6 +1533,8 @@ export const register: Register = on => {
     const text = opt(details) && clean(String(details))
     const at = await $.clock.now()
     await loadAsks($).catch(() => undefined)
+    // No pane here and no project store: the ask would live only in this session, where no pane ever shows it.
+    if (!timer && !asksFile) return { deny: 'ask_approval: no coordinator pane shows an ask from here (no pane in this session, and no project store for this folder). Put the decision in your report to the coordinator (reply), which queues it.' }
     // The same question for the key queued again (a restart's re-queue) replaces the waiting one in its place, id and
     // age kept; a new id is past every id in the store, which other coordinators' sessions also number.
     const n = await read($, seq)
@@ -2033,7 +2074,7 @@ export const register: Register = on => {
           </Button>
           {aOpen && (
             <Box flexDirection="column" paddingLeft={2}>
-              {isOld(a, now) && <Text color="warning" wrap="wrap">Queued {ago(now - a.at)}: check it still applies before you answer (the PR or ticket may have moved).</Text>}
+              {isOld(a, now) && <Text color="warning" dimColor wrap="wrap">⚠ Note for you, not sent with the answer: queued {ago(now - a.at)}, it may be out of date. Ask the coordinator to recheck it.</Text>}
               <Text bold wrap="wrap">{draw(kindBadge(a))}{clean(a.question)}</Text>
               {a.target && <Text wrap="wrap"><Text dimColor>target </Text>{a.target}</Text>}
               {a.body && <Text dimColor wrap="wrap">body {clean(a.body.path)} · sha256 {a.body.sha256}</Text>}

@@ -55,8 +55,9 @@ gave you in one of the ways below, naming the task key or answering your last me
   - An ask stays on the pane until it is answered or cancelled, across coordinator restarts, handovers and plugin
     releases: the asks are kept per project, and `open_pane`'s result lists the ones waiting. Don't queue them
     again; if you do, the same key and question replaces the waiting ask (same id), never a second one. One queued
-    over 24h ago is marked OLD: still answerable (its answer verifies from the click), but before you act on it,
-    check the action still applies (the PR or ticket may have moved). When the decision no longer applies (a PR
+    over 24h ago is marked OLD: still answerable (its answer verifies from the click). Recheck each OLD ask yourself
+    at Start (the PR or ticket may have moved) and tell the user which still apply, so they never have to; check
+    again before you act on its answer. When the decision no longer applies (a PR
     merged first, the task closed), cancel it, and for a review finding note `Dropped` in the review's file header
     and tell the reviewer session.
   - `features.notify` (`../../features/notify.md`) may show a local "N decisions waiting" notification for asks left
