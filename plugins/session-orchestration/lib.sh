@@ -116,6 +116,12 @@ find_root() {
   done
   git rev-parse --show-toplevel 2>/dev/null || pwd
 }
+# plugin_root: the project root of config feedback.repo_dir, whose coordinator is the plugin coordinator
+# (features/plugin-coordinator.md); fails when the key is unset.
+plugin_root() { local d; d=$(config feedback.repo_dir 2>/dev/null) && [ -n "$d" ] && (cd "$d" 2>/dev/null && find_root); }
+# slug TEXT: lowercase, each run of other characters one dash. A coordinator is named `$(slug FOLDER)-coordinator`
+# (register.tsx's nameCoordinator does the same).
+slug() { tr 'A-Z' 'a-z' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g'; }
 
 # adapter_path ROOT: the project's adapter: ROOT/.claude/session-status-adapter when executable, else the committed
 # one once trusted; prints nothing when there's neither. (The plugin's templates are what setup copies, not a
@@ -157,7 +163,8 @@ detect_host() {
 #                       notices under the status table (messages/msgraph.md)                default none
 #   feedback.mode       auto | pr | fork-pr | issue | local: how plugin feedback cases are sent
 #                       (skills/orchestrating-sessions/feedback.md)    default auto
-#   feedback.repo_dir   a clone of the plugin repo you can push to (~ expanded)     default empty
+#   feedback.repo_dir   a clone of the plugin repo you can push to (~ expanded); its coordinator is the plugin
+#                       coordinator (features/plugin-coordinator.md)     default empty
 #   feedback.project_dir  this project's feedback cases (feedback --project; ~ expanded, relative: to the project
 #                       root; keep it out of git)     default empty: the state dir's feedback-projects/<root>
 #   telemetry           local | off: pane presses to the local usage log (usage below)     default off

@@ -60,7 +60,9 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
    - A messages module's Notices line: act on it per that module's doc (its feature line names it). One the user
      calls handled: `session-status --dismiss "LINE"`, which hides it for every session; don't pass it on again.
    - `plugin feedback: N open … — apply?` (at most once a day): pass it to the user, and on a yes start an apply
-     session ([feedback.md](feedback.md)). Its `project feedback` part waits for the next R&D run.
+     session ([feedback.md](feedback.md)). `…, for the plugin coordinator, which isn't running — start it?`: on a
+     yes, run `feedback coordinator --start`, never an apply session. Its `project feedback` part waits for the next
+     R&D run.
 2. Message a session only to give it work, or for something only it knows. `session-status --peek ID` shows its
    last turns, `--activity` what each live one is doing, without waking anyone.
 3. Never `claude -p --resume` an old session just to ask for status.
@@ -236,5 +238,5 @@ The files next to this one, each read whole when its event comes up, never at St
 | [pane.md](pane.md) | A `Coordinator pane action for …` or `Coordinator pane: the user ran the command …` prompt; the pane's Actions buttons; editing `.claude/coordinator-actions.json` |
 | [memory-rules.md](memory-rules.md) | Resolving a handoff entry with `pending.file` set; an entry's history; splitting or pruning memory; `[team]` lines; graduation; an R&D run's approved proposals |
 | [status-reference.md](status-reference.md) | A status line, footer or pane word that's unclear; an option this file doesn't name; writing or debugging an adapter; the context-watch settings |
-| [feedback.md](feedback.md) | The `plugin feedback: … apply?` footer; the moment you tell the user you worked around this plugin or the project, took an extra round trip, misreported because of a script's output or a file, or needed them to step in (`feedback add`, `--project` for the project's own friction) |
+| [feedback.md](feedback.md) | The `plugin feedback: …` footer; plugin feedback the user gives you; the moment you tell the user you worked around this plugin or the project, took an extra round trip, misreported because of a script's output or a file, or needed them to step in (`feedback add`, `--project` for the project's own friction) |
 | A feature's doc | When its line in `--start`'s output says |

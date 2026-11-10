@@ -139,7 +139,8 @@ schedules it.
    same cause, place or fix; one case seen ≥2× is a pattern of its own) and propose one project fix per pattern (a
    doc, script or setting), naming its case files; the followups session applies the approved ones and marks those
    cases fixed. The report ends with `feedback list --plugin` (open cases, most seen first) and offers the apply
-   (feedback.md, "Applying"). Then
+   (feedback.md, "Applying"). With a plugin coordinator (`feedback coordinator` exits other than 2), it names them as that
+   coordinator's instead, with no offer. Then
    `python3 -I rnd.py html <R>/rnd-run-<N+1>.md <R>/rnd-run-<N+1>.html`.
 8. Send the coordinator at most 5 lines with the `reply` tool, no `to` (ToolSearch
    `mcp__session-orchestration__reply`; it finds the live coordinator at send time): the report path,
