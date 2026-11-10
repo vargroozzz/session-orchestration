@@ -1345,7 +1345,7 @@ export const register: Register = on => {
     const started = await next(e)
     await $.tool.register({
       name: 'open_pane',
-      description: 'Coordinator only: opens the coordinator pane beside the conversation. The pane shows the queued approval asks as buttons, the output of the project\'s status command and the adapter\'s pending text, refreshed every 10 minutes and on its Refresh button. Its result lists the asks still queued (they carry over from the last coordinator). Call it at the start of a coordinator session, and again once setup has finished in a folder that wasn\'t set up (it names the session only then); a worker session never calls it. It shows only in an interactive terminal session with the plugin loaded, and waits until the terminal is about 144 columns wide (110 once the user has opened it themselves; the user\'s /coordinator command opens it at any width); it never shows in the agent view or a background session, so there, ask in plain text.',
+      description: 'Coordinator only: opens the coordinator pane beside the conversation. The pane shows the queued approval asks as buttons, the output of the project\'s status command and the adapter\'s pending text, refreshed every 10 minutes and on its Refresh button. Its result lists the asks still queued (they carry over from the last coordinator). Call it at the start of a coordinator session, and again once setup has finished in a folder that wasn\'t set up (it names the session only then); a worker session never calls it. It shows only in an interactive session with the plugin loaded (a terminal, or Claude Code Desktop as a docked pane), and in a terminal waits until it is about 144 columns wide (110 once the user has opened it themselves; the user\'s /coordinator command opens it at any width); it never shows in the agent view or a background session, so there, ask in plain text.',
     })
     await $.tool.register({
       name: 'ask_approval',
@@ -1408,7 +1408,7 @@ export const register: Register = on => {
     asksFile = undefined
     await loadAsks($, init.setUp).catch(() => undefined)
     const queued = queuedText(await liveAsks($), await $.clock.now())
-    return { result: `${isPlaced ? 'Coordinator pane open.' : 'The pane is waiting: this terminal is too narrow or draws no panes. Tell the user /coordinator opens it at any width.'} ${named}${init.text}${inbox}${queued}` }
+    return { result: `${isPlaced ? 'Coordinator pane open.' : 'The pane is waiting: this terminal is too narrow, or this app draws no panes (a background session, the agent view, a Desktop session over WSL). Tell the user /coordinator opens it at any width; where none shows, ask in plain text.'} ${named}${init.text}${inbox}${queued}` }
   })
 
   // Any session's own name, `<KEY>-<short-desc>` once it knows its task, through open_pane's /rename at turn end.

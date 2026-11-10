@@ -516,11 +516,14 @@ if [ "${1:-}" = --successor ]; then
   [ "$rc" != 0 ] || [ "${out#reused}" = "$out" ] ||
     { echo "a tab titled \"$n-next\" is open already ($out), so nothing started: close it (a successor that exited?), then run this again"; exit 3; }
   next="Then arm \`$SELF --await ready\` (Bash, run_in_background) and end your turn. From now on act on no message: forward each to the inbox (\`$SELF --inbox-add --from '<sender name> (<id8>)'\`, its text on stdin)."
+  # Desktop (claude-desktop, claude-desktop-3p) draws no tab of its own; its Terminal panel runs the successor as a
+  # CLI session beside the chat.
+  desk=; [[ ${CLAUDE_CODE_ENTRYPOINT:-} != claude-desktop* ]] || desk="This is Claude Code Desktop: tell the user to run it in the session's Terminal (its title bar, or Ctrl+\`) or any terminal app; the successor is a terminal session from then on."
   case $rc in
     0) echo "started \"$n-next\" under $(tilde "$acct") ($out)."; echo "$next" ;;
     2) echo "nothing opened (terminal $(config terminal)): hand the user this command (hand_command, key coordinator), then go on:"
-       echo "  cd $q && $pre$cmd"; echo "$next" ;;
-    *) echo "the terminal failed (exit $rc): $out. Not started: hand the user \`cd $q && $pre$cmd\`, or try again" ;;
+       echo "  cd $q && $pre$cmd"; [ -z "$desk" ] || echo "$desk"; echo "$next" ;;
+    *) echo "the terminal failed (exit $rc): $out. Not started: hand the user \`cd $q && $pre$cmd\`, or try again"; [ -z "$desk" ] || echo "$desk" ;;
   esac
   exit "$rc"
 fi

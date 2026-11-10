@@ -162,6 +162,7 @@ if [ "$mode" = check ]; then
                 [ "$m" = none ] || ( load_module messages "$m" messages_notices ) 2>>"$wf"
                 # The dependency (memory, guards, cases): an install from before the split may not have it.
                 pm_dir >/dev/null 2>>"$wf"
+                no_cli >>"$wf"
                 sort -u "$wf"; rm -f "$wf"   # the warnings
                 [ "${#review[@]}" = 0 ] || echo "committed code new or changed upstream: ${review[*]%@*}: run setup to review it"
                 [ "$d" = true ] && d=on || d=off
@@ -402,6 +403,7 @@ if [ "$mode" = propose ]; then
   extra=
   [ -z "$noexec" ] || extra+=$'   .claude/session-status-adapter exists but is not executable: chmod +x it (not rewritten).\n'
   extra+=$shared_lines
+  ! nocli=$(no_cli) || extra+="   $nocli"$'\n'
   [ "$term_found" = plain ] || extra+="   Terminal: $term_found found, so the pane's Attach in tab and Logs in split open there (terminal=$term_found). Say \"plain\" to copy the commands instead."$'\n'
   [ -z "$briefs" ] || extra+="6. Optional, off unless you say:"$'\n'"$(sed 's/^/   /' <<<"$briefs")"$'\n'
   cat <<EOF

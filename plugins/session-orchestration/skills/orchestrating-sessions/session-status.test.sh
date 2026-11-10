@@ -699,7 +699,10 @@ setacct cfg "$(sess "$o" p-coordinator idle 1 interactive)"
   { echo "--name-check, one coordinator"; exit 1; }
 out=$(as "$o" --successor) && rc=0 || rc=$?
 [ "$rc" = 2 ] && grep -qF "  cd $root && CLAUDE_CONFIG_DIR=~/cfg claude -n p-coordinator-next 'Act as a coordinator. You succeed \"p-coordinator\" (0a0a0a0a): " <<<"$out" &&
-  grep -qF -- '--await ready` (Bash, run_in_background)' <<<"$out" || { echo "--successor, plain terminal: $rc $out"; exit 1; }
+  grep -qF -- '--await ready` (Bash, run_in_background)' <<<"$out" && ! grep -q 'Claude Code Desktop' <<<"$out" || { echo "--successor, plain terminal: $rc $out"; exit 1; }
+# From Claude Code Desktop (no tab of its own) it says where to run the command.
+out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop-3p as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 2 ] && grep -q "^This is Claude Code Desktop: tell the user to run it in the session's Terminal" <<<"$out" || { echo "--successor from Desktop: $rc $out"; exit 1; }
 setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" p-coordinator-next busy 1 interactive)"
 [ "$(as "$o" --successor; echo $?)" = "$(printf '"p-coordinator-next" (0b0b0b0b) runs already: arm `%s --await ready` in the background\n3' "$here/session-status")" ] &&
   [ "$(as "$x" --name-check p-coordinator)" = "held next $o" ] && [ "$(as "$z" --name-check p-coordinator)" = "held other $o" ] ||
@@ -905,6 +908,16 @@ out=$(init "$a" --write --review-brief --rnd-brief) && [ "$out" = "$(printf 'Wro
 cp "$a/CLAUDE.local.md" "$tmp/cl.bak" && sed -i.x 's#^- Replies folder (\(.*\)): `.*`\.$#- Replies folder (\1): `.claude/orchestration/replies/`.#' "$a/CLAUDE.local.md"
 init "$a" --check | grep -q '^replies folder .claude/orchestration/replies/ is inside the git checkout ' && mv "$tmp/cl.bak" "$a/CLAUDE.local.md" && rm -f "$a/CLAUDE.local.md.x" &&
   ! init "$a" --check | grep -q 'inside the git checkout' || { echo "replies-in-checkout warning failed"; exit 1; }
+# No claude CLI on PATH (Claude Code Desktop alone): --check and the proposal name the install, and the status says
+# so instead of "try again". PATH: this bash, jq and git, then the system's (where no claude is).
+mkdir -p "$tmp/noclaude" && ln -sf "$BASH" "$tmp/noclaude/bash" && ln -sf "$(command -v jq)" "$tmp/noclaude/jq" && ln -sf "$(command -v git)" "$tmp/noclaude/git"
+nc() { (cd "$1" && shift && HOME=$tmp CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/noclaude:/usr/bin:/bin "$BASH" "$here/session-status" "$@" 2>&1); }
+mkdir -p "$tmp/init/nc" && git -C "$tmp/init/nc" init -q
+out=$(nc "$a" --init --check) && grep -q '^no claude CLI on PATH (Claude Code Desktop alone?): .* install it: curl ' <<<"$out" &&
+  out=$(nc "$tmp/init/nc" --init) && grep -q '^   no claude CLI on PATH ' <<<"$out" &&
+  out=$(nc "$a" --name-check x || true) && grep -q '^no claude CLI on PATH ' <<<"$out" &&
+  out=$(init "$a" --check) && ! grep -q 'no claude CLI' <<<"$out" || { echo "no-claude warning failed: $out"; exit 1; }
+rm -rf "$tmp/init/nc"
 w=$(mkdir -p "$tmp/init/ws/r1" "$tmp/init/ws/r2" && cd "$tmp/init/ws" && pwd -P)
 git -C "$w/r1" init -q && git -C "$w/r2" init -q && gc "$w/r1" --allow-empty -m hello
 out=$(init "$w") && grep -q '^1\. Task keys: session names, ws-<short-desc> ' <<<"$out" && grep -q '(none, workspace of 2 repos)' <<<"$out" &&

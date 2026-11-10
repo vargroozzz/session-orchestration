@@ -338,6 +338,13 @@ list_accounts() {
   printf '%s\tclaude\n' "${d%/}"
 }
 
+# no_cli: when no `claude` is on PATH (Claude Code Desktop alone: its own binary usually isn't), says so with the
+# install command and succeeds; else prints nothing and fails. Sessions start with `claude --bg`, list with `claude agents`.
+no_cli() {
+  command -v claude >/dev/null && return 1
+  echo "no claude CLI on PATH (Claude Code Desktop alone?): task sessions start with claude --bg and are listed by claude agents; install it: curl -fsSL https://claude.ai/install.sh | bash"
+}
+
 # list_sessions [--all]: one session per line of every account list_accounts names: id, name, state, command prefix
 # to reach it, started (epoch s), cwd, kind (background/interactive), status, pid (tabs). `--all` adds retired ones
 # (stopped, done: no process, no pid). A listing that failed touches $TMP/ask.failed (when TMP is set): callers
@@ -346,6 +353,7 @@ list_accounts() {
 # when it waits on a permission prompt or a question (status waiting); a running one is busy.
 list_sessions() {
   local d pre out
+  no_cli >&2 && { [ -z "${TMP:-}" ] || : > "$TMP/ask.failed"; return; }
   while IFS=$'\t' read -r d pre; do
     if [ "$pre" = claude ]; then out=$(claude agents --json "$@" 2>/dev/null)
     elif [ "$d" = "$HOME/.claude" ]; then out=$(env -u CLAUDE_CONFIG_DIR claude agents --json "$@" 2>/dev/null)
