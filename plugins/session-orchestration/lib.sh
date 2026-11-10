@@ -224,13 +224,17 @@ config() {
 # usage NAME [KIND [MODEL EFFORT EST [ACT]]]: with telemetry=local, one line in the local usage log:
 # {"t":EPOCH,"k":KIND,"what":NAME}. KIND is press (a pane button, from the mod), path (default: a script counting a
 # path no transcript shows) or chunk (session-status --plan --done: NAME is the chunk's kind, then its model, effort,
-# est and act in K of context growth; act may be left out). NAME is a fixed word (lowercase, digits, -), never a key,
+# est and act in K of context growth; act may be left out) or start (session-status --kind: a plain task start, NAME
+# its kind, then its model and effort). NAME is a fixed word (lowercase, digits, -), never a key,
 # path or id, and every field is validated, so the file is shareable as is. Never fails its caller.
 usage_log() { echo "${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/usage.jsonl"; }
 usage() {
   local f x=
-  [[ ${1:-} =~ ^[a-z0-9-]{1,40}$ && ${2:-path} =~ ^(press|path|chunk)$ ]] || return 0
-  if [ "${2:-}" = chunk ]; then
+  [[ ${1:-} =~ ^[a-z0-9-]{1,40}$ && ${2:-path} =~ ^(press|path|chunk|start)$ ]] || return 0
+  if [ "${2:-}" = start ]; then
+    [[ ${3:-} =~ ^[a-z][a-z0-9.-]{0,39}$ && ${4:-} =~ ^(low|medium|high|xhigh|max)$ && $# = 4 ]] || return 0
+    x=",\"model\":\"$3\",\"effort\":\"$4\""
+  elif [ "${2:-}" = chunk ]; then
     [[ ${3:-} =~ ^[a-z][a-z0-9.-]{0,39}$ && ${4:-} =~ ^(low|medium|high|xhigh|max)$ && ${5:-} =~ ^[0-9]{1,4}$ &&
        ${6:-0} =~ ^[0-9]{1,5}$ && $# -le 6 ]] || return 0
     x=",\"model\":\"$3\",\"effort\":\"$4\",\"est\":$((10#$5))${6:+,\"act\":$((10#$6))}"

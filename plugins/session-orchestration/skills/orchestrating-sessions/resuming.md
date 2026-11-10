@@ -39,7 +39,8 @@ Never put a relayed approval in the text: a relay is a SendMessage ([approvals.m
 A resume re-reads the session's whole context on every turn. Before `--resume`, or `--send-when-idle` on a retired
 session, read its context size (`ctx` in `--activity`, the pane's `ctx N%` on each session row). Over 200K tokens,
 for a small follow-up (a PR description, a reply), hand the task over to a fresh session: `session-status
---handover <old-id> -- '<what next>'`. The helper refuses those resumes (exit 4) for you and prints that command. It
+--handover <old-id> [--model M --effort E] -- '<what next>'` (the flags `session-status --kind` printed when it
+started, so the successor keeps its model). The helper refuses those resumes (exit 4) for you and prints that command. It
 finds the old session's task key, refuses while it is mid-turn or waiting on a prompt, or when the replies folder
 has no `<KEY>.md` (ask the old session for a status report first, or write one), stops it (checked), and starts
 `claude --bg -n <its name>` from the project root, whose brief is `replies/<KEY>.md`, the what-next and a

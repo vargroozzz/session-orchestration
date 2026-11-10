@@ -103,8 +103,14 @@ From the project root, after confirming the owner. A live session gets a `SendMe
 closed, retired, too big, stuck on a prompt, a message for later, stopping one): [resuming.md](resuming.md). A task
 too big for one session: [plans.md](plans.md).
 
-A new task: `claude --bg -n <KEY>-<short-desc> 'Work on <KEY>: <what>. Why: <who needs it, what it unblocks>. Done
-when: <the end state of the whole job and the check that proves it>. Keep working until done or blocked.'`
+A new task: `claude --bg --model <M> --effort <E> -n <KEY>-<short-desc> 'Work on <KEY>: <what>. Why: <who needs it,
+what it unblocks>. Done when: <the end state of the whole job and the check that proves it>. Keep working until done
+or blocked.'`
+- `--model`/`--effort`: run `session-status --kind <kind>` first, as its own call, and paste the `--model M --effort E`
+  it prints (exit 2: a wrong kind; fix it, don't start without them). `<kind>` is the work's `plan.models` kind:
+  `build` (code a feature or fix), `mechanical` (a rename, a doc sweep, a scripted change), `review`, `release`, `scan`
+  (read and report), `design`. It logs the start for rnd. Never `fable` unless the user names it: then set it by hand.
+  A handover or fresh restart of that task takes the same flags.
 - The first prompt names the task. `-n` names the session by its ticket (e.g. `PROJ-1234-fix-settler`: no spaces).
   With the key not known yet, leave it out, and the session names itself with `name_session` once it finds it.
   Without `-n` the real name shows in `ListAgents` a few seconds later and may repeat one: then message `name [ref]`.

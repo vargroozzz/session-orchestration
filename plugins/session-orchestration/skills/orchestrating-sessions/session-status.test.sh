@@ -1176,6 +1176,16 @@ n0=$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")
 (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state bash -c '. "$0"; usage build chunk opus loud 60 1; usage build chunk opus medium 6x; usage build chunk opus medium 60 1 extra
   usage PROJ-9 chunk opus medium 60; usage build chunk /home/u medium 60' "$here/../../lib.sh")
 [ "$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")" = "$n0" ] || { echo "usage took a malformed chunk line"; tail -2 "$tmp/state/session-orchestration/usage.jsonl"; exit 1; }
+# --kind KIND: plan.models.KIND as --model/--effort flags (fable in the config falls back to the default), logged as a
+# start line; a bad kind is refused, and usage refuses a malformed start line.
+echo '{"telemetry": "local", "plan": {"models": {"scan": "claude-fable-5-1/low", "review": "sonnet/high"}}}' > "$tmp/.config/session-orchestration/config.json"
+[ "$(run --kind build)" = '--model opus --effort medium' ] && [ "$(run --kind scan 2>/dev/null)" = '--model haiku --effort low' ] &&
+  [ "$(run --kind review)" = '--model sonnet --effort high' ] &&
+  [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl" | sed -E 's/"t":[0-9]+/"t":T/')" = '{"t":T,"k":"start","what":"review","model":"sonnet","effort":"high"}' ] &&
+  ! run --kind chunky 2>/dev/null && ! run --kind 2>/dev/null || { echo "--kind"; tail -3 "$tmp/state/session-orchestration/usage.jsonl"; exit 1; }
+n0=$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")
+(cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state bash -c '. "$0"; usage build start opus loud; usage build start opus medium extra; usage build start /home/u medium' "$here/../../lib.sh")
+[ "$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")" = "$n0" ] || { echo "usage took a malformed start line"; exit 1; }
 rm "$tmp/.config/session-orchestration/config.json"
 # Plan cells: a lone `|` row is skipped; Deps `—`/`none`/`None` and Touches `—` name nothing. --check: a window other
 # than compact.window is one info line on stderr, exit 0. --next: of four ready rows, three under hooks/, the cap keeps
