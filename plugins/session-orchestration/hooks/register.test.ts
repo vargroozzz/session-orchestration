@@ -84,7 +84,7 @@ test('open_pane names the coordinator <project>-coordinator', async ($, on) => {
   expect(checked).toEqual([[['--name-check', 'myproj-coordinator'], '/work/myproj', 'sess-c']])
   // a successor: the old one still holds it
   held = 'held next 0a0a0a0a-0000\n'
-  expect(await open()).toBe('Coordinator pane open. "myproj-coordinator" is still held by 0a0a0a0a, the coordinator you succeed: keep your name until it renames itself (the coordinator skill, Handing over: the successor\'s step).')
+  expect(await open()).toBe('Coordinator pane open. "myproj-coordinator" is still held by 0a0a0a0a, the coordinator you succeed: keep your name until it renames itself (handover.md next to the coordinator skill, The successor).')
   held = ''
   expect(await open()).toBe('Coordinator pane open. Couldn\'t check whether another session holds "myproj-coordinator" (no answer), so this session keeps its name: call open_pane again.')
   await $.turn.complete(end)

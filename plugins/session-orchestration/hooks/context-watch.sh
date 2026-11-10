@@ -130,8 +130,8 @@ texts() {   # where the handoff goes, the -prev-K rename, whom to tell, and (chu
     chunk) where="\`## c$n: handoff ${sid:0:8}\` (your session id's first 8 characters) appended to $key-build.md in the replies folder"
            tell="$rn Message the coordinator \"handoff ready: $key c$n\"." ;;
     task) where="\`## Handoff\` in your replies file, with the status report at its top brought up to date (older handoffs and drafts move to $key-archive.md: worker.md, Replying)"; tell="$rn Message the coordinator \"handoff ready: $key\"." ;;
-    *) where="coordinator-handover.md in the replies folder, the handover file: overwrite it with the state in no file, as the coordinator skill's Handoff file says"
-       tell=" Then start your successor with \`$ss --successor\` and do what it prints (the coordinator skill, Handing over)." ;;
+    *) where="coordinator-handover.md in the replies folder, the handover file: overwrite it with the state in no file, as ${here%/hooks}/skills/orchestrating-sessions/handover.md says"
+       tell=" Then start your successor with \`$ss --successor\` and do what it prints (that file has the steps)." ;;
   esac
   case $kind in chunk|task) selfh=" If no coordinator is running (\`$ss --coordinator\` prints nothing), finish with \`$ss --handover --self -- '<next step>'\`." ;; *) selfh= ;; esac
 }

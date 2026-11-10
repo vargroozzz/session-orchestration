@@ -57,7 +57,7 @@ it, newest first, and name that file in the handoff.
 
 **A report you send unasked:** `reply` without `to`. It tries this project's live coordinators, newest first, until
 one takes it. The coordinator's name in your brief (e.g. `myproj-coordinator`) is a hint, not an address, since
-coordinators get restarted: pass it as `to` only when `reply` says it could neither send nor queue. No coordinator takes it (none runs, one is
+coordinators get restarted: pass it as `to` only when `reply` says `Pass to` (it found none and couldn't queue). No coordinator takes it (none runs, one is
 mid-handover, or it is under another Claude account): `reply` queues it in the coordinator inbox
 (`<replies>/coordinator-inbox.md`) and says so; the next coordinator reads it there, so don't send it again. When it
 can't queue either, the replies file is the report, and the coordinator's `--watch` sees it. Without the tool, run
@@ -172,13 +172,10 @@ the file's path. That is a plain-text ask, not a plan approval, so a relay can a
 A `Chunk: KEY/N` line in your first prompt marks you as one chunk of a plan:
 - Stay within your brief's est and touches.
 - Keep a clean stop point in reach: everything committed, no background task, no question waiting.
-- At the context-watch hook's soft line (it prints these steps): reach the stop point, append `## cN: handoff ID8`
-  to `KEY-build.md` in the replies folder (ID8: the first 8 characters of `$CLAUDE_CODE_SESSION_ID`, so `--handover`
-  knows the heading is yours), call `name_session` with the name `session-status --prev-name` prints
-  (`KEY-cN-prev-K`: your successor takes `KEY-cN`), message the coordinator `handoff ready: KEY cN`, and end the
-  turn. With no coordinator (`session-status --coordinator` prints nothing), finish with `session-status --handover
-  --self -- '<next step>'` instead: its last line names the rename, and with no `--model`/`--effort` it takes them
-  from your plan row.
+- The context-watch hook's soft line says how to hand off (the handoff heading, the `-prev-K` rename, whom to
+  tell): follow it. With no coordinator (`session-status --coordinator` prints nothing), finish with `session-status
+  --handover --self -- '<next step>'` instead: its last line names the rename, and with no `--model`/`--effort` it
+  takes them from your plan row.
 - After landing, append `## cN: done` to `KEY-build.md` and run `session-status --plan FILE --done N`.
 
 ## Handing the user a command
@@ -190,10 +187,10 @@ key, the command and one line on what it does. It shows in the coordinator pane 
 in your report, and don't wait on it: the coordinator passes on the outcome.
 - One plain line, no `cd`: the coordinator runs it from its own folder, so use absolute paths. A compound command is
   fine here; it's the user's to approve.
-- Never hand over a step you could take yourself, or one a relayed approval can cover (a hook-gated post or merge,
-  a Reserved action): ask for that as Approvals says. Where no relay can verify (your cwd is outside the
-  coordinator's project, or [feedback.md](feedback.md)'s apply session), the handed command is the ask and the
-  user's Run their approval.
+- Never hand over a step you could take yourself, or one a relayed approval lets you take (a hook-gated post or
+  merge, a force-push): ask for that as Approvals says. Where no relay can verify (your cwd is outside the
+  coordinator's own folder, as for [feedback.md](feedback.md)'s apply session), the handed command is the ask and
+  the user's Run their approval.
 - Do it yourself after all (a relayed approval came): withdraw it first, `hand_command` with the same key and command
   and `withdraw: true`, or the user's Run does it again.
 - A command the pane already has as a project action (a sign-in button, say) is refused. None of these: handing it

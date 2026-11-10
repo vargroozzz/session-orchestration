@@ -1182,7 +1182,7 @@ async function nameCoordinator($: EngineInterface) {
   const name = `${(r.split('/').pop() ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-coordinator`
   // Two live sessions under one name would split the workers' messages: a successor waits for the old one's rename.
   const [held, role, holder = ''] = (await nameCheck($, name)).split(' ')
-  if (held === 'held' && role === 'next') return `"${name}" is still held by ${holder.slice(0, 8)}, the coordinator you succeed: keep your name until it renames itself (the coordinator skill, Handing over: the successor's step).`
+  if (held === 'held' && role === 'next') return `"${name}" is still held by ${holder.slice(0, 8)}, the coordinator you succeed: keep your name until it renames itself (handover.md next to the coordinator skill, The successor).`
   if (held === 'held') return `Another live session (${holder.slice(0, 8)}) holds "${name}": a coordinator already runs. Stop here and ask the user which session coordinates; don't coordinate beside it.`
   if (held !== 'free') return `Couldn't check whether another session holds "${name}" (${held || 'no answer'}), so this session keeps its name: call open_pane again.`
   await update($, naming, () => name) // a command can't run inside the tool call: turn.complete runs it
@@ -1368,7 +1368,7 @@ export const register: Register = on => {
     })
     await $.tool.register({
       name: 'hand_command',
-      description: 'Any session: hand the user a command to run themselves (one you would otherwise give as `! <command>`: a classifier-refused CLI call, a release or deploy command, a settings or hook change). It shows in the coordinator pane under the task key with your session id and `what`, where the user runs it with one press (or copies it). Still put the `! <command>` line in your report: without a pane the user runs it by hand. The command is one line, run exactly as written in the coordinator\'s folder and account, so make it independent of your cwd (absolute paths). Don\'t wait on it: the coordinator tells you the outcome. Handing the same command again replaces it. Not for a step you could take yourself once approved (a post or merge a relayed approval covers): ask for that approval instead, unless no relay can verify for you (your cwd is outside the coordinator\'s project). A command the pane already offers as an action button is refused: report that you wait on that button.',
+      description: 'Any session: hand the user a command to run themselves (one you would otherwise give as `! <command>`: a classifier-refused CLI call, a release or deploy command, a settings or hook change). It shows in the coordinator pane under the task key with your session id and `what`, where the user runs it with one press (or copies it). Still put the `! <command>` line in your report: without a pane the user runs it by hand. The command is one line, run exactly as written in the coordinator\'s folder and account, so make it independent of your cwd (absolute paths). Don\'t wait on it: the coordinator tells you the outcome. Handing the same command again replaces it. Not for a step you could take yourself once approved (a post or merge a relayed approval covers): ask for that approval instead, unless no relay can verify for you (your cwd is outside the coordinator\'s own folder). A command the pane already offers as an action button is refused: report that you wait on that button.',
       inputSchema: HAND_SCHEMA,
     })
     await $.tool.register({

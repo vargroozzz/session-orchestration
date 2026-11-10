@@ -127,7 +127,7 @@
 #                       titles the caller's terminal tab with it
 #        session-status --successor [--account DIR] | --successor --done | --await ready|renamed|name|done [--timeout S] |
 #                       --name-check NAME   a coordinator hands itself over to NAME-next it starts (see the block;
-#                       SKILL.md, Handing over)
+#                       handover.md)
 #        session-status --inbox [--read N…|all] | --inbox-add [--from WHO] [SENDER_ID] < TEXT   the coordinator
 #                       inbox: messages no live coordinator took (the reply tool's backstop), unread ones printed
 #        session-status --init [--check | --write …]   set this folder up for coordination: the setting-up-coordination
@@ -457,7 +457,7 @@ if [ "${1:-}" = --inbox ]; then
   inbox_unread; exit 0
 fi
 
-# Coordinator handover (SKILL.md, Handing over), with NAME the coordinator's name:
+# Coordinator handover (handover.md), with NAME the coordinator's name:
 #   --successor [--account DIR]   the old coordinator starts NAME-next, interactive, in a tab of the configured
 #                                 terminal under DIR (default its own account), first prompt `Act as a coordinator`
 #   --await ready                 the old one waits until NAME-next has finished its Start (handover/NAME.ready)
@@ -509,7 +509,7 @@ if [ "${1:-}" = --successor ]; then
   # The name goes into a command typed into a shell: only the characters name_session and open_pane give one.
   [[ $n =~ ^[A-Za-z0-9._-]+$ ]] || { echo "\"$n\" has characters a shell would read (a /rename?): not handed over; rename it with name_session first"; exit 2; }
   # SESSION_STATUS_CLAUDE: the claude command, for a dev build's successor (`claude --plugin-dir DIR`)
-  cmd="${SESSION_STATUS_CLAUDE:-claude} -n $n-next 'Act as a coordinator. You succeed \"$n\" (${id:0:8}): end your Start with the successor step (the coordinator skill, Handing over).'"
+  cmd="${SESSION_STATUS_CLAUDE:-claude} -n $n-next 'Act as a coordinator. You succeed \"$n\" (${id:0:8}): end your Start with the successor step (${SELF%/*}/handover.md).'"
   case $acct in "$HOME/.claude") pre='env -u CLAUDE_CONFIG_DIR ' ;; *) pre="CLAUDE_CONFIG_DIR=$(tilde "$acct") " ;; esac
   load_terminal; out=$(open_view --account "$acct" "$n-next" "$ROOT" "$cmd"); rc=$?; q=$(printf %q "$ROOT")
   # open_view selects an open tab with the title instead: a successor that exited left it, and nothing was started

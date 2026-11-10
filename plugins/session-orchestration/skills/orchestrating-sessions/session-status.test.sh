@@ -547,6 +547,7 @@ for st in busy waiting; do setacct cfg "$(sess "$hid" "fix it" $st 1)"
     { echo "handover $st not refused: $out"; exit 1; }; done
 # Busy with state done: mid-turn while its transcript was written in the last minute, or its last message didn't
 # end the turn (a long tool call); a stale flag once both are past (the other account's handover below).
+touch "$proj/$hid.jsonl"   # fresh whatever the suite's pace: on a loaded machine it was over a minute old by here
 setacct cfg "$(sess "$hid" "fix it" busy 1 | sed 's/"state":"blocked"/"state":"done"/')"
 touch "$proj/$hid.jsonl"  # fresh now: the suite since line 471 can take over a minute on a loaded machine
 out=$(run --handover "$hid" 'Do X.') && rc=0 || rc=$?

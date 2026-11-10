@@ -25,7 +25,7 @@ you right now (names change when a session is resumed). The session checks the b
 ([worker.md](worker.md), Relayed approvals). Its checks decide what you can relay: the Quote must be words the user
 gave you in one of the ways below, naming the task key or answering your last message, which named it. Two relays
 it always rejects: one from a background coordinator (only an interactive one can relay), and one to a session whose
-cwd is outside your project (that session hands the user the command instead: [worker.md](worker.md), Handing the
+cwd is neither your own cwd, inside it, nor a folder containing it (that session hands the user the command instead: [worker.md](worker.md), Handing the
 user a command).
 
 ## Asking
