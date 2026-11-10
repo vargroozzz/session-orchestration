@@ -22,7 +22,13 @@
 #                                (or one scope): times seen, status, path, title (tabs), most seen first
 #        feedback count [--plugin|--project]   `N open (M seen ≥2×)` per scope (both: `…; project: …`), nothing
 #                                when none are open
-#        feedback footer         both counts, at most once a day (the status sweep's footer)
+#        feedback footer         both counts, at most once a day (the status sweep's footer). With a plugin coordinator
+#                                (feedback.repo_dir), another root shows the plugin's count only while it isn't running
+#                                (on a stamp of its own; a running one is checked at most once an hour)
+#        feedback coordinator [--start]   the plugin coordinator's name when it runs (any account: another one is
+#                                named); exit 1 when it doesn't, 2 with no feedback.repo_dir, 3 when an account's
+#                                listing failed. --start: one that doesn't run is opened in a terminal tab (config
+#                                terminal; plain prints the command to run)
 #        feedback scrub FILE…    lines that could name the person or their projects (FILE:LINE: why: text); exit 1
 #                                on any hit. The deny list covers every project root your sessions ran in
 #        feedback mark FILE sent URL | fixed WHAT | dropped
@@ -48,6 +54,21 @@ cases() {
 pdir() {
   local d; d=$(config feedback.project_dir 2>/dev/null)
   case $d in '') cases store ;; /*) echo "$d" ;; *) echo "$(cases root)/$d" ;; esac
+}
+# pc_name ROOT: ROOT's coordinator name (lib.sh slug).
+pc_name() { echo "$(slug "$(basename "$1")")-coordinator"; }
+# pc_live ROOT: the plugin coordinator, when it runs: a live session by its name in ROOT, under any account sharing
+# this transcript store (whatever this project's features.accounts says). Prints its name, and the account when it's
+# another (SendMessage reaches only its own). Exit 1: not running; 3: not found, but an account's listing failed.
+pc_live() {
+  local TMP rc; TMP=$(mktemp -d) || return 3
+  load_module features accounts list_accounts 2>/dev/null
+  # No early exit in awk: list_sessions would die of SIGPIPE, and pipefail would fail a found one.
+  list_sessions | awk -F'\t' -v n="$(pc_name "$1")" -v r="$1" '!f && $2 == n && $3 !~ /^(done|failed|stopped)$/ &&
+    ($6 == r || index($6, r "/") == 1) { f = 1; a = $4 }
+    END { if (!f) exit 1; print n (a == "claude" ? "" : ", under another account (" a "): SendMessage reaches it only from there") }'
+  rc=$?; [ "$rc" = 0 ] || [ ! -e "$TMP/ask.failed" ] || rc=3
+  rm -rf "$TMP"; return "$rc"
 }
 repo() { jq -r '.repository // empty | if type == "object" then .url else . end' "$PLUGIN_JSON" 2>/dev/null |
   sed -E 's#^(git\+)?https?://github\.com/##; s#\.git$##; s#/$##' | grep -E '^[^/ ]+/[^/ ]+$'; }
@@ -85,13 +106,22 @@ count)
   esac ;;
 footer)
   # Once a day each: the plugin's count per person, the project's per project (its own store's stamp).
-  due() { [ "$(cat "$1/.footer-shown" 2>/dev/null)" != "$TODAY" ]; }
-  shown() { mkdir -p "$1" && echo "$TODAY" > "$1/.footer-shown"; }
-  P=$(pdir) p= q=
-  ! due "$DIR" || { p=$("$0" count --plugin); [ -z "$p" ] || shown "$DIR"; }
-  ! due "$P" || { q=$("$0" count --project); [ -z "$q" ] || shown "$P"; }
+  due() { [ "$(cat "$1" 2>/dev/null)" != "$TODAY" ]; }
+  shown() { mkdir -p "${1%/*}" && echo "${2:-$TODAY}" > "$1"; }
+  P=$(pdir) p= q= ask=' — apply? (feedback.md)' s=$DIR/.footer-shown hour=$(date '+%F %H')
+  # With a plugin coordinator, the cases are its own: another root shows them only while it isn't running, on a stamp
+  # of its own (so the plugin coordinator's footer doesn't hide that offer), checking a running one once an hour.
+  if pr=$(plugin_root) && [ "$pr" != "$(find_root)" ]; then
+    s=$DIR/.footer-elsewhere ask=", for the plugin coordinator, which isn't running — start it? (feedback coordinator --start)"
+  else pr=; fi
+  ! due "$s" || [ "$(cat "$s" 2>/dev/null)" = "$hour" ] || { p=$("$0" count --plugin)
+    if [ -n "$p" ] && [ -n "$pr" ]; then
+      pc_live "$pr" >/dev/null; case $? in 1) ;; 0) p=; shown "$s" "$hour" ;; *) p= ;; esac   # unknown: the next sweep asks
+    fi
+    [ -z "$p" ] || shown "$s"; }
+  ! due "$P/.footer-shown" || { q=$("$0" count --project); [ -z "$q" ] || shown "$P/.footer-shown"; }
   [ -n "$p$q" ] || exit 0
-  l=${p:+plugin feedback: $p — apply? (feedback.md)}
+  l=${p:+plugin feedback: $p$ask}
   [ -z "$q" ] || l="${l:+$l · }project feedback: $q, for the next R&D run"
   echo "$l" ;;
 mark) [ -f "${2:-}" ] || die "usage: feedback mark FILE sent URL | fixed WHAT | dropped"; shift; cases mark "$@" ;;
@@ -102,6 +132,22 @@ mode)
   elif gh auth status >/dev/null 2>&1 && gh repo view "$(repo)" >/dev/null 2>&1; then echo fork-pr
   else echo issue; fi ;;
 repo) repo || { echo "plugin.json names no GitHub repository" >&2; exit 1; } ;;
+coordinator)
+  case ${2:-} in ''|--start) ;; *) die "usage: feedback coordinator [--start]" ;; esac
+  r=$(plugin_root) || die "no plugin coordinator: config feedback.repo_dir is unset (features/plugin-coordinator.md)"
+  n=$(pc_name "$r"); pc_live "$r"
+  case $? in 0) exit 0 ;; 1) ;; *) echo "an account's session listing failed, so whether $n runs is unknown: try again" >&2; exit 3 ;; esac
+  [ "${2:-}" = --start ] || { echo "the plugin coordinator ($n) isn't running: feedback coordinator --start opens it" >&2; exit 1; }
+  # -n: other roots find it by that name before open_pane names it. SESSION_STATUS_CLAUDE: the claude command, as for
+  # --successor (a dev build's `claude --plugin-dir DIR`).
+  cmd="${SESSION_STATUS_CLAUDE:-claude} -n $n 'Act as a coordinator'"
+  load_terminal; out=$(open_view "$n" "$r" "$cmd" 2>&1); rc=$?
+  case $rc in
+    0) [ "${out#reused}" = "$out" ] || { echo "a tab titled \"$n\" is open already ($out), so nothing started: close it, or run $cmd there"; exit 1; }
+       echo "started $n in $(tilde "$r") ($out): it reads the open cases at its Start" ;;
+    2) echo "no terminal opens it here (config terminal): run in a new terminal: cd $(printf %q "$r") && $cmd"; exit 1 ;;
+    *) echo "opening it failed ($out): run in a new terminal: cd $(printf %q "$r") && $cmd"; exit 1 ;;
+  esac ;;
 label) echo "$LABEL" ;;
 scrub)
   shift; [ $# -gt 0 ] || die "usage: feedback scrub FILE…"

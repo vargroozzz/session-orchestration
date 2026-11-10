@@ -4,7 +4,7 @@ set -u
 FB=$(cd "$(dirname "$0")" && pwd)/feedback
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/home" "$T/bin" "$T/acme-widgets/.claude" "$T/plugin-clone"
-printf '#!/bin/sh\nexit 0\n' > "$T/bin/claude"
+printf '#!/bin/sh\n[ "$1" != agents ] || echo "${AGENTS_JSON:-[]}"\n' > "$T/bin/claude"
 printf '#!/bin/sh\nexit "${GH_RC:-1}"\n' > "$T/bin/gh"; chmod +x "$T/bin/claude" "$T/bin/gh"
 export HOME=$T/home XDG_STATE_HOME=$T/state PATH=$T/bin:$PATH
 export GIT_CONFIG_GLOBAL=$T/home/.gitconfig   # it outranks HOME: never touch the real one
@@ -115,6 +115,32 @@ echo '{"feedback": {"project_dir": ".fb"}}' > .claude/coordination.local.json
 q=$("$FB" add bugfixes 'Deploy script needs a flag' --where deploy.sh --found f --evidence e --project)
 [[ $q == "$(pwd -P)/.fb/bugfixes/"* ]] || fail "feedback.project_dir: $q"
 rm .claude/coordination.local.json
+
+# The plugin coordinator (feedback.repo_dir's root): `coordinator` names it while it runs; another root's footer shows
+# the plugin's cases only while it doesn't, its own root's as before.
+"$FB" coordinator 2>/dev/null; [ $? = 2 ] || fail "coordinator with no repo_dir"
+mkdir -p "$T/plugin-clone/.claude" "$HOME/.config/session-orchestration" && echo '{}' > "$T/plugin-clone/.claude/coordination.local.json"
+echo "{\"feedback\": {\"repo_dir\": \"$T/plugin-clone\"}}" > "$HOME/.config/session-orchestration/config.json"
+R=$(cd "$T/plugin-clone" && pwd -P)
+agent() { export AGENTS_JSON="[{\"sessionId\":\"s1\",\"name\":\"plugin-clone-coordinator\",\"state\":\"$1\",\"cwd\":\"$R\"}]"; }
+agent done; out=$("$FB" coordinator 2>&1); rc=$?
+[ "$rc" = 1 ] && [[ $out == *"(plugin-clone-coordinator) isn't running"* ]] || fail "coordinator not running: rc=$rc $out"
+out=$("$FB" coordinator --start); rc=$?
+[ "$rc" = 1 ] && [ "$out" = "no terminal opens it here (config terminal): run in a new terminal: cd $(printf %q "$R") && claude -n plugin-clone-coordinator 'Act as a coordinator'" ] ||
+  fail "coordinator --start, plain terminal: rc=$rc $out"
+# The plugin coordinator's own footer has its own stamp, so it doesn't hide the offer elsewhere.
+rm -f "$D/.footer-shown"; [ -n "$(cd "$T/plugin-clone" && "$FB" footer)" ] || fail "footer in the plugin coordinator's root, first"
+[ "$("$FB" footer)" = "plugin feedback: 1 open (0 seen ≥2×), for the plugin coordinator, which isn't running — start it? (feedback coordinator --start)" ] ||
+  fail "footer, plugin coordinator not running: $(rm -f "$D/.footer-elsewhere"; "$FB" footer)"
+# A failed listing is no answer: exit 3, and no footer or stamp.
+rm -f "$D/.footer-elsewhere"; AGENTS_JSON=garbled "$FB" coordinator 2>/dev/null; [ $? = 3 ] || fail "coordinator with a failed listing"
+[ -z "$(AGENTS_JSON=garbled "$FB" footer)" ] && [ ! -e "$D/.footer-elsewhere" ] || fail "footer with a failed listing"
+agent blocked
+[ "$("$FB" coordinator)" = plugin-clone-coordinator ] || fail "coordinator running: $("$FB" coordinator 2>&1)"
+[ -z "$("$FB" footer)" ] && [ "$(cat "$D/.footer-elsewhere")" = "$(date '+%F %H')" ] || fail "footer with the plugin coordinator running"
+rm -f "$D/.footer-shown"
+[ "$(cd "$T/plugin-clone" && "$FB" footer)" = "plugin feedback: 1 open (0 seen ≥2×) — apply? (feedback.md)" ] || fail "footer in the plugin coordinator's root"
+unset AGENTS_JSON; rm "$HOME/.config/session-orchestration/config.json" "$T/plugin-clone/.claude/coordination.local.json"
 # A git worktree outside the project files into the main checkout's store.
 git commit -q --allow-empty -m x && git worktree add -q "$T/wt-out" 2>/dev/null || fail "worktree setup"
 w=$(cd "$T/wt-out" && "$FB" add bugfixes 'Worktree case' --where x --found f --evidence e --project)

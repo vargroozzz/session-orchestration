@@ -189,7 +189,8 @@ in your report, and don't wait on it: the coordinator passes on the outcome.
   fine here; it's the user's to approve.
 - Never hand over a step you could take yourself, or one a relayed approval lets you take (a hook-gated post or
   merge, a force-push): ask for that as Approvals says. Where no relay can verify (your cwd is outside the
-  coordinator's own folder, as for [feedback.md](feedback.md)'s apply session), the handed command is the ask and
+  coordinator's own folder, as for [feedback.md](feedback.md)'s apply session that a coordinator other than the
+  plugin coordinator started), the handed command is the ask and
   the user's Run their approval.
 - Do it yourself after all (a relayed approval came): withdraw it first, `hand_command` with the same key and command
   and `withdraw: true`, or the user's Run does it again.

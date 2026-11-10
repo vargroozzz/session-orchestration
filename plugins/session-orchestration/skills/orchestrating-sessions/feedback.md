@@ -67,6 +67,18 @@ takes them.
 - **The R&D run** ends its report with the open plugin cases, most seen first (`feedback list --plugin`), and offers
   the apply; the project's cases are proposals in that report ([rnd](../rnd/SKILL.md), step 7).
 
+**With a plugin coordinator** (config `feedback.repo_dir` set, a person key), the plugin's cases are that
+coordinator's ([features/plugin-coordinator.md](../../features/plugin-coordinator.md)). Every other coordinator and
+the R&D run hands them on and never starts an apply session:
+- While it runs, your footer has no plugin part. While it doesn't, the footer reads `plugin feedback: N open (M seen
+  ≥2×), for the plugin coordinator, which isn't running — start it? (feedback coordinator --start)`. On a yes, run
+  that command.
+- When the user gives you plugin feedback, file it (`feedback add`, `--found 'coordinating; the user asked for it'`)
+  and tell them the plugin coordinator takes it. If they want it applied now, also `SendMessage` the name that
+  `feedback coordinator` prints: one line with the case's path, saying the user wants it now. When it says the
+  plugin coordinator runs under another account, SendMessage can't reach it: ask the user to tell it there.
+- The R&D run's report lists the open cases as the plugin coordinator's, with no apply offer.
+
 Never apply without the user's yes for that batch.
 
 ## Applying (an apply session)
@@ -93,11 +105,12 @@ Never apply without the user's yes for that batch.
 
    Each outgoing `gh pr create` or `gh issue create` goes to the user as one approval: name every body file with its
    sha256 (`shasum -a 256 FILE`), and pass the command to `hand_command` (or ask in plain text when mods are off).
-   Run nothing outward-facing before that yes.
+   An apply session that the plugin coordinator started works in that coordinator's folder, so it asks the way
+   worker.md's Approvals says, and a relayed approval verifies for it. Run nothing outward-facing before that yes.
 5. `feedback mark FILE sent <url>` for each case sent.
 
 Config (person keys): `feedback.mode` (`auto` default, or `pr`, `fork-pr`, `issue`, `local`), `feedback.repo_dir`
-(a clone of the plugin repo you can push to). They hold for you in every project, so set them once in
+(a clone of the plugin repo you can push to; its coordinator is the plugin coordinator). They hold for you in every project, so set them once in
 `${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json`; a project's `.claude/coordination.local.json`
 outranks that file. `feedback.project_dir` (Project cases) is per project: set it in that project's
 `.claude/coordination.local.json`, since an absolute path set for every project would put all their cases in one store.

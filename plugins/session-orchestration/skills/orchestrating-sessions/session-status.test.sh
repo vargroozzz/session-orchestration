@@ -84,6 +84,16 @@ run --changes >/dev/null; [ "$(run --changes)" = "no changes" ] && [ "$(SESSION_
   [ "$(CLAUDE_CODE_SESSION_ID=$sid run | grep -c 'plugin feedback')" = 0 ] &&
   [ "$(run | grep -c 'plugin feedback: 1 open')" = 1 ] && [ "$(run | grep -c 'plugin feedback')" = 0 ] && unset CLAUDE_CODE_SESSION_ID &&
   rm -r "$tmp/state" || { echo "feedback footer failed"; exit 1; }
+# The plugin coordinator (feedback.repo_dir names this root): each open plugin case is a --changes line, so a new one
+# wakes its watcher; one seen again (it moves up the list) or closing doesn't.
+fbd=$tmp/state/session-orchestration/feedback/bugfixes; mkdir -p "$tmp/.config/session-orchestration" "$fbd"
+echo "{\"feedback\": {\"repo_dir\": \"$root\"}}" > "$tmp/.config/session-orchestration/config.json"
+run --changes >/dev/null; printf '# B case\n- seen: 2026-01-01, 2026-01-02\n- status: open\n' > "$fbd/b.md"
+printf '# A case\n- seen: 2026-01-01\n- status: open\n' > "$fbd/a.md"
+[ "$(run --changes)" = "now:   * A case ($fbd/a.md)"$'\n'"now:   * B case ($fbd/b.md)" ] &&
+  printf '# A case\n- seen: 2026-01-01, 2026-01-02, 2026-01-03\n- status: open\n' > "$fbd/a.md" && [ "$(run --changes)" = "no changes" ] &&
+  printf '# A case\n- seen: 2026-01-01\n- status: dropped\n' > "$fbd/a.md" &&
+  [ "$(run --changes)" = "no changes" ] && rm -r "$tmp/state" "$tmp/.config" || { echo "plugin coordinator's Feedback lines failed"; exit 1; }
 # A messages module (the person's config) runs beside the adapter's notices, its lines first; each source keeps its
 # own last good lines. Its NOTICE_MINE defaults to the last sweep's keys.
 mkdir -p "$root/.claude/coordination.local/messages"
@@ -1029,6 +1039,12 @@ echo '{"features":{"notify":"soon"}}' > "$a/.claude/coordination.local.json"
 [ "$(cfg "$a" features.notify 2>&1)" = "$(printf 'warning: config features.notify=soon is not valid: using the default\n0')" ] || { echo "notify bad value: $(cfg "$a" features.notify 2>&1)"; exit 1; }
 echo '{"features":{"notify":5}}' > "$b/.claude/coordination/coordination.json"
 [ "$(cfg "$b" features.notify)" = 0 ] || { echo "config: the repo file set features.notify"; exit 1; }
+# plugin coordinator: on in the root feedback.repo_dir names, with its doc line; off in any other root.
+echo "{\"feedback\":{\"repo_dir\":\"$a\"}}" > "$a/.claude/coordination.local.json"
+c=$(init "$a" --check); grep -x 'active: .* features=.*plugin_coordinator' <<<"$c" >/dev/null &&
+  grep -x "  plugin_coordinator: run \`feedback list --plugin\`.* Read $(cd "$here/../.." && pwd)/features/plugin-coordinator.md when .*" <<<"$c" >/dev/null &&
+  echo "{\"feedback\":{\"repo_dir\":\"$b\"}}" > "$a/.claude/coordination.local.json" && ! grep -q plugin_coordinator <<<"$(init "$a" --check)" ||
+  { echo "check plugin coordinator: $c"; exit 1; }
 # terminal: Ghostty found by TERM_PROGRAM is proposed, named by --check until recorded, then active with its doc; tmux
 # is noted and plain.
 echo '{"features":{"accounts":true}}' > "$a/.claude/coordination.local.json"

@@ -27,7 +27,8 @@ with the stop command: answer or stop), **Leftovers** (sessions and worktrees of
 command; one idle a week whose removal loses nothing moves to **Resolved**), **Notices** (from the messages module,
 then the adapter; act on a message line per the module's doc; a message line the user calls handled: `session-status
 --dismiss "LINE"`, for every session, not passed on again) and **Other sessions** (live sessions that own no task,
-e.g. a reviewer: `· reviews KEY`), and last, at most once a day, `plugin feedback: N open (M seen ≥2×) — apply?`. It
+e.g. a reviewer: `· reviews KEY`), and last, at most once a day, `plugin feedback: N open (M seen ≥2×) — apply?` (or
+its plugin-coordinator form, below). It
 asks `claude agents --json` of your account (with `features.accounts`, every account sharing your transcripts:
 [features/accounts.md](../../features/accounts.md)).
 
@@ -83,7 +84,13 @@ uncommitted or unpushed work stays a leftover.
 **Plugin feedback** comes last, one line: `plugin feedback: N open (M seen ≥2×) — apply? (feedback.md)`, from
 `feedback footer` ([feedback.md](feedback.md)). Only a coordinator's sweep shows it (the calling session ran
 `--start`, `--changes`, `--watch` or `--owner`, or opened the pane), at most once a day per person (the stamp
-`.footer-shown` in the feedback folder), and only with open cases. This project's own cases add `· project feedback:
+`.footer-shown` in the feedback folder), and only with open cases. With a plugin coordinator (`feedback.repo_dir`;
+[features/plugin-coordinator.md](../../features/plugin-coordinator.md)), another project's sweep leaves the plugin
+part out while that coordinator runs (checked at most once an hour). While it doesn't run, the part reads `…, for
+the plugin coordinator, which isn't running — start it? (feedback coordinator --start)`, once a day on a stamp of its
+own (`.footer-elsewhere`). The plugin coordinator's own `--changes` adds a
+`Feedback (feedback list --plugin)` section, one `* TITLE (FILE)` per open plugin case, so a new case wakes its
+watcher. This project's own cases add `· project feedback:
 K open (…), for the next R&D run` (alone when the plugin has none): nothing to do but pass it on. Never in the `--changes` child (so the watcher
 doesn't wake on it) or the pane's runs, which set `SESSION_STATUS_NO_FEEDBACK=1`.
 

@@ -100,7 +100,6 @@ noexec=; [ -e "$root/.claude/session-status-adapter" ] && [ -z "$adapter" ] && n
 replies=$(cd "$root" && sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
 # The section's orch folder: its memory line's, else the replies folder's parent (sections written before that line).
 mem=$(cd "$root" && sed -nE 's/.*Project memory: `([^`]+)\/memory\.md`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
-slug() { tr 'A-Z' 'a-z' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g'; }
 # A delegation line left in CLAUDE.md from before the approvals.delegate key (the old template's wording).
 deleg_line=; (cd "$root" && grep -qiE 'delegates approvals' CLAUDE.md CLAUDE.local.md 2>/dev/null) && deleg_line=1
 deleg_set=; jq -e '.approvals.delegate != null' "$person_src" >/dev/null 2>&1 && deleg_set=1
@@ -173,6 +172,8 @@ if [ "$mode" = check ]; then
                 [ "$a" != true ] || { md=$(find_module features accounts) && md=${md%.sh}.md && [ -f "$md" ] && docs+=(accounts "$md"); f=accounts; }
                 [ "$r" != true ] || { f=${f:+$f,}review_inbox; docs+=(review_inbox "$LIB_DIR/features/review-inbox.md"); }
                 [ "$no" = 0 ] || { f=${f:+$f,}notify; docs+=(notify "$LIB_DIR/features/notify.md"); }
+                # feedback.repo_dir's coordinator owns the plugin's feedback cases
+                [ "$(plugin_root)" != "$root" ] || { f=${f:+$f,}plugin_coordinator; docs+=(plugin_coordinator "$LIB_DIR/features/plugin-coordinator.md"); }
                 echo "active: tracker=$t host=$h delegate=$d terminal=$te messages=$m features=${f:-none}"
                 for ((i = 0; i < ${#docs[@]}; i += 2)); do doc_line "${docs[i]}" "${docs[i+1]}"; done
                 if [ "$a" = true ]; then   # each account's weekly use (features/accounts.md, Weekly limits)

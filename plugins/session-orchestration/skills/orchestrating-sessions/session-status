@@ -744,6 +744,12 @@ if [ "${1:-}" = --changes ]; then
   # The coordinator inbox's unread headings (a message no live coordinator took): one appearing is news.
   u=$(inbox_unread | grep '^## ' | cut -c4-)
   [ -z "$u" ] || { new+=$'\nInbox (session-status --inbox):'; while IFS= read -r l; do new+=$'\n  * '"$l"; done <<<"$u"; }
+  # The plugin coordinator's (features/plugin-coordinator.md): each open plugin case is a line, so a new one is news;
+  # by path, since list's order moves a case another session saw again.
+  if [ "$(plugin_root)" = "$ROOT" ]; then
+    u=$(bash "$(dirname "$SELF")/feedback" list --plugin 2>/dev/null | sort -t$'\t' -k3,3 | awk -F'\t' '{ print $4 " (" $3 ")" }')
+    [ -z "$u" ] || { new+=$'\nFeedback (feedback list --plugin):'; while IFS= read -r l; do new+=$'\n  * '"$l"; done <<<"$u"; }
+  fi
   # PR events: an open PR of a row with an owner newly failing CI (CI-FAILED), in conflict (CONFLICT) or with changes
   # requested (!NAME, `changes requested by`) is a line `* REPO#ID EVENT @SHA (KEY) → "NAME" ID`, for the coordinator
   # to send the owner (SKILL.md, PR events). At most once per PR, event and head SHA ($last.pr-events): CI and a
@@ -806,7 +812,7 @@ if [ "${1:-}" = --changes ]; then
         /^was:   ".*" \(.*attach [0-9a-f]+\)( — blocked: .*)?$/ { match($0, /attach [0-9a-f]+\)/); id = substr($0, RSTART + 7, RLENGTH - 8)
           if (id in live && live[id] != "done") drop[NR] }
         END {
-          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(session-status --inbox\):)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
+          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(session-status --inbox\):|Feedback \(feedback list --plugin\):)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
           for (i = 1; i <= NR; i++) if (!(i in drop)) print line[i] }'; echo "$ev"; } | grep . || echo "no changes"
   else
     echo "$new"; [ -z "$ev" ] || printf '\n%s\n' "$ev"
