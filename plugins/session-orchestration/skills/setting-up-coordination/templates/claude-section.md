@@ -12,6 +12,6 @@
 - Replies folder (status reports, plans, review reports): `{{replies_dir}}/`.
 - Project memory: `{{orch}}/memory.md`. Coordinator handoff file: `{{orch}}/pending.md`.
 {{?tracker_keys}}- Task sessions start with "Work on {{key_example}}" and are named `-n {{key_example}}-<short-desc>`.
-{{?!tracker_keys}}- A task is its session's name, `{{key_example}}`: start it with `claude --bg -n {{key_example}}`.
+{{?!tracker_keys}}- A task is its session's name, `{{key_example}}`: start it with `claude --bg --model M --effort E -n {{key_example}}` (M, E: what `session-status --kind <kind>` prints).
   Branches: `{{branch_pattern}}` from `origin/{{default_branch}}`.
 {{?worktree_line}}- Worktrees: `{{worktree_cmd}}`, not EnterWorktree (denied in background sessions). Work in it by absolute path.

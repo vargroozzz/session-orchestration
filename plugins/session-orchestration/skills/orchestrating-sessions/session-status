@@ -129,6 +129,8 @@
 #        session-status --init [--check | --write …]   set this folder up for coordination: the setting-up-coordination
 #                       skill's session-init documents the modes; runs in the cwd, not the root
 #        session-status --config KEY   a config value (lib.sh at the plugin root lists the keys), e.g. approvals.delegate
+#        session-status --kind KIND   `--model M --effort E` from plan.models.KIND for a task start, logged as a usage
+#                       start line
 #        session-status --plan FILE [--check | --next | --brief N | --done N]   a design's plan table: waves and chunk
 #                       states, its problems (exit 1), the `claude --bg` lines of the runnable chunks, row N's brief
 #                       skeleton, or (run by chunk N once it landed) its usage chunk line
@@ -146,6 +148,14 @@ set -uo pipefail
 [ "${1:-}" = --init ] && { shift; exec bash "$(dirname "$0")/../setting-up-coordination/session-init" "$@"; }
 . "$(dirname "$0")/../../lib.sh" || exit 1
 [ "${1:-}" = --config ] && { config "${2:-}"; exit; }
+# --kind KIND: `--model M --effort E` from plan.models.KIND for a plain task start's `claude --bg` line, logged as a
+# usage start line (lib.sh usage), data for rnd to set plain starts beside chunks (no reader yet).
+if [ "${1:-}" = --kind ]; then
+  [ $# = 2 ] && me=$(config "plan.models.$2" 2>/dev/null) ||
+    { echo "usage: session-status --kind design|build|mechanical|review|release|scan" >&2; exit 2; }
+  usage "$2" start "${me%%/*}" "${me#*/}"
+  echo "--model ${me%%/*} --effort ${me#*/}"; exit
+fi
 # prev_name NAME: NAME-prev-K, the name a session takes when it hands off (its successor keeps NAME). NAME loses any
 # -prev-K first; K is the lowest number no session of a listed account (lib.sh list_sessions --all: live or
 # retired) carries, so no two sessions share a name. Listing failed: K = 1. The caller ($CLAUDE_CODE_SESSION_ID)
