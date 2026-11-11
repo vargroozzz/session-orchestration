@@ -38,8 +38,9 @@ when: the change is implemented with the repo's checks passing, a PR is open, an
 Because they work in your project, relayed approvals verify for them ([approvals.md](../skills/orchestrating-sessions/approvals.md)).
 Their `gh pr create` reaches you as an ask like any other.
 
-**Releases.** Once a batch's PR is merged (check its state yourself), the release follows the repo's `CLAUDE.md`. That
-is a session's task, or the command it hands the user. Then:
+**Releases.** A batch's PR lands the way the repo's `CLAUDE.md` says. Where that is a release command, an approval to
+land the PR is an approval to run it, not a GitHub merge. The release is a session's task, or the command it hands the
+user. Once the release is on the repo's main (check it yourself, and take the version from it):
 1. Mark each of its cases `fixed <version>` (`feedback mark FILE fixed …`).
 2. Call `reload_plugins`.
 3. Tell the user that other running coordinators keep the old version until they call `reload_plugins` themselves.

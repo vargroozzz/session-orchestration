@@ -12,7 +12,9 @@
 2. Before committing: `claude plugin test plugins/<plugin>`, `tsc -p plugins/<plugin>` (needs the
    engine's generated `.claude-plugin/types/`, untracked), `claude plugin validate plugins/<plugin>` and
    `./scrub-check.sh` (no personal or company names: examples use `PROJ-123`, paths `/home/u/…`).
-3. Push to `main`.
+3. Push to `main`. Where a release script numbers the change as it lands (step 1), a PR lands only through it:
+   rebase the branch onto `origin/main`, push the branch (so the PR shows merged once main has its commits), and
+   run the script on it. A merge on GitHub puts the change on main unnumbered, and the script finds nothing to release.
 4. Install it: `claude plugin update <plugin>@session-orchestration` once the marketplace source has the commit,
    then check `installed_plugins.json` lists `<plugin>` at the new version. A command you can't run
    yourself goes to the user as one line, through session-orchestration's `hand_command` too.
