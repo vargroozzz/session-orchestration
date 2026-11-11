@@ -13,7 +13,8 @@ coordinator's Start reads those, and each restated rule is re-sent on its every 
 1. `session-status --successor` (`--account DIR` for the weekly-limit move): it opens a tab running an interactive
    `claude -n NAME-next 'Act as a coordinator. You succeed …'`. Nothing opened: hand the user the command it prints
    (`hand_command`, key `coordinator`). Then arm `--await ready` (Bash, background) and end your turn. From here act
-   on no message: forward each, text on stdin, with `session-status --inbox-add --from '<name> (<id8>)'`.
+   on no message: forward each, text on stdin, with `session-status --inbox-add --from '<name> (<id8>)'`, run by its
+   full path with a quoted heredoc (`<<'EOF'`), so the approval hook reads the text as text even when it quotes a merge.
 2. When `--await ready` wakes you, call `name_session` with what `session-status --prev-name --title` prints
    (`NAME-prev-K`; it titles your tab too), arm `--await renamed` (background) and end your turn: the rename lands
    then.

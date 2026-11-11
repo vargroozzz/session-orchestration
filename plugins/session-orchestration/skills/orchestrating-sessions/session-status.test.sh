@@ -768,18 +768,25 @@ as "$o" --await ready | grep -q '^ready: "p-coordinator-next" (0b0b0b0b) has fin
   as "$x" --inbox --read 1 2 >/dev/null && [ "$(as "$x" --inbox | grep -c '^## ')" = 1 ] && as "$x" --inbox --read all >/dev/null &&
   [ -z "$(as "$x" --inbox)" ] && [ "$(run --changes)" = "no changes" ] && ! run --start | grep -q 'Coordinator inbox' ||
   { echo "the coordinator inbox: $out"; exit 1; }
-# Adds racing a --read: under the lock none is lost and none shares a number; no lock is left behind.
+# Adds racing a --read: under the lock none is lost and none shares a number.
 ib=$root/replies/coordinator-inbox.md
-for i in 1 2 3 4; do printf 'race %s' "$i" | as "$z" --inbox-add >/dev/null & done; as "$x" --inbox --read all >/dev/null & wait
-[ "$(grep -c '^## ' "$ib")" = 7 ] && [ "$(grep '^## ' "$ib" | cut -d' ' -f2 | sort -u | wc -l | tr -d ' ')" = 7 ] && [ ! -e "$ib.lock" ] ||
-  { echo "inbox adds racing a --read"; cat "$ib"; exit 1; }
-# A lock a killed run left is taken over: its owner is gone, or it has no pid and is older than 5s.
-mkdir "$ib.lock" && touch -t 202001010000 "$ib.lock"
-printf 'after a stale lock' | as "$z" --inbox-add >/dev/null && [ "$(grep -c '^## ' "$ib")" = 8 ] && [ ! -e "$ib.lock" ] ||
-  { echo "inbox add over a stale lock"; exit 1; }
-bash -c 'exit 0' & dead=$!; wait "$dead"; mkdir "$ib.lock" && echo "$dead" > "$ib.lock/pid"
-printf 'after a dead owner' | as "$z" --inbox-add >/dev/null && [ "$(grep -c '^## ' "$ib")" = 9 ] && [ ! -e "$ib.lock" ] ||
-  { echo "inbox add over a dead owner's lock"; exit 1; }
+for i in 1 2 3 4 5 6 7 8; do printf 'race %s' "$i" | as "$z" --inbox-add >/dev/null 2>>"$tmp/lockerr" & done
+as "$x" --inbox --read all >/dev/null 2>>"$tmp/lockerr" & wait
+[ "$(grep -c '^## ' "$ib")" = 11 ] && [ "$(grep '^## ' "$ib" | cut -d' ' -f2 | sort -u | wc -l | tr -d ' ')" = 11 ] && [ ! -s "$tmp/lockerr" ] ||
+  { echo "inbox adds racing a --read"; cat "$ib" "$tmp/lockerr"; exit 1; }
+# A held lock is waited for (the holder's last line comes before the add), and a killed holder frees it; an older
+# version's lock directory is ignored. hold SECS: holds the lock, touches $ib.held once it has it, then writes "held".
+hold() { rm -f "$ib.held"; exec perl -MFcntl=:flock -e 'open(my $l, ">>", "$ARGV[0].flock") or die; flock($l, LOCK_EX) or die;
+  open(my $t, ">", "$ARGV[0].held") or die; close $t; sleep $ARGV[1]; open(my $f, ">>", $ARGV[0]) or die; print $f "held\n"' "$ib" "$1"; }
+held() { for _ in $(seq 100); do [ -e "$ib.held" ] && return; sleep 0.1; done; echo "the test's lock holder never took the lock"; exit 1; }
+mkdir "$ib.lock"; (hold 1) & held
+printf 'after a held lock' | as "$z" --inbox-add >/dev/null && wait && [ "$(grep -c '^## ' "$ib")" = 12 ] &&
+  [ "$(grep -n -e '^held$' -e 'after a held lock' "$ib" | cut -d: -f2 | tr '\n' ' ')" = "held after a held lock " ] ||
+  { echo "inbox add while the lock is held"; cat "$ib"; exit 1; }
+(hold 30) & h=$!; held; kill "$h"; wait "$h" 2>/dev/null || :; s=$SECONDS
+printf 'after a killed holder' | as "$z" --inbox-add >/dev/null && [ "$(grep -c '^## ' "$ib")" = 13 ] && [ $((SECONDS - s)) -lt 20 ] ||
+  { echo "inbox add after a killed holder"; exit 1; }
+rmdir "$ib.lock"; rm -f "$ib.held"
 as "$x" --inbox --read all >/dev/null
 [ "$(as "$o" --successor --done; echo $?)" = "$(printf 'you still hold "p-coordinator": rename first (name_session with what --prev-name prints)\n3')" ] &&
   ! as "$o" --await renamed --timeout 1 >/dev/null || { echo "--successor --done or --await renamed before the rename"; exit 1; }

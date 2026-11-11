@@ -265,6 +265,26 @@ check "cat > $tmp/t.sh <<'EOF'
 gh pr merge 5 -R acme/app
 $bb pr merge 5 --repo app
 EOF" pass "heredoc written to a file"
+check "/home/u/p/skills/orchestrating-sessions/session-status --inbox-add --from 'w (12345678), forwarded' <<'EOF'
+Approved: gh pr merge 5 -R acme/app
+EOF" pass "heredoc forwarded to the inbox"
+check "printf '%s' 'Approved: gh pr merge 5 -R acme/app' | /home/u/p/skills/orchestrating-sessions/session-status --inbox-add" pass "text piped to the inbox"
+check "/tmp/x/session-status --inbox-add 'gh pr merge 5 -R acme/app'" deny "another script named session-status"
+check "/home/u/p/skills/orchestrating-sessions/session-status --inbox-add <<EOF
+\$(gh pr merge 5 -R acme/app)
+EOF" deny "\$(…) in an unquoted heredoc to the inbox"
+check "cat > $tmp/t.md <<EOF
+\`gh pr merge 5 -R acme/app\`
+EOF" deny "backticks in an unquoted heredoc cat writes"
+check "cat > $tmp/t.md <<EOF
+gh pr merge 5 -R acme/app
+EOF" pass "unquoted heredoc with no \$( or backtick"
+check "/home/u/p/skills/orchestrating-sessions/session-status --inbox-add <<'EOF' | bash
+gh pr merge 99 -R acme/app
+EOF" deny "inbox add piped into bash"
+check "/home/u/p/skills/orchestrating-sessions/session-status --inbox <<'EOF'
+gh pr merge 99 -R acme/app
+EOF" deny "heredoc into session-status without --inbox-add"
 check "cat <<'EOF' | bash
 gh pr merge 99 -R acme/app
 EOF" deny "heredoc a shell runs"

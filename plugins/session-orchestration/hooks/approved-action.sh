@@ -20,7 +20,7 @@
 # gh counts as a call where a command starts; its words must be plain (no variable, $(…), alias or xargs), or it is
 # denied (asked, when attended). A post or merge it can't find as a call (inside bash -c, a heredoc a shell reads) is
 # denied too: post from a file. A command that only mentions one (a grep pattern, a commit message, a prompt, a
-# heredoc cat writes to a file) passes when every command in it is on an allowlist of ones that never run their text
+# heredoc cat writes to a file or session-status --inbox-add stores) passes when every command in it is on an allowlist of ones that never run their text
 # (SAFE); read-only calls (gh pr view, gh api GET, an inline graphql query) pass too.
 # ponytail: a text check, not a sandbox: a file one call writes (a script, a git hook) can run its text in a later
 # call this hook never links to it. Gate at execution (a wrapper for gh and the CLIs on PATH) if that matters.
@@ -121,6 +121,8 @@ function safe(u, cat,   n, seg, x, m, w, y, t) {
       if (w[y] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) return 0
       t = w[y]; break }
     if (t == "") continue
+    # it stores its stdin as an inbox message (a forwarded worker message), never runs it
+    if (t ~ /\/skills\/orchestrating-sessions\/session-status$/ && w[y + 1] == "--inbox-add") continue
     if (cat && t != "cat") return 0
     if (t == "npx") { for (y++; w[y] == "-y" || w[y] == "--yes"; y++); t = w[y]; sub(/@[^@\/]*$/, "", t); sub(/^@[^\/]*\//, "", t)
       if (t !~ /^(bitbucketdc|forgejo|jiradc|msgraph)-cli$/) return 0 }
@@ -132,10 +134,10 @@ function safe(u, cat,   n, seg, x, m, w, y, t) {
     if (!index(SAFE, " " t " ")) return 0 }
   return 1 }'
 awkv=(-v "SAFE=$SAFE" -v "PRE= env command time nohup rtk proxy then do else ! { } if elif while until done fi esac " -v "Q='")
-# Heredoc bodies (cat > f <<EOF … EOF) are text, not commands: dropped when nothing but cat runs in the command
+# Heredoc bodies (cat > f <<EOF … EOF) are text, not commands: dropped when nothing but cat (or session-status --inbox-add) runs in the command
 # without them; else the command is printed whole, its bodies unlexed, and the first line says 1 (opaque: the scan below
 # reads it all). A << inside quotes, in (( )) arithmetic, in a <<< here-string or on a line going on with \, or with
-# no terminator, isn't taken as a heredoc.
+# no terminator, or with an unquoted delimiter and a $( or ` in its body, isn't taken as a heredoc.
 cmd=$(printf '%s\n' "$cmd" | awk "${awkv[@]}" "$awklib"'
   { L[NR] = $0 } END { i = 1; LQ = ""; q = ""; n = 0; cut = 0
     while (i <= NR) { line = L[i++]
@@ -145,6 +147,8 @@ cmd=$(printf '%s\n' "$cmd" | awk "${awkv[@]}" "$awklib"'
       h = substr(u, RSTART + 2, RLENGTH - 2); dash = h ~ /^-/; gsub(/[- \t]/, "", h)
       for (k = i; k <= NR; k++) { t = L[k]; if (dash) sub(/^\t+/, "", t); if (t == h) break }
       if (k > NR) continue
+      # the body of an unquoted delimiter runs its $(…) and backticks (char 96): read as commands
+      if (!match(line, "<<-?[ \t]*[\"\\\\" Q "]")) { for (x = i; x < k && L[x] !~ /\$\(/ && !index(L[x], sprintf("%c", 96)); x++); if (x < k) continue }
       for (; i <= k; i++) { O[++n] = L[i]; B[n] = 1 }
       cut = 1 }
     d = ""; if (cut) for (x = 1; x <= n; x++) if (!B[x]) d = d O[x] "\n"

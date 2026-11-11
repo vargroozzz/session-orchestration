@@ -435,23 +435,14 @@ inbox_unread() {   # the unread entries, heading and text, oldest first
   local f; f=$(inbox_file) && [ -f "$f" ] || return 0
   awk '/^## [0-9]+ · / { on = index($0, " · unread · ") > 0 } on' "$f"
 }
-# inbox_lock FILE: an add and a --read's rewrite never interleave (an add between the read and the mv was lost). The lock
-# holds its owner's pid: a waiter takes it over once that process is gone (a killed run), or, with no pid yet (just
-# made, or an older version's lock), once it is 5s old. A live owner is waited for: a busy CI runner kept the last of
-# five waiting past 5s, which broke a held lock. After a minute it is taken over anyway, so a message is never dropped.
-# shortcut: two waiters that both see a dead owner can race the takeover; a flock would close that if it shows up
+# inbox_lock FILE: an add and a --read's rewrite never interleave (an add between the read and the mv was lost; two adds
+# took one number). A flock(2) on FILE.flock, held on fd 9 until this process exits, so a killed run frees it at once:
+# the old mkdir lock's stale-owner takeover let two waiters in together. perl takes it (no flock CLI on macOS); the lock
+# is on the open file, which this shell keeps after perl exits. The file stays: unlinking it would let a waiter lock a
+# file nobody else sees. After a minute it goes on unlocked, so a hung holder never drops a message.
 inbox_lock() {
-  INBOX_LOCK=$1.lock; local i p t
-  for i in $(seq 600); do
-    mkdir "$INBOX_LOCK" 2>/dev/null && break
-    p=$(cat "$INBOX_LOCK/pid" 2>/dev/null)
-    if [ -n "$p" ]; then kill -0 "$p" 2>/dev/null || rm -rf "$INBOX_LOCK"
-    else t=$(mtime "$INBOX_LOCK" 2>/dev/null) && [ $(( $(date +%s) - t )) -gt 5 ] && rm -rf "$INBOX_LOCK"; fi
-    [ "$i" -lt 600 ] || { rm -rf "$INBOX_LOCK"; mkdir -p "$INBOX_LOCK"; break; }
-    sleep 0.1
-  done
-  echo $$ > "$INBOX_LOCK/pid"
-  trap 'rm -rf "$INBOX_LOCK"' EXIT
+  exec 9>>"$1.flock" && perl -MFcntl=:flock -e 'alarm 60; open(my $l, ">>&=", 9) or exit 1; flock($l, LOCK_EX) or exit 1' ||
+    echo "session-status: couldn't lock $1; going on unlocked" >&2
 }
 if [ "${1:-}" = --inbox-add ]; then
   shift; from=; [ "${1:-}" = --from ] && { from=${2:-}; shift 2; }
