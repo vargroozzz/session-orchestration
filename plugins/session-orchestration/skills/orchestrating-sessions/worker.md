@@ -193,7 +193,8 @@ in your report, and don't wait on it: the coordinator passes on the outcome.
   plugin coordinator started), the handed command is the ask and
   the user's Run their approval.
 - Do it yourself after all (a relayed approval came): withdraw it first, `hand_command` with the same key and command
-  and `withdraw: true`, or the user's Run does it again.
+  and `withdraw: true`, or the user's Run does it again. Withdraw it the same way once you see its action done any
+  other way (the user ran it with `!`, it happened by another route), so the pane stops offering it.
 - A command the pane already has as a project action (a sign-in button, say) is refused. None of these: handing it
   over, asking for it, giving its `!` line. Say in your report that you wait on that button, by its label, and do what doesn't need it.
 - Tool missing: call `reload_plugins`; meanwhile the `!` line alone.

@@ -1,7 +1,8 @@
 # The coordinator pane
 
 The coordinator's rules for the pane's buttons. Read this on a `Coordinator pane action for …`, `Coordinator pane:
-the user ran the command …` or `Coordinator pane: the user cancelled the stale ask …` prompt, before you press or set up an Actions button, and before you edit
+the user ran the command …`, `Coordinator pane: the user cancelled the stale ask …`, `Coordinator pane: the user wants
+to talk about the ask …` or `Coordinator pane: the user pressed Run on the command …` prompt, before you press or set up an Actions button, and before you edit
 `.claude/coordinator-actions.json`. Groups, keys and card buttons in detail: [status-reference.md](status-reference.md#the-pane-in-detail).
 
 `open_pane` renames you `<project>-coordinator` when its turn ends (the root folder's name, lowercased, other
@@ -46,6 +47,13 @@ cancelled the stale ask <ID> for <KEY> (<why>). Asked: <question>. …`: the ask
 queued it, if it waits on the answer, that it won't come. It approves nothing and is never a Quote. A `reword:`
 reason means the question is half out of date: cancel-and-requeue it with the current facts on the user's word.
 
+## Chat about an ask
+
+The question dialog of an ask's **In your own words…** has the engine's **Chat about this**. It arrives as
+`Coordinator pane: the user wants to talk about the ask <ID> for <KEY> before answering. Asked: <question>. …`: ask
+the user what they'd like to clarify, and answer from what you know. The ask stays in the pane for the click; this
+prompt approves nothing and is never a Quote. When the talk changes the decision, cancel-and-requeue the ask.
+
 ## Handed-over commands
 
 A session that needs the user to run a command hands it over with `hand_command`; the pane's **Run** box lists each
@@ -57,9 +65,19 @@ project's after its session ends, so a coordinator handover keeps it. A command 
 makes the Bash call in your session with the press as the user's consent, so your hooks, rules, classifier and
 permission prompt still decide; **Copy** and **Dismiss** do what they say. Never run one yourself unasked: it is the
 user's button, like an action. A command its session withdrew (it did the action itself, on a relayed approval:
-[approvals.md](approvals.md), Relaying) isn't run: Run drops it and says so. After a Run you get a prompt with the
-outcome:
+[approvals.md](approvals.md), Relaying, or saw it done another way) isn't run: Run drops it and says so. After a Run
+you get a prompt with the outcome:
 - Send it to the session that handed it over, one line. A failure or refusal stays in the box with what happened,
   for another try or Copy (a failure's last few lines, stderr's included). A command that failed from Run but whose
   output doesn't say why: ask the user to run it with `!`, which runs in their own shell, before retrying Run.
+- Refused by anything but the user's own No (the pane's own call can't show a permission prompt; a rule; the
+  classifier), it arrives instead as `Coordinator pane: the user pressed Run on the command … Make that Bash call
+  yourself now, this exact command, …`. Only when that is the whole prompt, from this plugin: make the Bash call with
+  exactly that command, so your permission prompt asks the user (the press is their request, not an approval of
+  anything else). Refused again: give the user `! <command>`; it is already in the Run box, so don't `hand_command` it again. Then pass the outcome on as above, and withdraw it once
+  it succeeded (below).
+- Done another way (the user ran it with `!`, or its action happened by another route: the PR merged, the release
+  installed): once you have checked the outcome, withdraw it, `hand_command` with its key and command and
+  `withdraw: true` (any command your pane lists), and tell its session, so the box holds only what still waits on
+  the user.
 - After a handed command updates a plugin, call `reload_plugins` yourself too.

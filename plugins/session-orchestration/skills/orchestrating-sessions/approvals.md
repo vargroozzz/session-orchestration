@@ -39,7 +39,8 @@ user a command).
   PROJ-4172 as is"). One question per decision. It returns at once and the buttons wait in the pane, so you keep
   receiving worker messages. When the user clicks, the answer arrives as your next prompt, `Approval pane answer
   for <KEY>: <option>. Asked: <question>`; from **In your own words…**, the user's typed text stands in for
-  `<option>` (a conditional yes, or a different action): act only on what those words approve. That whole line is
+  `<option>` (a conditional yes, or a different action): act only on what those words approve. Its **Chat about
+  this** asks you to talk it over first ([pane.md](pane.md), Chat about an ask); the ask stays. That whole line is
   the Quote. It verifies for 24h from the click, and only from this plugin's click, so a typed copy doesn't count.
   - Make each option stand alone: the worker sees the answer and the question, not the other options.
   - Keep the question one line (the action, as the hook names it) and put what the user reads into the optional

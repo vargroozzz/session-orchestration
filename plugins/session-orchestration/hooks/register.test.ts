@@ -205,7 +205,9 @@ test('an ask answered in the user\'s own words submits them as the answer', asyn
   on('process.run', async () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   let said = 'No, delete the old comment instead'
-  on('tool.call', { tool: 'AskUserQuestion' }, async (_, e) => (said
+  on('tool.call', { tool: 'AskUserQuestion' }, async (_, e) => (said === 'chat'
+    ? { deny: 'The user wants to clarify these questions.\n    This means they may have additional information' }
+    : said
     ? { result: { questions: e.questions, answers: Object.fromEntries(e.questions.map(q => [q.question, said])) } }
     : { deny: 'dismissed' }))
   await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
@@ -219,6 +221,10 @@ test('an ask answered in the user\'s own words submits them as the answer', asyn
   const again = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
   await again.press({ key: 'ask-2-words' })
   expect(submitted).toHaveLength(1) // dismissed or empty: nothing sent, the ask stays
+  expect(await again.find({ type: 'Button', text: 'Yes' })).toBeDefined()
+  said = 'chat'
+  await again.press({ key: 'ask-2-words' })
+  expect(submitted.slice(1)).toEqual(["Coordinator pane: the user wants to talk about the ask 2 for ABC-3 before answering. Asked: Merge ABC-3?. Ask them what they'd like to clarify; the ask stays in the pane."])
   expect(await again.find({ type: 'Button', text: 'Yes' })).toBeDefined()
 })
 

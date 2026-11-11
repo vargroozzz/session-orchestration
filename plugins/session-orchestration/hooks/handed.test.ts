@@ -2,7 +2,7 @@ import type { On, ToolCallResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HANDED_TTL, handedId, handedProblem, onYouOf, parseHanded, ranText, runConsent, runTail, sameCommand } from './register'
+import { HANDED_TTL, handedId, handedProblem, onYouOf, parseHanded, ranText, retryText, runConsent, runTail, sameCommand, USER_NO } from './register'
 
 const PANE = { plugin: 'session-orchestration', component: 'Pane', requestId: 'coordinator' } as const
 const PROPS = { title: 'Coordinator', isFocused: false, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as const
@@ -190,9 +190,32 @@ test('a refused Run keeps the command with what happened, for another try or Cop
   expect(await ui.find({ type: 'Text', text: "handed over under /h/.claude-work; it runs under this session's" })).toBeDefined()
   await ui.press({ key: `hrun-${h.id}` })
   expect(rm).toEqual([])
-  expect(prompts).toEqual([ranText(h, false, 'refused: Permission denied by the user')])
+  expect(prompts).toEqual([ranText(h, false, 'refused: Permission denied by the user')]) // the user's own No: no retry
   expect(await ui.find({ type: 'Text', text: 'last run: refused: Permission denied by the user' })).toBeDefined()
   await ui.press({ key: `hdrop-${h.id}` })
   expect(rm).toEqual([`${DIR}/${h.id}.json`])
+  await ui.unmount()
+})
+
+test('a Run refused for want of a permission prompt asks the coordinator to make the call, where the prompt shows', async ($, on) => {
+  const h = { id: 'c'.repeat(16), key: 'PROJ-2', session: 'sess-5678', cwd: '/w', account: '', command: 'make land-5', what: 'Lands it', at: 9000 }
+  const { ui, rm, prompts } = await pane($, on, [h], () => ({ deny: 'needs a person approval, which a mod\'s own call cannot ask for' }))
+  await ui.press({ key: `hrun-${h.id}` })
+  expect(rm).toEqual([])
+  expect(prompts).toEqual([retryText(h, 'refused: needs a person approval, which a mod\'s own call cannot ask for')])
+  expect(prompts[0]).toContain('Make that Bash call yourself now, this exact command, so your permission prompt asks the user: make land-5.')
+  expect(USER_NO.test("The user doesn't want to proceed with this tool use.")).toBe(true)
+  await ui.unmount()
+})
+
+test('the coordinator withdraws a command its pane lists once it is done another way; a command it does not list finds nothing', async ($, on) => {
+  const h = { id: '7'.repeat(16), key: 'PROJ-5', session: 'sess-5', cwd: '/w', account: '', command: 'make land-7', what: 'Lands it', at: 9000 }
+  const { ui, rm } = await pane($, on, [h], () => ({ result: '' }))
+  expect(await ui.find({ type: 'Text', text: '! make land-7' })).toBeDefined()
+  const call = (key: string, command: string) => $.tool.call({ tool: 'mcp__session-orchestration__hand_command', key, command, withdraw: true })
+  expect(String((await call('PROJ-5', 'make land-8')).result)).toContain('Nothing to withdraw')
+  expect(String((await call('PROJ-5', 'make land-7')).result)).toContain('Withdrawn from the pane (handed over by sess-5)')
+  expect(rm).toContain(`${DIR}/${h.id}.json`)
+  expect(await ui.find({ type: 'Text', text: '! make land-7' })).toBeUndefined()
   await ui.unmount()
 })

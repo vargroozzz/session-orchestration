@@ -117,6 +117,12 @@ export const answerText = (a: Ask, option: string) =>
   `Approval pane answer for ${a.key}: ${oneLine(option)}. Asked: ${oneLine(a.question)}`
 // An item's Ask button. Never starts "Approval pane answer for ", so verify-approval.sh never takes it.
 export const askText = (about: string) => `Coordinator pane: where does ${about} stand, and what's next? Answer briefly.`
+// The question dialog's "Chat about this": the user wants to talk the ask over first. Never starts "Approval pane answer
+// for ": nothing is approved, and the ask stays. Keep in sync with pane.md.
+export const chatText = (a: Ask) =>
+  `Coordinator pane: the user wants to talk about the ask ${a.id} for ${a.key} before answering. Asked: ${oneLine(a.question)}. Ask them what they'd like to clarify; the ask stays in the pane.`
+// The dialog's rejection for "Chat about this" (AskUserQuestion's respond-to-Claude); any other is a dismissal.
+export const isChatAbout = (err: unknown) => /clarify these questions/i.test(err instanceof Error ? err.message : String(err))
 // A stale ask's Cancel. Never starts "Approval pane answer for ": not an answer, nothing is approved.
 export const cancelText = (a: Ask, why: string) =>
   `Coordinator pane: the user cancelled the stale ask ${a.id} for ${a.key} (${why}). Asked: ${oneLine(a.question)}. Don't act on it; tell a session waiting on it.`
@@ -855,7 +861,7 @@ const HAND_SCHEMA = {
     key: { type: 'string', description: 'Your task key, e.g. PROJ-123 (no ticket: your 3-5 word task name joined by -)' },
     command: { type: 'string', maxLength: COMMAND_MAX, description: 'The command, one line, exactly as the user would type it after `!`, e.g. make release' },
     what: { type: 'string', maxLength: 200, description: 'One line on what it does and why you can\'t run it, e.g. "Pushes main and publishes the release"' },
-    withdraw: { type: 'boolean', description: 'true: take back the command you handed over with this key and command (you are doing it yourself, e.g. on a relayed approval), so the pane\'s Run can\'t do it again' },
+    withdraw: { type: 'boolean', description: 'true: take back the command handed over with this key and command (what may be left out) once its action is done any other way (you did it on a relayed approval, the user ran it with `!`, it happened by another route), so the pane stops offering it; what as handed. A session withdraws its own; the coordinator, its pane open, any its pane lists, once it has checked the outcome' },
   },
   required: ['key', 'command', 'what'],
 }
@@ -1073,6 +1079,12 @@ export const runConsent = (h: Handed) => `The user pressed "Run" in the coordina
 // result, it approves nothing.
 export const ranText = (h: Handed, ok: boolean, line: string) =>
   `Coordinator pane: the user ran the command session ${h.session.slice(0, 8)} handed over for ${h.key} (${h.what}); it ${ok ? 'succeeded' : 'failed'}${line ? `: ${line}` : ''}. Command: ${h.command}. Pass it on per pane.md (Handed-over commands).`
+// The user's own No on the permission prompt; any other refusal (no prompt shown, a rule, the classifier) is retried.
+export const USER_NO = /by the user|user doesn't want to proceed/i
+// A refused Run, for the coordinator's own Bash call, whose permission prompt can ask the user. Not asUser; keep in
+// sync with pane.md (Handed-over commands).
+export const retryText = (h: Handed, line: string) =>
+  `Coordinator pane: the user pressed Run on the command session ${h.session.slice(0, 8)} handed over for ${h.key} (${h.what}), and the pane's own call was ${line}. Make that Bash call yourself now, this exact command, so your permission prompt asks the user: ${h.command}. Then per pane.md (Handed-over commands).`
 
 // Handed commands this pane removed, with when it handed them: a read that raced the removal can't bring one back,
 // while the same command handed again later (a newer `at`) shows.
@@ -1137,8 +1149,9 @@ export function runTail(text: string, stderr: string, ok: boolean) {
 }
 // Run: the Bash call in this session, with the press as consent. Succeeded: the file goes; refused or failed: it
 // stays with the outcome, for another Run or Copy. One Run per command at a time. A file gone since the last read
-// was withdrawn by its session (it did the action itself, on a relayed approval) or run from another pane: not run,
-// so nothing is done twice.
+// was withdrawn (by its session or a coordinator, once its action was done) or run from another pane: not run, so
+// nothing is done twice. Refused by anything but the user's own No (a mod's own call can't show a permission prompt):
+// the coordinator is asked to make the call itself, where the prompt shows.
 async function runHanded($: EngineInterface, h: Handed) {
   let free = false
   await update($, handed, l => l.map((x): Handed => {
@@ -1149,14 +1162,16 @@ async function runHanded($: EngineInterface, h: Handed) {
   if (!free) return
   if (!(await $.fs.exists(`${await handedDir($)}/${h.id}.json`).catch(() => true))) {
     const at = new Date(await $.clock.now()).toTimeString().slice(0, 5)
-    await update($, handedResult, () => ({ label: `${h.key}: ${h.what}`, ok: false, line: 'not run: it is gone (its session withdrew it, or another pane ran it)', at }))
+    await update($, handedResult, () => ({ label: `${h.key}: ${h.what}`, ok: false, line: 'not run: it is gone (withdrawn once done, or another pane ran it)', at }))
     return dropHanded($, h)
   }
-  let ok = false, line = ''
+  let ok = false, line = '', retry = false
   try {
     const r = await $.tool.call({ tool: 'Bash', command: h.command, description: h.what, timeout: 600_000, consent: runConsent(h) })
-    if (r.deny !== undefined) line = `refused: ${oneLine(r.deny)}`
-    else {
+    if (r.deny !== undefined) {
+      line = `refused: ${oneLine(r.deny)}`
+      retry = !USER_NO.test(r.deny)
+    } else {
       ok = !r.isError
       const res = r.result
       const stderr = typeof res === 'object' && res !== null && 'stderr' in res && typeof res.stderr === 'string' ? res.stderr : ''
@@ -1169,7 +1184,7 @@ async function runHanded($: EngineInterface, h: Handed) {
   await update($, handedResult, () => ({ label: `${h.key}: ${h.what}`, ok, line, at }))
   if (ok) await dropHanded($, h)
   else await update($, handed, l => l.map(({ running, ...x }): Handed => (x.id === h.id ? { ...x, outcome: line || 'failed' } : { ...x, ...(running ? { running } : {}) })))
-  await $.prompt.submit({ text: ranText(h, ok, line) })
+  await $.prompt.submit({ text: retry ? retryText(h, line) : ranText(h, ok, line) })
 }
 
 // Makes an idle background session run /compact (session-status --compact: stop, then resume it with /compact),
@@ -1473,9 +1488,20 @@ export const register: Register = on => {
       const id = await handedId(session, String(command))
       const file = `${await handedDir($)}/${id}.json`
       const h = await $.fs.read(file).then(parseHanded, () => undefined)
-      if (!h || h.session !== session || h.key !== key) return { result: `Nothing to withdraw: you have no handed command "${String(command)}" under ${String(key)}.` }
-      await $.process.run(['rm', '-f', file])
-      return { result: `Withdrawn (id ${id}): the pane no longer offers it.` }
+      if (h && h.session === session && h.key === key) {
+        if (timer) await dropHanded($, h)
+        else await $.process.run(['rm', '-f', file])
+        return { result: `Withdrawn (id ${id}): the pane no longer offers it.` }
+      }
+      // The coordinator, its pane open: every command its pane lists under key whose action it saw done another way (the
+      // user's `!`, a release by another route), as its file has it now (a newer hand-over of it is the one withdrawn).
+      const listed = timer ? (await read($, handed)).filter(x => x.key === key && x.command === command) : []
+      const dir = await handedDir($)
+      const now = (await Promise.all(listed.map(x => $.fs.read(`${dir}/${x.id}.json`).then(parseHanded, () => undefined))))
+        .filter((x): x is Handed => !!x && x.key === key && x.command === command)
+      for (const x of now) await dropHanded($, x)
+      if (now.length) return { result: `Withdrawn from the pane (handed over by ${now.map(x => x.session.slice(0, 8)).join(', ')}): tell ${now.length > 1 ? 'those sessions' : 'that session'} it is done.` }
+      return { result: `Nothing to withdraw: you have no handed command "${String(command)}" under ${String(key)}${timer ? ', and the pane lists none' : ''}.` }
     }
     const bad = handedProblem(key, command, what)
     if (bad) return { deny: `hand_command: ${bad}.` }
@@ -1486,7 +1512,7 @@ export const register: Register = on => {
       account: await accountOf($), command: String(command), what: String(what), at: await $.clock.now(),
     }
     await $.fs.write(`${await handedDir($)}/${h.id}.json`, JSON.stringify(h))
-    return { result: `Handed to the user in the coordinator pane under ${h.key} (id ${h.id}). Also give them \`! ${h.command}\` in your report. Don't wait on it or run it yourself.` }
+    return { result: `Handed to the user in the coordinator pane under ${h.key} (id ${h.id}). Also give them \`! ${h.command}\` in your report. Don't wait on it or run it yourself; once you see its action done any way, withdraw it (withdraw: true).` }
   })
 
   // Each account's 7-day reading, for session-status's weekly use and warning (lib.sh weekly_use): any session on
@@ -1719,9 +1745,15 @@ export const register: Register = on => {
       await dropAsks($, same)
     }
     // A conditional or redirected answer ("no, delete the old one instead") in one round: the question dialog, its
-    // options plus Other for the user's own words, submitted like a click. Dismissed: nothing is sent.
+    // options plus Other for the user's own words, submitted like a click. Dismissed: nothing is sent. Chat about this:
+    // the coordinator is asked to talk it over, and the ask stays.
     const answerInWords = (a: Ask) => async () => {
-      const said = await $.ui.ask(`${oneLine(a.question).replace(/\?*$/, '')}?`, { options: a.options, header: 'Approval' }).catch(() => '')
+      const said = await $.ui.ask(`${oneLine(a.question).replace(/\?*$/, '')}?`, { options: a.options, header: 'Approval' }).catch(async (err: unknown) => {
+        if (!isChatAbout(err)) return ''
+        const r = await $.prompt.submit({ text: chatText(a) }).catch((e: unknown) => ({ drop: e instanceof Error ? e.message : String(e) }))
+        if (r.drop !== undefined) $.ui.toast(`Chat about this wasn't sent (${r.drop}); the ask is still in the pane.`)
+        return ''
+      })
       const words = oneLine(clean(said)).trim()
       if (words) await answer(a, words)()
     }
