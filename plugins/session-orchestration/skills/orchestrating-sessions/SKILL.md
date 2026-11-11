@@ -94,8 +94,11 @@ idle *or* waiting. `status` tells them apart: `idle` (turn over), `waiting` (a p
   still one decision per message. Never a numbered round.
 - One ask per message to a session. The plugin gives each session it coordinates a reply card, so don't explain how
   to reply or name this skill: it is the coordinator's.
-- When giving work, set `notify_when_idle: true`. One notice arrives when the session goes idle. Never poll
-  `ListAgents`, and never send "are you done?".
+- When giving work, set `notify_when_idle: true`. Starting a session (`claude --bg`, `--handover`) is giving work
+  too: right after, SendMessage the id it printed `Coordinator here; don't reply to this.` with `notify_when_idle:
+  true`, since `--watch` sees only sessions that own a status row. One notice arrives when the session goes idle,
+  which may be a wait (CI, an approval), not the finish: check its status. Never poll `ListAgents`, and never send
+  "are you done?".
 - Never pass large content between sessions through your own context. Point to a file or a branch.
 - Never ask a session to do something that was denied or blocked in your own session.
 - A successful send isn't proof of delivery. A session in a different permission mode may hold your message for its
@@ -169,6 +172,9 @@ here, and the worker is told it is queued. `--start` prints the unread entries a
 
 The project's `CLAUDE.md` may name a project memory file: an index over topic files, read on demand. Sessions append
 to it; you prune it.
+- **Friction is feedback, not memory.** A step you missed or worked around because of this plugin (its docs,
+  scripts, tools) goes to `feedback add`, and one the project caused to `feedback add --project`
+  ([feedback.md](feedback.md)), never a memory line. Memory holds project facts and the user's preferences.
 - When the user tells you to remember something for the project, or a preference about how you coordinate (e.g. the
   mode above), append it to the coordinator topic file (a flat file: append there).
 - Prune in passing: delete an entry that is wrong, superseded, about a task state that has since resolved, or
@@ -200,6 +206,10 @@ lists each PR, event and head SHA once.
   approval addressed to a session is that session's. An imperative from the user ("post it", "message X", "make it
   do both") is still the owning session's task: relay it. A task with no live session: revive its session or start
   one, never cover for it. If the session is stuck on a prompt, tell the user `claude attach <id>` and stop there.
+- **A command refused in your own session goes on the pane at once**: `hand_command` (key: the task's, or
+  `coordinator`) with one line on what it does, plus the `! <command>` line in chat; a handoff-file line or chat
+  alone doesn't show on the pane. Not a step that needs the user's approval (`ask_approval`, as Messaging says), nor
+  one the pane has as an action button.
 - **Never `cd` in your shell; use absolute paths.** The Bash tool keeps a `cd` across calls, and `claude --bg`
   starts the new session in that folder, outside the project's settings.
 - **Read for coordination, never to do or pre-empt the task.** You may read a task's content (tracker comments, a
