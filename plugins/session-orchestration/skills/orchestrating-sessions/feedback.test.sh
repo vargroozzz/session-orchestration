@@ -151,6 +151,21 @@ mkdir -p "$T/other-proj/.claude" && echo '{}' > "$T/other-proj/.claude/coordinat
 (cd "$T/other-proj" && "$FB" add features 'Привіт' --where lib.sh --found f --evidence e --new) | grep -q -- '-case\.md$' || fail "empty slug"
 printf '# x\n- in other-proj\n' > "$dirty"
 grep -qF ': names a local name:' <<<"$("$FB" scrub "$dirty")" || fail "scrub missed a project a case was added in"
+# A worktree inside its checkout is that checkout: its feature name passes, the project's name and a key in it don't.
+git worktree add -q .claude/worktrees/frobnicate 2>/dev/null || fail "inner worktree setup"
+mkdir -p .claude/worktrees/frobnicate/.claude && echo '{}' > .claude/worktrees/frobnicate/.claude/coordination.local.json   # its own root
+printf '# x\n- adds features/frobnicate.md\n' > "$dirty"
+(cd .claude/worktrees/frobnicate && "$FB" scrub "$dirty" >/dev/null) || fail "scrub flagged a worktree's feature name"
+printf '# x\n- adds features/wt-out.md\n' > "$dirty"
+(cd "$T/wt-out" && "$FB" scrub "$dirty" >/dev/null) || fail "scrub flagged an outside worktree's name"
+# The worktree's own config still counts; a set-up subfolder that isn't a worktree keeps its name.
+echo '{"chat": "zorblax-room"}' > .claude/worktrees/frobnicate/.claude/coordination.local.json
+printf '#!/bin/sh\nexit 1\n' > .claude/worktrees/frobnicate/.claude/session-status-adapter   # config counts with an adapter
+chmod +x .claude/worktrees/frobnicate/.claude/session-status-adapter
+mkdir -p quuxpkg/.claude && echo '{}' > quuxpkg/.claude/coordination.local.json
+printf '# x\n- in zorblax-room\n- in quuxpkg\n' > "$dirty"
+o=$(cd .claude/worktrees/frobnicate && "$FB" scrub "$dirty"; cd "$T/acme-widgets/quuxpkg" && "$FB" scrub "$dirty")
+grep -qF ':2: names a local name:' <<<"$o" && grep -qF ':3: names a local name:' <<<"$o" || fail "scrub from a worktree: $o"
 
 # usage (lib.sh): nothing with telemetry off (the default); with local, fixed names only.
 U=$XDG_STATE_HOME/session-orchestration/usage.jsonl LIB=${FB%/skills/*}/lib.sh

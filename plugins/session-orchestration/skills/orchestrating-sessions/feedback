@@ -156,10 +156,17 @@ scrub)
   # Cases come from every project, so every project root a case was added in or this person's sessions ran in adds to it.
   roots=$({ pwd -P; cat "$DIR/.roots" 2>/dev/null; list_sessions --all 2>/dev/null | cut -f6; } | sort -u | while read -r d; do
     [ -d "$d" ] && (cd "$d" && find_root); done | sort -u)
+  # A root at a linked worktree's top (.claude/worktrees/<feature>) is named for its work, not the project: its main
+  # checkout joins the roots, and the worktree keeps its config on the list but not its folder name (a key still hits).
+  # The worktree test is project-memory's `cases root`.
+  wts=$(while read -r d; do [ -n "$d" ] && (cd "$d" 2>/dev/null && t=$(git rev-parse --show-toplevel 2>/dev/null) &&
+    c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [ "$d" = "$t" ] && [ "${c##*/}" = .git ] &&
+    [ "${c%/.git}" != "$t" ] && printf '%s\t%s\n' "$d" "${c%/.git}"); done <<<"$roots")
+  roots=$(printf '%s\n%s\n' "$roots" "$(cut -f2 <<<"$wts")" | grep . | sort -u)
   echo '[A-Z][A-Z0-9]+-[0-9]+' > "$keys"   # session-status's default task key
   { echo "$HOME"; id -un; git config user.email; git config user.name
     while read -r d; do
-      [ -n "$d" ] || continue; echo "$d"; basename "$d"
+      [ -n "$d" ] || continue; echo "$d"; cut -f1 <<<"$wts" | grep -qxF -- "$d" || basename "$d"
       # Their remotes' owner and repo names, and each one's key pattern and the hosts its adapter talks to.
       git -C "$d" remote get-url origin 2>/dev/null | sed -E 's#\.git$##; s#.*[:/]([^/:]+)/([^/]+)$#\1\n\2#'
       (cd "$d" && config key_pattern 2>/dev/null) >> "$keys"

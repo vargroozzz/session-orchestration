@@ -92,7 +92,8 @@ Never apply without the user's yes for that batch.
    search and send nothing by `fork-pr` or `issue`.
 3. `feedback scrub FILE…`. Its deny list comes from every project root a case was added in or your sessions ran in (their names, remotes,
    key patterns, adapter hosts and config strings) plus your home, user and git identity; the plugin's own repo URL,
-   name and state paths never count. Any hit keeps that case local: show the user the line, and reword the case (in
+   name and state paths never count. A linked git worktree (`.claude/worktrees/<feature>`) adds its main checkout,
+   and its own folder name isn't a hit (its config still is, and so is a task key in it). Any hit keeps that case local: show the user the line, and reword the case (in
    plugin terms) or drop it (`feedback mark FILE dropped`). Never send a case with a hit.
 4. Send, by mode:
 
