@@ -116,6 +116,9 @@
 #        session-status --coordinator   names of this account's live coordinator sessions (ran --start,
 #                       --changes, --watch or --owner, or opened the pane), newest first, excluding the caller; no
 #                       tracker calls
+#        session-status --coordinator-of DIR [--start]   the coordinator of DIR's project when it's another than
+#                       this one (a subproject, the parent): its name; exit 1 not running (--start opens it), 3 listing
+#                       failed, 4 none of its own (--start opens a new one there), 5 nothing opened
 #        session-status --owner KEY…   who owns each task and why: the row's session, then each candidate
 #                       (first prompt, marker, review, maybe) with its state, first prompt line and markers
 #        session-status --handover ID|--self [--model M] [--effort E] [--] 'WHAT NEXT'   a task or chunk session too
@@ -396,6 +399,24 @@ if [ "${1:-}" = --open ]; then
 fi
 
 SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+# --coordinator-of DIR [--start]: the coordinator of the project DIR is in, when that is another than this one (a
+# subproject with its own adapter, or the parent above this one).
+if [ "${1:-}" = --coordinator-of ]; then
+  [ -n "${2:-}" ] && d=$(cd "$2" 2>/dev/null && pwd -P) && case ${3:-} in ''|--start) ;; *) false ;; esac ||
+    { echo "usage: session-status --coordinator-of DIR [--start]" >&2; exit 2; }
+  me=$(find_root) r=$(cd "$d" && find_root) own=1
+  [ "$d" != "$me" ] || { echo "$(tilde "$d") is this project's root: its coordinator is this one" >&2; exit 2; }
+  # None of its own: DIR's coordinator, when one was opened there and hasn't run setup yet.
+  [ "$r" != "$me" ] && is_root "$r" || { own= r=$d; }
+  n=$(coord_name "$r"); coord_live "$r"
+  case $? in 0) exit 0 ;; 1) ;; *) echo "an account's session listing failed, so whether $n runs is unknown: try again" >&2; exit 3 ;; esac
+  if [ "${3:-}" != --start ]; then
+    [ -z "$own" ] || { echo "$n ($(tilde "$r")) isn't running: --start opens it" >&2; exit 1; }
+    echo "$(tilde "$d") has no coordinator of its own: --start opens one there, whose setup asks the user to give it its own (--init --own)" >&2; exit 4
+  fi
+  coord_start "$r" || exit 5
+  exit 0
+fi
 ROOT=$(find_root); cd "$ROOT" || exit 1
 ENC=$(sed 's/[^A-Za-z0-9]/-/g' <<<"$ROOT")
 RESOLVED='Resolved (idle a week)'   # the pane's RESOLVED (hooks/register.tsx)

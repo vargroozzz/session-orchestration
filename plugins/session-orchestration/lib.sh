@@ -105,13 +105,16 @@ trusted() {
   return 1
 }
 
+# is_root DIR: DIR is a project root: it has an adapter, or the person file (a team workspace uses the team repo's
+# committed adapter).
+is_root() { [ -x "$1/.claude/session-status-adapter" ] || [ -f "$1/.claude/coordination.local.json" ]; }
 # find_root: the project root up from the cwd.
 find_root() {
   local d
   d=$(pwd -P)   # Claude names transcript dirs and reports cwd by the physical path
   # The root has an adapter, or the person file (a team workspace uses the team repo's committed adapter).
   while [ "$d" != / ]; do
-    { [ -x "$d/.claude/session-status-adapter" ] || [ -f "$d/.claude/coordination.local.json" ]; } && { echo "$d"; return; }
+    is_root "$d" && { echo "$d"; return; }
     d=$(dirname "$d")
   done
   git rev-parse --show-toplevel 2>/dev/null || pwd
@@ -122,6 +125,37 @@ plugin_root() { local d; d=$(config feedback.repo_dir 2>/dev/null) && [ -n "$d" 
 # slug TEXT: lowercase, each run of other characters one dash. A coordinator is named `$(slug FOLDER)-coordinator`
 # (register.tsx's nameCoordinator does the same).
 slug() { tr 'A-Z' 'a-z' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g'; }
+# coord_name ROOT: ROOT's coordinator name.
+coord_name() { echo "$(slug "$(basename "$1")")-coordinator"; }
+# coord_live ROOT: ROOT's coordinator, when it runs: a live session by its name in ROOT, under any account sharing
+# this transcript store (whatever this project's features.accounts says). Prints its name, and the account when it's
+# another (SendMessage reaches only its own). Never the caller (a subproject named like its parent). Exit 1: not
+# running; 3: not found, but an account's listing failed.
+coord_live() {
+  local TMP rc; TMP=$(mktemp -d) || return 3
+  load_module features accounts list_accounts 2>/dev/null
+  # No early exit in awk: list_sessions would die of SIGPIPE, and pipefail would fail a found one.
+  list_sessions | awk -F'\t' -v n="$(coord_name "$1")" -v r="$1" -v me="${CLAUDE_CODE_SESSION_ID:-}" '!f && $2 == n && $1 != me && $3 !~ /^(done|failed|stopped)$/ &&
+    ($6 == r || index($6, r "/") == 1) { f = 1; a = $4 }
+    END { if (!f) exit 1; print n (a == "claude" ? "" : ", under another account (" a "): SendMessage reaches it only from there") }'
+  rc=$?; [ "$rc" = 0 ] || [ ! -e "$TMP/ask.failed" ] || rc=3
+  rm -rf "$TMP"; return "$rc"
+}
+# coord_start ROOT: opens ROOT's coordinator in a terminal tab (config terminal), named already so others find it
+# before open_pane names it; prints what happened. Exit 1: nothing started (the command to run is printed).
+coord_start() {
+  local n out rc cmd
+  n=$(coord_name "$1")
+  # SESSION_STATUS_CLAUDE: the claude command, as for --successor (a dev build's `claude --plugin-dir DIR`).
+  cmd="${SESSION_STATUS_CLAUDE:-claude} -n $n 'Act as a coordinator'"
+  load_terminal; out=$(open_view "$n" "$1" "$cmd" 2>&1); rc=$?
+  case $rc in
+    0) [ "${out#reused}" = "$out" ] || { echo "a tab titled \"$n\" is open already ($out), so nothing started: close it, or run $cmd there"; return 1; }
+       echo "started $n in $(tilde "$1") ($out)" ;;
+    2) echo "no terminal opens it here (config terminal): run in a new terminal: cd $(printf %q "$1") && $cmd"; return 1 ;;
+    *) echo "opening it failed ($out): run in a new terminal: cd $(printf %q "$1") && $cmd"; return 1 ;;
+  esac
+}
 
 # adapter_path ROOT: the project's adapter: ROOT/.claude/session-status-adapter when executable, else the committed
 # one once trusted; prints nothing when there's neither. (The plugin's templates are what setup copies, not a

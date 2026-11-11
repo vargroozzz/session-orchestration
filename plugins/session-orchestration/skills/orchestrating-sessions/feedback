@@ -55,21 +55,6 @@ pdir() {
   local d; d=$(config feedback.project_dir 2>/dev/null)
   case $d in '') cases store ;; /*) echo "$d" ;; *) echo "$(cases root)/$d" ;; esac
 }
-# pc_name ROOT: ROOT's coordinator name (lib.sh slug).
-pc_name() { echo "$(slug "$(basename "$1")")-coordinator"; }
-# pc_live ROOT: the plugin coordinator, when it runs: a live session by its name in ROOT, under any account sharing
-# this transcript store (whatever this project's features.accounts says). Prints its name, and the account when it's
-# another (SendMessage reaches only its own). Exit 1: not running; 3: not found, but an account's listing failed.
-pc_live() {
-  local TMP rc; TMP=$(mktemp -d) || return 3
-  load_module features accounts list_accounts 2>/dev/null
-  # No early exit in awk: list_sessions would die of SIGPIPE, and pipefail would fail a found one.
-  list_sessions | awk -F'\t' -v n="$(pc_name "$1")" -v r="$1" '!f && $2 == n && $3 !~ /^(done|failed|stopped)$/ &&
-    ($6 == r || index($6, r "/") == 1) { f = 1; a = $4 }
-    END { if (!f) exit 1; print n (a == "claude" ? "" : ", under another account (" a "): SendMessage reaches it only from there") }'
-  rc=$?; [ "$rc" = 0 ] || [ ! -e "$TMP/ask.failed" ] || rc=3
-  rm -rf "$TMP"; return "$rc"
-}
 repo() { jq -r '.repository // empty | if type == "object" then .url else . end' "$PLUGIN_JSON" 2>/dev/null |
   sed -E 's#^(git\+)?https?://github\.com/##; s#\.git$##; s#/$##' | grep -E '^[^/ ]+/[^/ ]+$'; }
 
@@ -116,7 +101,7 @@ footer)
   else pr=; fi
   ! due "$s" || [ "$(cat "$s" 2>/dev/null)" = "$hour" ] || { p=$("$0" count --plugin)
     if [ -n "$p" ] && [ -n "$pr" ]; then
-      pc_live "$pr" >/dev/null; case $? in 1) ;; 0) p=; shown "$s" "$hour" ;; *) p= ;; esac   # unknown: the next sweep asks
+      coord_live "$pr" >/dev/null; case $? in 1) ;; 0) p=; shown "$s" "$hour" ;; *) p= ;; esac   # unknown: the next sweep asks
     fi
     [ -z "$p" ] || shown "$s"; }
   ! due "$P/.footer-shown" || { q=$("$0" count --project); [ -z "$q" ] || shown "$P/.footer-shown"; }
@@ -135,19 +120,11 @@ repo) repo || { echo "plugin.json names no GitHub repository" >&2; exit 1; } ;;
 coordinator)
   case ${2:-} in ''|--start) ;; *) die "usage: feedback coordinator [--start]" ;; esac
   r=$(plugin_root) || die "no plugin coordinator: config feedback.repo_dir is unset (features/plugin-coordinator.md)"
-  n=$(pc_name "$r"); pc_live "$r"
+  n=$(coord_name "$r"); coord_live "$r"
   case $? in 0) exit 0 ;; 1) ;; *) echo "an account's session listing failed, so whether $n runs is unknown: try again" >&2; exit 3 ;; esac
   [ "${2:-}" = --start ] || { echo "the plugin coordinator ($n) isn't running: feedback coordinator --start opens it" >&2; exit 1; }
-  # -n: other roots find it by that name before open_pane names it. SESSION_STATUS_CLAUDE: the claude command, as for
-  # --successor (a dev build's `claude --plugin-dir DIR`).
-  cmd="${SESSION_STATUS_CLAUDE:-claude} -n $n 'Act as a coordinator'"
-  load_terminal; out=$(open_view "$n" "$r" "$cmd" 2>&1); rc=$?
-  case $rc in
-    0) [ "${out#reused}" = "$out" ] || { echo "a tab titled \"$n\" is open already ($out), so nothing started: close it, or run $cmd there"; exit 1; }
-       echo "started $n in $(tilde "$r") ($out): it reads the open cases at its Start" ;;
-    2) echo "no terminal opens it here (config terminal): run in a new terminal: cd $(printf %q "$r") && $cmd"; exit 1 ;;
-    *) echo "opening it failed ($out): run in a new terminal: cd $(printf %q "$r") && $cmd"; exit 1 ;;
-  esac ;;
+  coord_start "$r" || exit 1
+  echo "it reads the open cases at its Start" ;;
 label) echo "$LABEL" ;;
 scrub)
   shift; [ $# -gt 0 ] || die "usage: feedback scrub FILE…"

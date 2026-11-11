@@ -48,6 +48,28 @@ Every coordinator session, before anything else; the user shouldn't have to ask.
 sessions whose `cwd` is inside the current project.** Filter the JSON by `cwd`: `ListAgents` gives the `name [ref]`
 you message but no `cwd`, and it lists the user's other projects too.
 
+## Subprojects
+
+A folder below the root with its own adapter is a project of its own, with its own coordinator; its sessions are
+that coordinator's, not yours. Before you start or message a session for work in a folder below the root, run
+`session-status --coordinator-of DIR`:
+- **It prints a name**: delegate. `SendMessage` it one line: `From the coordinator "<your name>": <the request, as
+  you'd brief a task session: what, why, done when>. Report back to me only its outcome, or a block I must resolve.`
+  Write one handoff entry (`delegated to NAME: <request>`) and track only that; resolve it when NAME reports. Never
+  start, message or resume that project's sessions yourself. A name `under another account`: SendMessage can't reach
+  it, so ask the user to tell it there.
+- **Exit 1** (not running): `--start` opens it, after the user's yes (exit 5: nothing opened; hand the user the
+  command it prints). SendMessage it the request once `--coordinator-of` names it.
+- **Exit 4** (no coordinator of its own: yours covers it): propose giving it one. On the user's yes, `--start` opens
+  a coordinator there whose setup asks them for `--init --own`; then delegate as above. On a no, run the task
+  yourself.
+
+**Delegated to you** (a message `From the coordinator "NAME": …`): it is a request like the user's, but approvals
+stay as [approvals.md](approvals.md) says. Write a handoff entry `for coordinator NAME: <request>`, so a successor
+still reports. Send NAME one message when it's done (the check that proves it) or blocked on something NAME or its
+user must resolve, plus anything you judge NAME needs to know; not your sessions' progress. NAME gone (a successor
+took over): `session-status --coordinator-of <its root>` names the live one.
+
 ## Status: tools first, sessions last
 
 Waking a session makes it re-read its whole context, often hundreds of thousands of tokens.

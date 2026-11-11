@@ -20,6 +20,25 @@ chmod +x "$tmp/bin/claude"
 
 run() { (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin:$PATH "$here/session-status" "$@"); }
 [ "$(run --coordinator)" = coord ] && [ -z "$(CLAUDE_CODE_SESSION_ID=$cid run --coordinator)" ] || { echo "--coordinator failed"; exit 1; }
+# --coordinator-of: a subproject with its own config has its own coordinator; a plain subfolder is this one's.
+mkdir -p "$root/sub/.claude" "$root/plain" "$tmp/bin2"; echo '{}' > "$root/sub/.claude/coordination.local.json"
+printf '#!/bin/sh\necho "${AGENTS_JSON:-[]}"\n' > "$tmp/bin2/claude"; chmod +x "$tmp/bin2/claude"
+of() { (cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin2:$PATH "$here/session-status" --coordinator-of "$@" 2>&1); }
+out=$(AGENTS_JSON="[{\"sessionId\":\"s9\",\"name\":\"sub-coordinator\",\"cwd\":\"$root/sub\",\"status\":\"idle\"}]" of sub) &&
+  [ "$out" = sub-coordinator ] || { echo "--coordinator-of, running: $out"; exit 1; }
+out=$(of sub) && { echo "--coordinator-of, not running: exit 0"; exit 1; }; [[ $out == *"sub-coordinator ("*") isn't running"* ]] ||
+  { echo "--coordinator-of, not running: $out"; exit 1; }
+rc=0; out=$(of sub --start) || rc=$?
+[ "$rc" = 5 ] && [ "$out" = "no terminal opens it here (config terminal): run in a new terminal: cd $(printf %q "$root/sub") && claude -n sub-coordinator 'Act as a coordinator'" ] ||
+  { echo "--coordinator-of --start: $out"; exit 1; }
+rc=0; out=$(of plain) || rc=$?
+[ "$rc" = 4 ] && [[ $out == *"has no coordinator of its own"* ]] || { echo "--coordinator-of, covered: rc=$rc $out"; exit 1; }
+[[ $(of plain --start) == *"claude -n plain-coordinator"* ]] || { echo "--coordinator-of --start, covered"; exit 1; }
+out=$(AGENTS_JSON="[{\"sessionId\":\"s8\",\"name\":\"plain-coordinator\",\"cwd\":\"$root/plain\",\"status\":\"idle\"}]" of plain) &&
+  [ "$out" = plain-coordinator ] || { echo "--coordinator-of, opened before its setup: $out"; exit 1; }
+rc=0; out=$(of .) || rc=$?; [ "$rc" = 2 ] || { echo "--coordinator-of its own root: rc=$rc $out"; exit 1; }
+rc=0; out=$(of '') || rc=$?; [ "$rc" = 2 ] || { echo "--coordinator-of '': rc=$rc $out"; exit 1; }
+rm -rf "$root/sub" "$root/plain"
 run --changes >/dev/null; (sleep 2; touch "$root/wt/dirty2") & toucher=$!; trap 'kill $toucher 2>/dev/null || true; rm -rf "$tmp"' EXIT
 [ "$(run --watch --every x)" = "--every needs a positive number of seconds" ] && [ "$(run --watch --every 1)" = "$(printf 'was: %s\nnow: %s' "$(run ABC-12 | sed 's/dirty:2/dirty:1/')" "$(run ABC-12)")" ] ||
   { echo "--watch failed"; exit 1; }
