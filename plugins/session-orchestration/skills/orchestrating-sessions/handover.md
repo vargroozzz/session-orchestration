@@ -27,7 +27,8 @@ Your name is `NAME-next`. Run Start as usual (`open_pane` keeps your name while 
 
 1. Arm `--await name`. It wakes you when `NAME` is free: call `name_session` with `NAME`.
 2. Arm `--await done`. It closes the old coordinator's tab (only its split, when the tab has others) once that one is
-   idle and done forwarding. Tell the user what was left open, if anything.
+   idle and done forwarding; when it runs in the background, the tab it was moved out of (or a `claude attach` to it).
+   Tell the user what was left open, if anything.
 
 - Any `--await` also wakes you on an unread coordinator inbox entry: act on each, mark it read (`session-status
   --inbox --read N`), and arm the same `--await` again.

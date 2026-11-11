@@ -486,9 +486,9 @@ fi
 # A successor's --await exits early on an unread inbox entry (it prints them): act on them, mark them read, re-arm.
 # Each --await polls every SESSION_STATUS_AWAIT_S (10) seconds and gives up after --timeout SECS (3600), exit 1.
 HO_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/session-status/handover
-# ho_live: list_sessions' live ones (not failed, stopped or done) into $live; fails when an account's listing did.
+# ho_live: list_sessions into $all, its live ones (not failed, stopped or done) into $live; fails when an account's listing did.
 ho_live() {
-  TMP=$(mktemp -d); live=$(list_sessions | awk -F'\t' '$3 !~ /^(failed|stopped|done)$/'); local f=; [ ! -e "$TMP/ask.failed" ] || f=1
+  TMP=$(mktemp -d); all=$(list_sessions); live=$(awk -F'\t' '$3 !~ /^(failed|stopped|done)$/' <<<"$all"); local f=; [ ! -e "$TMP/ask.failed" ] || f=1
   rm -rf "$TMP"; unset TMP; [ -z "$f" ] || { echo "couldn't list an account's sessions; try again" >&2; return 1; }
 }
 ho_field() { awk -F'\t' -v k="$1" -v v="$2" -v c="$3" '$k == v { print $c; exit }' <<<"$live"; }   # COLUMN VALUE OUTPUT_COLUMN
@@ -496,6 +496,22 @@ ho_base() { local b=$1; [[ $b =~ ^(.+)-prev-[0-9]+$ ]] && b=${BASH_REMATCH[1]}; 
 ho_tty() { local p t; p=$(ho_field 1 "$1" 9); [ -n "$p" ] && t=$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ') && [ -n "$t" ] && [[ $t != \?* ]] && echo "$t"; }   # no tty: ?? on macOS, ? on Linux
 # ho_retitle ID TITLE: ID's terminal tab titled TITLE (after load_terminal); fails when it has no tty or the terminal didn't
 ho_retitle() { local t; t=$(ho_tty "$1") && title_tty "$t" "$2" >/dev/null 2>&1; }
+# ho_shown_tty ID: the tab still showing ID once it runs in the background (its own pid's tty is a daemon pty with no
+# tab): a `claude attach` to it, else the one interactive `claude -n NAME|NAME-next` it was moved out of (no listed
+# session's pid, never the caller's tty). Several of those (an earlier one's tab left open): prints them all, fails.
+ho_shown_tty() {
+  local k p t mine c=; mine=$(ho_tty "$id") || mine=
+  while read -r k p; do
+    t=$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ') && [ -n "$t" ] && [[ $t != \?* ]] && [ "$t" != "$mine" ] || continue
+    [ "$k" != a ] || { echo "$t"; return 0; }
+    [[ " $c " == *" $t "* ]] || c=${c:+$c }$t
+  done < <(ps -axo pid=,args= | awk -v s="$1" -v s8="${1:0:8}" -v n="$n" -v pids=" $(cut -f9 <<<"$all" | paste -sd' ' -) " '
+    { c = $2; sub(/.*\//, "", c) } c != "claude" { next }
+    $3 == "attach" && ($4 == s || $4 == s8) { print "a " $1; next }
+    index(pids, " " $1 " ") { next }
+    { for (i = 3; i < NF; i++) if ($i == "-n" && ($(i+1) == n || $(i+1) == n "-next")) { print "n " $1; next } }' | sort)
+  echo "$c"; [ -n "$c" ] && [[ $c != *' '* ]]
+}
 if [ "${1:-}" = --name-check ]; then
   [ -n "${2:-}" ] || { echo "usage: session-status --name-check NAME" >&2; exit 2; }
   ho_live || exit 1
@@ -578,8 +594,9 @@ if [ "${1:-}" = --await ]; then
       done) o=$(cat "$HO_DIR/$n.done" 2>/dev/null); st=; [ -z "$o" ] || st=$(ho_field 1 "$o" 8)
         if [ "$o" = "$id" ]; then echo "the done stamp names you (${id:0:8}), not the old coordinator: nothing closed"; exit 2
         elif [ -n "$o" ] && [ "$st" != busy ] && [ "$st" != waiting ]; then
-          if [ -z "$(ho_field 1 "$o" 1)" ]; then msg="the old coordinator (${o:0:8}) has exited: nothing to close"
-          elif t=$(ho_tty "$o"); then
+          # a background one (or one no longer listed) shows in the tab it was moved out of, not its own pid's
+          t=; if { [ "$(awk -F'\t' -v o="$o" '$1 == o { print $7; exit }' <<<"$all")" != background ] && t=$(ho_tty "$o"); } ||
+            t=$(ho_shown_tty "$o"); then
             load_terminal; c=$(close_tty "$t" 2>&1); rc=$?
             case $rc in
               0) msg="$c of the old coordinator ($t)" ;;
@@ -587,6 +604,8 @@ if [ "${1:-}" = --await ]; then
               2) msg="the $(config terminal) terminal closes nothing: the old coordinator's terminal ($t) is left open; tell the user to close it" ;;
               *) msg="closing failed ($c): the old coordinator's terminal ($t) is left open; tell the user" ;;
             esac
+          elif [ -n "$t" ]; then msg="several tabs may show the old coordinator ($t): left open; tell the user to close its one"
+          elif [ -z "$(ho_field 1 "$o" 1)" ]; then msg="the old coordinator (${o:0:8}) has exited: nothing to close"
           else msg="the old coordinator (${o:0:8}) has no terminal: left running; tell the user to close it"
           fi
           rm -f "$HO_DIR/$n.ready" "$HO_DIR/$n.done"; echo "handover done: $msg."; exit 0

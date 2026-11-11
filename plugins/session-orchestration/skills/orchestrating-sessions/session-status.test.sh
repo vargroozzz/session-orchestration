@@ -802,6 +802,18 @@ setacct cfg "$(sess "$o" p-coordinator-prev-1 idle 1 interactive),$(sess "$x" p-
 out=$(as "$x" --await done --timeout 2)
 [ "$out" = "handover done: the old coordinator (0a0a0a0a) has no terminal: left running; tell the user to close it." ] &&
   [ ! -e "$tmp/.cache/session-status/handover/p-coordinator.done" ] || { echo "--await done: $out"; exit 1; }
+# A backgrounded old coordinator, done (no longer listed): its tab is the interactive `claude -n NAME` it left, never
+# a listed session's pid; a `claude attach` to it wins; two unlisted `-n NAME` tabs: neither is closed.
+mkdir -p "$tmp/fakeps"; printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' "'-axo pid=,args=') cat \"\${0%/*}/list\" ;;" \
+  "'-o tty= -p '424?) echo \"ttys09\${4: -1}\" ;; *) exit 1 ;; esac" > "$tmp/fakeps/ps"; chmod +x "$tmp/fakeps/ps"
+setacct cfg "$(sess "$x" p-coordinator idle 4243 interactive)"
+await_bg() { printf '%s\n' "$@" > "$tmp/fakeps/list"; echo "$o" > "$tmp/.cache/session-status/handover/p-coordinator.done"
+  PATH=$tmp/fakeps:$PATH as "$x" --await done --timeout 2; }
+left="the plain terminal closes nothing: the old coordinator's terminal"
+[ "$(await_bg '4243 claude -n p-coordinator-next' '4242 /opt/bin/claude -n p-coordinator')" = "handover done: $left (ttys092) is left open; tell the user to close it." ] &&
+  [ "$(await_bg '4242 claude -n p-coordinator' "4241 claude attach ${o:0:8}")" = "handover done: $left (ttys091) is left open; tell the user to close it." ] &&
+  [ "$(await_bg '4242 claude -n p-coordinator' '4244 claude -n p-coordinator-next')" = "handover done: several tabs may show the old coordinator (ttys092 ttys094): left open; tell the user to close its one." ] ||
+  { echo "--await done, backgrounded old one: $(await_bg '4242 claude -n p-coordinator' '4244 claude -n p-coordinator-next')"; exit 1; }
 # A renamed old coordinator (-prev-K) isn't a coordinator the reply tool sends to.
 setacct cfg "$(sess "$cid" p-coordinator idle 1)"; [ "$(run --coordinator)" = p-coordinator ] &&
   setacct cfg "$(sess "$cid" p-coordinator-prev-1 idle 1)" && [ -z "$(run --coordinator)" ] || { echo "--coordinator listed a -prev-K"; exit 1; }

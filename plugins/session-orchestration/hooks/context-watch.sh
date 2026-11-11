@@ -5,7 +5,7 @@
 # - Kind, from the first user prompt: a `Chunk: KEY/N` line (lib.sh chunk_of) is a chunk, `Act as a coordinator` a
 #   coordinator, `Session task: KEY review` a review (no messages), else a task (its `Session task: KEY` line names
 #   it, else a `Work on KEY` start (lib.sh first_key), or a bare `KEY:` one in a coordinated project (an adapter or
-#   key_pattern); a session with none isn't coordinated: no messages, until its name_session call finds a later
+#   key_pattern), else a `Work on NAME` start naming its own -n name (a tracker-less project: keyed by NAME); a session with none isn't coordinated: no messages, until its name_session call finds a later
 #   `Session task: KEY` line in its tail). A task
 #   or review whose tail matches lib.sh's coord_re (session-status's coordinator test) is a coordinator from then on;
 #   one without messages tests this call's own stdin instead, so it never reads the transcript.
@@ -60,6 +60,10 @@ else
     else KEYRE=$(key_re "$a"); key=$(first_key "$first")
       # a bare `KEY:` start names a task only where the project is coordinated; `Work on KEY` everywhere
       [ -n "$a" ] || [ -n "$(config key_pattern 2>/dev/null)" ] || grep -m1 . <<<"$first" | grep -qE '^[[:space:]]*[Ww]ork on ' || key=
+      # no key: a `Work on NAME` start naming its own -n name (a tracker-less project's task) is keyed by that name
+      if [ -z "$key" ] && nm=$(head -n 50 "$tp" | jq -Rrn 'first(inputs | fromjson? | select(.type == "agent-name") | .agentName) // ""') &&
+        [ -n "$nm" ] && l=$(grep -m1 . <<<"$first") && l=${l#"${l%%[![:space:]]*}"} &&
+        [[ $l == [Ww]"ork on $nm" || $l == [Ww]"ork on $nm"[!A-Za-z0-9_-]* ]]; then key=$nm; fi
     fi
   fi
   key=${key//[^A-Za-z0-9_.-]/}; while [[ $key == *. ]]; do key=${key%.}; done; key=${key:--}   # rnd.py strips .,;:!) too
