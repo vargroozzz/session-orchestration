@@ -82,7 +82,7 @@ out=$(jq -nc --arg f "$t/plain.jsonl" '{session_id: "plain", transcript_path: $f
 # `Work on KEY:` (the coordinator's launch, a task successor) is a task; a review gets nothing; `Chunk: foo` isn't a chunk.
 grep -q 'handoff ready: PROJ-123"' <<<"$(fire work "Work on PROJ-123: fix the bug." 146000)" || fail 'Work on KEY: task'
 # No key match: `Work on NAME` naming its own -n name (agent-name) is keyed by it; another name stays keyless.
-LINE='{"type":"agent-name","agentName":"proj-fix-bug"}' grep -q 'handoff ready: proj-fix-bug"' <<<"$(fire named "Work on proj-fix-bug: fix the bug." 146000)" || fail 'Work on NAME: task'
+grep -q 'handoff ready: proj-fix-bug"' <<<"$(LINE='{"type":"agent-name","agentName":"proj-fix-bug"}' fire named "Work on proj-fix-bug: fix the bug." 146000)" || fail 'Work on NAME: task'
 LINE='{"type":"agent-name","agentName":"proj-fix"}' expect unnamed "Work on proj-fix-bug: fix the bug." 190000 ''
 expect review 'Session task: PROJ-123 review' 160000 ''
 expect nochunk $'Chunk: foo\nRead the brief.' 160000 ''
