@@ -118,7 +118,7 @@ Both are excluded from git, the repo file until shared mode commits it. `session
 | `plan.enabled` | `true` \| `false`: `session-status --plan` splits a design into chunks | `true`; setup doesn't write it |
 | `plan.max_parallel` | integer ≥ 1: chunks `session-status --plan` lets run at once | `3`; setup doesn't write it |
 | `plan.models.<kind>` | `model/effort` (never `fable`), per kind `design` \| `build` \| `mechanical` \| `review` \| `release` \| `scan`: what `session-status --plan` starts a chunk of that kind on, and `session-status --kind` a plain task start | `design` `opus/xhigh`, `build` `opus/medium`, `mechanical` `sonnet/medium`, `review` `opus/xhigh`, `release` `sonnet/medium`, `scan` `haiku/low`; setup doesn't write them |
-| `handoff.at.<chunk\|task\|coordinator>` | integer tokens of context, `0` = off: the context-watch hook's soft line for that kind of session, where it asks for a handoff | `chunk` 125000, `task` 120000, `coordinator` 145000; person-only |
+| `handoff.at.<chunk\|task\|coordinator>` | integer tokens of context, `0` = off: the context-watch hook's soft line for that kind of session, where it asks for a handoff | `chunk` 125000, `task` 145000, `coordinator` 145000; person-only |
 | `handoff.hard_after` | integer tokens: the hook's hard line, this far past the soft line | `25000`; person-only |
 | `handoff.stop_room` | integer tokens: room the hook keeps under the compaction ceiling (the hard line never passes it) | `15000`; person-only |
 | `compact.window` | integer tokens: the auto-compact window the hook expects | `220000`; person-only |

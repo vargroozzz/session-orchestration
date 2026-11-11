@@ -34,19 +34,21 @@ chunk=$'Session task: PROJ-123\nChunk: PROJ-123/2\nRead the brief.'
 task=$'Session task: PROJ-123\nFix the bug.'
 coord='Act as a coordinator for this project.'
 
-# Each kind: nothing, then the soft message, then the hard one, each once.
-for k in chunk task; do
-  p=${!k}
-  expect "$k" "$p" 120000 ''
-  expect "$k" "$p" 126000 'at 126K: hand off'
-  expect "$k" "$p" 127000 ''
-  expect "$k" "$p" 151000 'Stop now'
-  expect "$k" "$p" 160000 ''
-done
+# Each kind: nothing, then the soft message, then the hard one, each once. A task's line is the coordinator's.
+expect chunk "$chunk" 120000 ''
+expect chunk "$chunk" 126000 'at 126K: hand off'
+expect chunk "$chunk" 127000 ''
+expect chunk "$chunk" 151000 'Stop now'
+expect chunk "$chunk" 160000 ''
+expect task "$task" 144000 ''
+expect task "$task" 146000 'at 146K: hand off'
+expect task "$task" 147000 ''
+expect task "$task" 171000 'Stop now'
+expect task "$task" 180000 ''
 grep -q 'handoff ready: PROJ-123 c2' <<<"$(fire chunk2 "$chunk" 126000)" || fail 'chunk message names PROJ-123 c2'
 grep -q '## c2: handoff chunklon' <<<"$(fire chunklong9 "$chunk" 126000)" || fail 'chunk message names its build section'
 grep -qE 'Rename yourself: call name_session with the name `.*session-status --prev-name` prints.* Message the coordinator' <<<"$(fire chunk5 "$chunk" 151000)" || fail 'chunk hard text: rename before the coordinator message'
-out=$(fire task2 "$task" 126000); grep -q 'handoff ready: PROJ-123"' <<<"$out" && grep -q '## Handoff' <<<"$out" || fail "task message: $out"
+out=$(fire task2 "$task" 146000); grep -q 'handoff ready: PROJ-123"' <<<"$out" && grep -q '## Handoff' <<<"$out" || fail "task message: $out"
 expect coord "$coord" 144000 ''
 out=$(fire coord "$coord" 146000); grep -q 'handover file' <<<"$out" && ! grep -q 'handoff ready' <<<"$out" &&
   grep -q 'session-status --successor` and do what it prints' <<<"$out" || fail "coordinator soft: $out"
@@ -59,7 +61,7 @@ LINE=$pane expect pane0 'Fix the bug.' 190000 ''
 EXTRA='{"tool_name": "mcp__session-orchestration__open_pane", "tool_input": {}}' expect pane1 'Fix the bug.' 144000 ''
 out=$(LINE=$pane fire pane1 'Fix the bug.' 146000); grep -q 'handover file' <<<"$out" && ! grep -q 'self' <<<"$out" || fail "open_pane session: $out"
 LINE=$pane expect pane2 "$task" 130000 ''
-out=$(fire pane3 "$task" 130000); grep -q 'handover file' <<<"$(LINE=$pane fire pane3 "$task" 146000)" || fail 'task turned coordinator'
+out=$(fire pane3 "$task" 146000); grep -q 'handover file' <<<"$(LINE=$pane fire pane3 "$task" 150000)" || fail 'task turned coordinator'
 grep -qF -- "orchestrating-sessions/session-status --handover --self -- '<next step>'" <<<"$out" || fail "task self-handover: $out"
 grep -qF -- 'session-status --coordinator` prints nothing' <<<"$(fire chunk4 "$chunk" 151000)" || fail 'chunk hard self-handover'
 [ -z "$(grep -l window "$t"/cache/session-status/* 2>/dev/null)" ] || fail 'window line under the expected window'
@@ -78,14 +80,14 @@ chmod 000 "$t/plain.jsonl"
 out=$(jq -nc --arg f "$t/plain.jsonl" '{session_id: "plain", transcript_path: $f, hook_event_name: "PostToolUse", tool_name: "Bash"}' |
   bash "$here/context-watch.sh" 2>&1); chmod 600 "$t/plain.jsonl"; [ -z "$out" ] || fail "keyless session read its transcript: $out"
 # `Work on KEY:` (the coordinator's launch, a task successor) is a task; a review gets nothing; `Chunk: foo` isn't a chunk.
-grep -q 'handoff ready: PROJ-123"' <<<"$(fire work "Work on PROJ-123: fix the bug." 126000)" || fail 'Work on KEY: task'
+grep -q 'handoff ready: PROJ-123"' <<<"$(fire work "Work on PROJ-123: fix the bug." 146000)" || fail 'Work on KEY: task'
 expect review 'Session task: PROJ-123 review' 160000 ''
 expect nochunk $'Chunk: foo\nRead the brief.' 160000 ''
 EXTRA='{"agent_id": "a1"}' expect sub "$task" 190000 ''
 expect sub "$task" 190000 'Stop now'
 # A compaction clears the stamps; a resume clears the thresholds too (here: a new window).
 expect sub "$task" 1000 '' SessionStart
-expect sub "$task" 126000 'hand off'
+expect sub "$task" 146000 'hand off'
 CLAUDE_CODE_AUTO_COMPACT_WINDOW=150000 EXTRA='{"source": "resume"}' expect sub "$task" 1000 '' SessionStart
 CLAUDE_CODE_AUTO_COMPACT_WINDOW=150000 expect sub "$task" 103000 'Stop now.*window is 150000'
 # An all-zero (synthetic) reply after the real one doesn't hide the context.
@@ -96,7 +98,7 @@ out=$(jq -nc --arg f "$t/sub.jsonl" --arg c "$t/proj" '{session_id: "sub", trans
 
 # handoff.at.task=0 silences it.
 echo '{"handoff": {"at": {"task": 0}}}' > "$XDG_CONFIG_HOME/session-orchestration/config.json"
-expect off "$task" 126000 ''
+expect off "$task" 146000 ''
 expect off "$task" 190000 ''
 
 # SessionStart (compact): chunk only, once.
@@ -116,7 +118,7 @@ expect mc "$task" 100000 ''
 sed 's/"cache_read_input_tokens":98995/"cache_read_input_tokens":158995/' "$t/mc.jsonl" > "$t/mc.t" && mv "$t/mc.t" "$t/mc.jsonl"
 out=$(jq -nc --arg f "$t/mc.jsonl" --arg c "$t/proj" '{session_id: "mc", transcript_path: $f, hook_event_name: "UserPromptSubmit", cwd: $c}' |
   bash "$here/context-watch.sh"); [ -z "$out" ] || fail "stale ctx after /compact: $out"
-expect mc "$task" 130000 'at 130K: hand off'
+expect mc "$task" 150000 'at 150K: hand off'
 
 # The reply card: a keyed task, chunk or review at its first firing, once, its paths filled in; again after a
 # compaction (a chunk's with its compacted text), not after a resume; never a coordinator's. A keyless session gets
@@ -146,7 +148,7 @@ touch "$t/cache/session-status/handoff-card9.msg" "$t/cache/session-status/hando
 CARD=1 expect card9 'Fix the bug.' 1000 "$c"
 CARD=1 expect card9 'Fix the bug.' 1000 ''
 # With the soft text in the same firing: both, the card first.
-out=$(CARD=1 fire card8 "$task" 126000); grep -qE "$c" <<<"$out" && grep -q 'at 126K: hand off' <<<"$(sed -n '/^$/,$p' <<<"$out")" ||
+out=$(CARD=1 fire card8 "$task" 146000); grep -qE "$c" <<<"$out" && grep -q 'at 146K: hand off' <<<"$(sed -n '/^$/,$p' <<<"$out")" ||
   fail "card with the soft text: $out"
 
 # The project's settings come before the user's.
@@ -165,14 +167,14 @@ m() { [[ "\"command\":\"$1\"" =~ $cre ]]; }
 expect bare 'PROJ-1: fix it' 126000 ''
 mkdir -p "$t/proj2/.claude"; printf '#!/bin/sh\nexit 0\n' > "$t/proj2/.claude/session-status-adapter"
 chmod +x "$t/proj2/.claude/session-status-adapter"
-EXTRA="{\"cwd\": \"$t/proj2\"}" expect bare2 'PROJ-1: fix it' 126000 'handoff ready: PROJ-1"'
+EXTRA="{\"cwd\": \"$t/proj2\"}" expect bare2 'PROJ-1: fix it' 146000 'handoff ready: PROJ-1"'
 # `Session task: KEY.` drops the period.
 fire dot $'Session task: PROJ-123.\nFix it.' 1000 >/dev/null; read -r _ k _ < "$t/cache/session-status/handoff-dot.kind"
 [ "$k" = PROJ-123 ] || fail "key kept its period: $k"
 # A window too small for the stop room: 60% and 80% of it; a window of 0 is unknown: config's at and hard.
 CLAUDE_CODE_AUTO_COMPACT_WINDOW=40000 expect w40 "$task" 4500 'at 4K: hand off.*too small for handoff.stop_room'
 CLAUDE_CODE_AUTO_COMPACT_WINDOW=40000 expect w40 "$task" 5700 'Stop now'
-CLAUDE_CODE_AUTO_COMPACT_WINDOW=0 expect w0 "$task" 121000 'at 121K: hand off'
+CLAUDE_CODE_AUTO_COMPACT_WINDOW=0 expect w0 "$task" 146000 'at 146K: hand off'
 # No prompt in a transcript past 50 lines: cached keyless after one call.
 for i in $(seq 60); do echo '{"type":"user","isMeta":true,"message":{"content":"x"}}'; done > "$t/meta.jsonl"
 jq -nc --arg f "$t/meta.jsonl" --arg c "$t/proj" '{session_id: "meta", transcript_path: $f, hook_event_name: "PostToolUse", cwd: $c}' |
@@ -188,7 +190,7 @@ LINE=$late expect late 'Fix the bug.' 126000 ''
 # A tool input that mentions it (a brief written for another session) doesn't count.
 LINE='{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cat <<EOF\nSession task: PROJ-8\nEOF"}}]}}' \
   EXTRA='{"tool_name": "mcp__session-orchestration__name_session"}' expect late2 'Fix the bug.' 126000 ''
-LINE=$late EXTRA='{"tool_name": "mcp__session-orchestration__name_session"}' expect late 'Fix the bug.' 126000 'handoff ready: PROJ-9"'
+LINE=$late EXTRA='{"tool_name": "mcp__session-orchestration__name_session"}' expect late 'Fix the bug.' 146000 'handoff ready: PROJ-9"'
 
 # Config: defaults, a bad value, and a repo file can't set the person keys.
 rm "$XDG_CONFIG_HOME/session-orchestration/config.json"

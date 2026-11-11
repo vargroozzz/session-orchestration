@@ -210,7 +210,8 @@ detect_host() {
 #                       | release | scan     default opus/xhigh, opus/medium, sonnet/medium, opus/xhigh,
 #                       sonnet/medium, haiku/low
 #   handoff.at.KIND     integer tokens, 0 = off: context where hooks/context-watch.sh asks a session to hand off,
-#                       KIND chunk | task | coordinator (person only)   default 125000, 120000, 145000
+#                       KIND chunk | task | coordinator (person only)   default 125000, 145000, 145000 (a task's
+#                       successor starts at ~45K: at 120K, handed-over review rounds handed off again within minutes)
 #   handoff.hard_after  integer tokens: the hard stop, this far past handoff.at (person only)   default 25000
 #   handoff.stop_room   integer tokens: room left under the compaction ceiling (person only)   default 15000
 #   compact.window      integer tokens: the autoCompactWindow sessions are expected to have (person only)
@@ -257,7 +258,7 @@ config() {
     plan.enabled) echo true ;; plan.max_parallel) echo 3 ;;
     plan.models.design|plan.models.review) echo opus/xhigh ;; plan.models.build) echo opus/medium ;;
     plan.models.mechanical|plan.models.release) echo sonnet/medium ;; plan.models.scan) echo haiku/low ;;
-    handoff.at.chunk) echo 125000 ;; handoff.at.task) echo 120000 ;; handoff.at.coordinator) echo 145000 ;;
+    handoff.at.chunk) echo 125000 ;; handoff.at.task) echo 145000 ;; handoff.at.coordinator) echo 145000 ;;
     handoff.hard_after) echo 25000 ;; handoff.stop_room) echo 15000 ;; compact.window) echo 220000 ;;
   esac
 }

@@ -51,7 +51,10 @@ stale), say so in the report and send it without `done`.
 **The replies file.** Write every status report to `<TASK>.md` (overwrite it) in the project's replies folder, if
 its `CLAUDE.md` names one: a new coordinator reads it there. Anything else you write to that file (a `## Handoff`, a
 round of questions, a log entry) updates the status report at its top in the same write: a reader takes the top as
-the state. Keep it to the report and the newest `## Handoff` (under ~8 KB): every successor reads it. When you write
+the state. Keep it to the report and the newest `## Handoff` (under ~8 KB): every successor reads it. Give the
+handoff what the next step needs from what you read (the `file:line` spots, what each open review comment asks, the
+fix decided, a line each, within the ~8 KB), so your successor starts from it rather than reading the same code and
+threads again. When you write
 a new handoff, move the older one and anything past (drafts, settled decisions, logs) to `<TASK>-archive.md` beside
 it, newest first, and name that file in the handoff.
 

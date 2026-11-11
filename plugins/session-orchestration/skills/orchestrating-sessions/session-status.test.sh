@@ -732,6 +732,24 @@ out=$(as "$o" --successor) && rc=0 || rc=$?
 # From Claude Code Desktop (no tab of its own) it says where to run the command.
 out=$(CLAUDE_CODE_ENTRYPOINT=claude-desktop-3p as "$o" --successor) && rc=0 || rc=$?
 [ "$rc" = 2 ] && grep -q "^This is Claude Code Desktop: tell the user to run it in the session's Terminal" <<<"$out" || { echo "--successor from Desktop: $rc $out"; exit 1; }
+# A coordinator that was a successor itself, its tab still titled NAME-next: its own tab is retitled NAME first, so
+# open_view opens the successor's tab instead of selecting the caller's (a terminal that reuses a tab by its title).
+mkdir -p "$tmp/.config/session-orchestration/terminals"; echo '{"terminal": "fake"}' > "$tmp/.config/session-orchestration/config.json"
+cat > "$tmp/.config/session-orchestration/terminals/fake.sh" <<'EOF'
+open_view() { [ "$1" != --account ] || shift 2; [ "$(cat "$HOME/tab-title")" != "$1" ] || { echo "reused tab 1"; return 0; }; echo "tab 2"; }
+open_split() { return 2; }
+title_tty() { [ "$1" = ttys009 ] && echo "$2" > "$HOME/tab-title"; }
+EOF
+printf '#!/bin/sh\n[ "$*" = "-o tty= -p 7" ] && { echo ttys009; exit; }; exec /bin/ps "$@"\n' > "$tmp/bin/ps"; chmod +x "$tmp/bin/ps"
+echo p-coordinator-next > "$tmp/tab-title"; setacct cfg "$(sess "$o" p-coordinator idle 7 interactive)"
+out=$(as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 0 ] && grep -q '^started "p-coordinator-next" under ~/cfg (tab 2)' <<<"$out" && [ "$(cat "$tmp/tab-title")" = p-coordinator ] ||
+  { echo "--successor from a tab still titled NAME-next: $rc $out"; exit 1; }
+# The retitle failed (no terminal for its process): refused, and the text says the tab may be the caller's own.
+echo p-coordinator-next > "$tmp/tab-title"; setacct cfg "$(sess "$o" p-coordinator idle 1 interactive)"
+out=$(as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 3 ] && grep -q "It may be this session's own tab" <<<"$out" || { echo "--successor, retitle failed: $rc $out"; exit 1; }
+rm -r "$tmp/.config" "$tmp/bin/ps" "$tmp/tab-title"
 setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" p-coordinator-next busy 1 interactive)"
 [ "$(as "$o" --successor; echo $?)" = "$(printf '"p-coordinator-next" (0b0b0b0b) runs already: arm `%s --await ready` in the background\n3' "$here/session-status")" ] &&
   [ "$(as "$x" --name-check p-coordinator)" = "held next $o" ] && [ "$(as "$z" --name-check p-coordinator)" = "held other $o" ] ||

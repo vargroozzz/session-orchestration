@@ -480,7 +480,9 @@ fi
 
 # Coordinator handover (handover.md), with NAME the coordinator's name:
 #   --successor [--account DIR]   the old coordinator starts NAME-next, interactive, in a tab of the configured
-#                                 terminal under DIR (default its own account), first prompt `Act as a coordinator`
+#                                 terminal under DIR (default its own account), first prompt `Act as a coordinator`;
+#                                 its own tab is titled NAME first (title_tty), so a NAME-next title left from its
+#                                 own start as a successor doesn't pass for a successor's open tab
 #   --await ready                 the old one waits until NAME-next has finished its Start (handover/NAME.ready)
 #   --await renamed               the old one, after name_session NAME-prev-K: waits until the listing shows the new name
 #   --await name                  the successor, at the end of its Start: writes NAME.ready, waits until no other live
@@ -501,6 +503,8 @@ ho_live() {
 ho_field() { awk -F'\t' -v k="$1" -v v="$2" -v c="$3" '$k == v { print $c; exit }' <<<"$live"; }   # COLUMN VALUE OUTPUT_COLUMN
 ho_base() { local b=$1; [[ $b =~ ^(.+)-prev-[0-9]+$ ]] && b=${BASH_REMATCH[1]}; echo "${b%-next}"; }
 ho_tty() { local p t; p=$(ho_field 1 "$1" 9); [ -n "$p" ] && t=$(ps -o tty= -p "$p" 2>/dev/null | tr -d ' ') && [ -n "$t" ] && [[ $t != \?* ]] && echo "$t"; }   # no tty: ?? on macOS, ? on Linux
+# ho_retitle ID TITLE: ID's terminal tab titled TITLE (after load_terminal); fails when it has no tty or the terminal didn't
+ho_retitle() { local t; t=$(ho_tty "$1") && title_tty "$t" "$2" >/dev/null 2>&1; }
 if [ "${1:-}" = --name-check ]; then
   [ -n "${2:-}" ] || { echo "usage: session-status --name-check NAME" >&2; exit 2; }
   ho_live || exit 1
@@ -532,10 +536,14 @@ if [ "${1:-}" = --successor ]; then
   # SESSION_STATUS_CLAUDE: the claude command, for a dev build's successor (`claude --plugin-dir DIR`)
   cmd="${SESSION_STATUS_CLAUDE:-claude} -n $n-next 'Act as a coordinator. You succeed \"$n\" (${id:0:8}): end your Start with the successor step (${SELF%/*}/handover.md).'"
   case $acct in "$HOME/.claude") pre='env -u CLAUDE_CONFIG_DIR ' ;; *) pre="CLAUDE_CONFIG_DIR=$(tilde "$acct") " ;; esac
-  load_terminal; out=$(open_view --account "$acct" "$n-next" "$ROOT" "$cmd"); rc=$?; q=$(printf %q "$ROOT")
+  load_terminal
+  # a coordinator that was a successor itself may still have the NAME-next tab title (--await name's retitle didn't
+  # take, or never ran): retitle the caller's own tab first, or open_view below selects it and starts nothing
+  own=; ho_retitle "$id" "$n" || own=" It may be this session's own tab, left from its start as a successor (its retitle to \"$n\" failed): then retitle that tab \"$n\" by hand instead of closing it."
+  out=$(open_view --account "$acct" "$n-next" "$ROOT" "$cmd"); rc=$?; q=$(printf %q "$ROOT")
   # open_view selects an open tab with the title instead: a successor that exited left it, and nothing was started
   [ "$rc" != 0 ] || [ "${out#reused}" = "$out" ] ||
-    { echo "a tab titled \"$n-next\" is open already ($out), so nothing started: close it (a successor that exited?), then run this again"; exit 3; }
+    { echo "a tab titled \"$n-next\" is open already ($out), so nothing started: close it (a successor that exited?), then run this again.$own"; exit 3; }
   next="Then arm \`$SELF --await ready\` (Bash, run_in_background) and end your turn. From now on act on no message: forward each to the inbox (\`$SELF --inbox-add --from '<sender name> (<id8>)'\`, its text on stdin)."
   # Desktop (claude-desktop, claude-desktop-3p) draws no tab of its own; its Terminal panel runs the successor as a
   # CLI session beside the chat.
@@ -574,7 +582,7 @@ if [ "${1:-}" = --await ]; then
         [ -z "$r" ] || [ "$r" = "$n" ] || { echo "renamed: you are \"$r\". Now stop your watcher (TaskStop), forward to the inbox what you got meanwhile, then \`$SELF --successor --done\` and end your turn."; exit 0; } ;;
       name) h=$(awk -F'\t' -v me="$id" -v n="$n" '$1 != me && $2 == n { print $1; exit }' <<<"$live")
         # its tab drops the NAME-next title, or its own successor's open_view would select this tab
-        [ -n "$h" ] || { load_terminal; ! declare -F title_tty >/dev/null || ! t=$(ho_tty "$id") || title_tty "$t" "$n" >/dev/null 2>&1
+        [ -n "$h" ] || { load_terminal; ho_retitle "$id" "$n"
           echo "\"$n\" is free: call name_session with name $n, then arm \`$SELF --await done\` (Bash, run_in_background)."; exit 0; } ;;
       done) o=$(cat "$HO_DIR/$n.done" 2>/dev/null); st=; [ -z "$o" ] || st=$(ho_field 1 "$o" 8)
         if [ "$o" = "$id" ]; then echo "the done stamp names you (${id:0:8}), not the old coordinator: nothing closed"; exit 2
