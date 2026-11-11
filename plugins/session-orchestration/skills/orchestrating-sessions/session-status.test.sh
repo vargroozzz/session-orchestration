@@ -1268,9 +1268,12 @@ echo '{"telemetry": "local", "plan": {"models": {"scan": "claude-fable-5-1/low",
 [ "$(run --kind build)" = '--model opus --effort medium' ] && [ "$(run --kind scan 2>/dev/null)" = '--model haiku --effort low' ] &&
   [ "$(run --kind review)" = '--model sonnet --effort high' ] &&
   [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl" | sed -E 's/"t":[0-9]+/"t":T/')" = '{"t":T,"k":"start","what":"review","model":"sonnet","effort":"high"}' ] &&
+  [ "$(run --kind mechanical claude-plugins-fix-doc)" = '--model sonnet --effort medium' ] &&
+  [ "$(tail -1 "$tmp/state/session-orchestration/usage.jsonl" | sed -E 's/"t":[0-9]+/"t":T/')" = "{\"t\":T,\"k\":\"start\",\"what\":\"mechanical\",\"model\":\"sonnet\",\"effort\":\"medium\",\"sess\":\"96bb4fcd0a71\"}" ] &&
+  ! run --kind build 'two words' 2>/dev/null && ! run --kind build a b 2>/dev/null &&
   ! run --kind chunky 2>/dev/null && ! run --kind 2>/dev/null || { echo "--kind"; tail -3 "$tmp/state/session-orchestration/usage.jsonl"; exit 1; }
 n0=$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")
-(cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state bash -c '. "$0"; usage build start opus loud; usage build start opus medium extra; usage build start /home/u medium' "$here/../../lib.sh")
+(cd "$root" && HOME=$tmp XDG_STATE_HOME=$tmp/state bash -c '. "$0"; usage build start opus loud; usage build start opus medium a b; usage build start opus medium "a b"; usage build start opus medium ""; usage build start /home/u medium' "$here/../../lib.sh")
 [ "$(wc -l < "$tmp/state/session-orchestration/usage.jsonl")" = "$n0" ] || { echo "usage took a malformed start line"; exit 1; }
 rm "$tmp/.config/session-orchestration/config.json"
 # Plan cells: a lone `|` row is skipped; Deps `—`/`none`/`None` and Touches `—` name nothing. --check: a window other

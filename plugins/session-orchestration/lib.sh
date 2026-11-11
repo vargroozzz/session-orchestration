@@ -267,15 +267,19 @@ config() {
 # {"t":EPOCH,"k":KIND,"what":NAME}. KIND is press (a pane button, from the mod), path (default: a script counting a
 # path no transcript shows) or chunk (session-status --plan --done: NAME is the chunk's kind, then its model, effort,
 # est and act in K of context growth; act may be left out) or start (session-status --kind: a plain task start, NAME
-# its kind, then its model and effort). NAME is a fixed word (lowercase, digits, -), never a key,
+# its kind, then its model, effort and optionally the -n session name, logged as sess: the first 12 hex of its sha256,
+# so rnd can join a start to its session by hashing session names; the name isn't in clear, but someone who knows or
+# guesses a name can confirm it). NAME is a fixed word (lowercase, digits, -), never a key,
 # path or id, and every field is validated, so the file is shareable as is. Never fails its caller.
 usage_log() { echo "${XDG_STATE_HOME:-$HOME/.local/state}/session-orchestration/usage.jsonl"; }
 usage() {
   local f x=
   [[ ${1:-} =~ ^[a-z0-9-]{1,40}$ && ${2:-path} =~ ^(press|path|chunk|start)$ ]] || return 0
   if [ "${2:-}" = start ]; then
-    [[ ${3:-} =~ ^[a-z][a-z0-9.-]{0,39}$ && ${4:-} =~ ^(low|medium|high|xhigh|max)$ && $# = 4 ]] || return 0
+    [[ ${3:-} =~ ^[a-z][a-z0-9.-]{0,39}$ && ${4:-} =~ ^(low|medium|high|xhigh|max)$ && ${5-x} =~ ^[A-Za-z0-9._-]{1,80}$ &&
+       $# -le 5 ]] || return 0
     x=",\"model\":\"$3\",\"effort\":\"$4\""
+    [ $# = 5 ] && x+=",\"sess\":\"$(sha256_of <(printf %s "$5") | cut -c1-12)\""
   elif [ "${2:-}" = chunk ]; then
     [[ ${3:-} =~ ^[a-z][a-z0-9.-]{0,39}$ && ${4:-} =~ ^(low|medium|high|xhigh|max)$ && ${5:-} =~ ^[0-9]{1,4}$ &&
        ${6:-0} =~ ^[0-9]{1,5}$ && $# -le 6 ]] || return 0

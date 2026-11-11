@@ -115,4 +115,6 @@ plugin depends on.
   `handover.md`, `plans.md`, `pane.md` and `memory-rules.md` beside it, each read when its event comes up; `worker.md`: the rules
   for a session that receives messages (`hooks/reply-card.txt` is its short form); `status-reference.md`: the status
   command, the adapter contract, writing your own terminal module.
+- `skills/choosing-model-effort/SKILL.md`: sizing work into a `plan.models` kind, for a session start, a subagent or
+  an R&D run.
 - Tests: every `*.test.sh` prints `ok`.

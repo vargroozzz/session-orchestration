@@ -136,11 +136,11 @@ too big for one session: [plans.md](plans.md).
 A new task: `claude --bg --model <M> --effort <E> -n <KEY>-<short-desc> 'Work on <KEY>: <what>. Why: <who needs it,
 what it unblocks>. Done when: <the end state of the whole job and the check that proves it>. Keep working until done
 or blocked.'`
-- `--model`/`--effort`: run `session-status --kind <kind>` first, as its own call, and paste the `--model M --effort E`
-  it prints (exit 2: a wrong kind; fix it, don't start without them). `<kind>` is the work's `plan.models` kind:
-  `build` (code a feature or fix), `mechanical` (a rename, a doc sweep, a scripted change), `review`, `release`, `scan`
-  (read and report), `design`. It logs the start for rnd. Never `fable` unless the user names it: then set it by hand.
-  A handover or fresh restart of that task takes the same flags.
+- `--model`/`--effort`: size the task into a `plan.models` kind with the `choosing-model-effort` skill, run
+  `session-status --kind <kind> <session-name>` first (the `-n` value), as its own call, and paste the `--model M --effort E` it prints
+  (exit 2: a wrong kind or name; fix it, don't start without them). It logs the start for rnd. Never `fable` unless
+  the user names it: then set it by hand. A handover or fresh restart of that task takes the same flags without running `--kind` again, so the task logs
+  one start.
 - The first prompt names the task. `-n` names the session by its ticket (e.g. `PROJ-1234-fix-settler`: no spaces).
   With the key not known yet, leave it out, and the session names itself with `name_session` once it finds it.
   Without `-n` the real name shows in `ListAgents` a few seconds later and may repeat one: then message `name [ref]`.
@@ -157,7 +157,7 @@ or blocked.'`
 topic file so the next coordinator follows it. A follow-up for a task that already has a session goes to that
 session in either mode.
 - **Propose first** (the default): when the user gives you work that needs new sessions, list the sessions you'd
-  start, one per line (the task key or a 3–5 word name, what it does, its done-when), then stop and wait. "go"
+  start, one per line (the task key or a 3–5 word name, what it does, its done-when, its kind and why), then stop and wait. "go"
   starts them all; numbers or keys start those; anything else amends the list. Never start one the user hasn't
   named.
 - **Start at once** ("start without asking", "just go"): start each as you'd have proposed it, then tell the user

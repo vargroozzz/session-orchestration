@@ -29,10 +29,13 @@ already. Other coordinators use both.
 
 **Batches.** Put cases that change the same file or step into one batch. Every other case is a batch of its own,
 most seen first. Propose the batches the way your mode says to start sessions ([SKILL.md](../skills/orchestrating-sessions/SKILL.md),
-Starting a session): one line per apply session, with its cases' titles and the done-when.
+Starting a session): one line per apply session, with its session name, its cases' titles, the done-when, and its
+kind with the reason, sized per batch with the `choosing-model-effort` skill (a one-file doc fix is `mechanical`, a new
+feature `design`), never one kind for all.
 
-**Apply sessions.** Start one per batch the user names, from this root. Run `session-status --kind build` first, then
-`claude --bg` as SKILL.md says, with this brief: `Apply plugin feedback: <case file paths>. Follow feedback.md,
+**Apply sessions.** Start one per batch the user names, from this root. Run `session-status --kind <its kind> <name>`
+first (`<name>`: a task name the project's key pattern matches, of letters, digits, `.`, `_` and `-`, at most 80), then `claude --bg -n <name>` as SKILL.md says, with this
+brief, which starts with the name so the status shows its owner: `Work on <name>: Apply plugin feedback: <case file paths>. Follow feedback.md,
 Applying, for these cases only, and this repo's CLAUDE.md release checks. Why: <what the cases say goes wrong>. Done
 when: the change is implemented with the repo's checks passing, a PR is open, and each case is marked sent <url>.`
 Because they work in your project, relayed approvals verify for them ([approvals.md](../skills/orchestrating-sessions/approvals.md)).
