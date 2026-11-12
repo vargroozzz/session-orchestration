@@ -879,8 +879,9 @@ const REPLY_SCHEMA = {
   properties: {
     text: { type: 'string', minLength: 1, description: 'The message: your report, answer or question' },
     to: { type: 'string', description: 'A received message\'s `from`, or a session name. Left out: this project\'s coordinator' },
+    report: { type: 'string', description: 'Your status report in full (markdown). Written first to <KEY>.md in the replies folder (key, else this session\'s name), replacing the report at its top and keeping its `## Handoff`, so you never write that file by hand; text can then be the short message. Not written: nothing is sent' },
     done: { type: 'string', enum: DONE_KINDS, description: 'Only on the report that says the task is done; the reply is sent once what this kind needs holds, else it comes back with what is missing. pr: the worktree is clean, its commits are on the remote, the board shows a PR for key with no failing checks or conflict. pushed: clean and pushed, no PR (a branch someone else releases). report: no code; every file path the text names exists' },
-    key: { type: 'string', description: 'With done pr: the task key whose PR the board shows' },
+    key: { type: 'string', description: 'Your task key: with done pr, the key whose PR the board shows; with report, the file is <key>.md' },
     worktree: { type: 'string', description: 'With done pr or pushed: the task\'s worktree (absolute path), when it isn\'t this session\'s cwd' },
   },
   required: ['text'],
@@ -1464,25 +1465,36 @@ export const register: Register = on => {
   // coordinators (session-status --coordinator, newest first) until one takes it. That runs from the project root, as
   // the Bash tool's run did: from a worktree under it, session-status could take the worktree for the project.
   on('tool.call', { tool: 'mcp__session-orchestration__reply' }, async ($, e) => {
-    const { text, to, done, key, worktree } = e
+    const { text, to, done, key, worktree, report } = e
     if (typeof text !== 'string' || !text.trim()) return { deny: 'reply needs text.' }
+    if (report !== undefined && (typeof report !== 'string' || !report.trim())) return { deny: 'reply: report, when given, is the report text.' }
     const here = await $.session.cwd()
     const cwd = here.replace(/\/\.(claude\/)?worktrees\/.*$/, '')
     if (done !== undefined) {
       if (typeof done !== 'string' || !DONE_KINDS.includes(done)) return { deny: `reply: done is ${DONE_KINDS.join(', ')}.` }
       const wt = typeof worktree === 'string' && worktree.startsWith('/') ? worktree : here
-      const gaps = await doneGaps($, done, key, text, wt, cwd)
+      const gaps = await doneGaps($, done, key, report ? `${text}\n${report}` : text, wt, cwd)
       if (gaps.length) return { deny: `reply: not sent, done ${done} doesn't hold yet: ${gaps.join('; ')}. Fix that and reply again (worker.md, Done).` }
     }
     const toName = typeof to === 'string' ? to.trim() : ''
     const id = await $.session.id()
+    let filed = ''
+    let body = text
+    if (report) {
+      const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--report-file', id, ...(typeof key === 'string' && key.trim() ? [key.trim()] : [])],
+        { cwd, stdin: report, timeoutMs: 60_000 }).catch(() => undefined)
+      // No replies folder: the report has nowhere to live, so it goes with the message.
+      if (r?.exitCode === 3) { body = `${text}\n\n${report}`; filed = ' No replies folder, so the report went with the message.' }
+      else if (r?.exitCode === 0) filed = ` Report written to ${r.stdout.trim()}.`
+      else return { deny: `reply: not sent, the report wasn't written (${oneLine(r?.stderr ?? '') || (r ? `exit ${r.exitCode}` : 'no run')}). Fix that and reply again.` }
+    }
     const names = toName ? [toName]
       : (await runStatus($, ['--coordinator'], { cwd, env: { CLAUDE_CODE_SESSION_ID: id } }))
         .split('\n').filter(n => n && !n.startsWith('failed: '))
     const why: string[] = []
     for (const name of names) {
-      const sent = await $.session.send({ to: name, text })
-      if (sent.isDelivered) return { result: `Sent to ${name}.` }
+      const sent = await $.session.send({ to: name, text: body })
+      if (sent.isDelivered) return { result: `Sent to ${name}.${filed}` }
       why.push(`${name}: ${sent.reason}`)
     }
     // No live coordinator took it (none runs, it is mid-handover, or under another account): the coordinator inbox,
@@ -1490,10 +1502,10 @@ export const register: Register = on => {
     if (!toName || /-coordinator(-next)?$/.test(toName)) {
       const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--inbox-add', id],
         { cwd, stdin: text, timeoutMs: 60_000 }).catch(() => undefined)
-      if (r?.exitCode === 0) return { result: `Queued, no coordinator live${why.length ? ` (${why.join('; ')})` : ''}: it is in ${r.stdout.trim()}, which the coordinator reads. Don't send it again.` }
+      if (r?.exitCode === 0) return { result: `Queued, no coordinator live${why.length ? ` (${why.join('; ')})` : ''}: it is in ${r.stdout.trim()}, which the coordinator reads. Don't send it again.${filed}` }
     }
-    if (!names.length) return { deny: 'reply: no coordinator of this project is running and the coordinator inbox took nothing (no replies folder?). Pass to, or the replies file is your report.' }
-    return { deny: `reply: not delivered (${why.join('; ')}). The replies file is your report.` }
+    if (!names.length) return { deny: 'reply: no coordinator of this project is running and the coordinator inbox took nothing (no replies folder?). Pass to, or the replies file is your report.' + filed }
+    return { deny: `reply: not delivered (${why.join('; ')}). The replies file is your report.${filed}` }
   })
 
   // A session's `!` command for the user, into HANDED_DIR for the coordinator pane (any session, any account).

@@ -48,8 +48,10 @@ git runs in the session's cwd; pass `worktree` (absolute) when the task's worktr
 show (no adapter, a failed lookup) isn't held against you. If a check is still wrong (the board's PR words are
 stale), say so in the report and send it without `done`.
 
-**The replies file.** Write every status report to `<TASK>.md` (overwrite it) in the project's replies folder, if
-its `CLAUDE.md` names one: a new coordinator reads it there. Anything else you write to that file (a `## Handoff`, a
+**The replies file.** Every status report goes to `<TASK>.md` in the project's replies folder, if its `CLAUDE.md`
+names one: a new coordinator reads it there. Pass it as `reply`'s `report` (with `key`): the tool writes it at the
+file's top, keeps the `## Handoff` below, and sends nothing when it can't write; `text` can then be the short
+message. Without the tool, write the file yourself (overwrite it). Anything else you write to that file (a `## Handoff`, a
 round of questions, a log entry) updates the status report at its top in the same write: a reader takes the top as
 the state. Keep it to the report and the newest `## Handoff` (under ~8 KB): every successor reads it. Give the
 handoff what the next step needs from what you read (the `file:line` spots, what each open review comment asks, the

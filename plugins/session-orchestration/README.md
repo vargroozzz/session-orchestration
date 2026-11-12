@@ -103,6 +103,9 @@ Installing the plugin adds these to every Claude Code session, in every project:
   `claude -p` and `--bg` runs included, those commands run as without the plugin.
 - **Context watch** (`hooks/context-watch.sh`): asks a task or coordinator session to hand off before it compacts;
   a session that isn't coordinated gets nothing.
+- **Coordinator guard** (`hooks/coordinator-guard.sh`): in a coordinator session only, refuses a Bash command that
+  starts with `cd`, and an edit of a project file outside `.claude/`, the replies folder, the handoff file and the
+  project memory: those belong to a task session.
 
 The background-session guards (no question box, plan mode or stray `EnterWorktree` in a `--bg` session; a compound
 Bash command split instead of raising a prompt) come with [project-memory](../project-memory/README.md), which this

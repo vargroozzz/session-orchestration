@@ -822,6 +822,24 @@ printf 'after a killed holder' | as "$z" --inbox-add >/dev/null && [ "$(grep -c 
   { echo "inbox add after a killed holder"; exit 1; }
 rmdir "$ib.lock"; rm -f "$ib.held"
 as "$x" --inbox --read all >/dev/null
+# --report-file (the reply tool's report): the top of <replies>/<NAME>.md, its `## Handoff` and what follows kept.
+setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$z" p-fix-thing-prev-2 idle 1)"
+rf=$root/replies/p-fix-thing.md
+[ "$(printf 'first report' | as "$z" --report-file "$z")" = "$rf" ] && [ "$(cat "$rf")" = 'first report' ] &&
+  printf 'old\n\n## Handoff\nnext: do X\n## Older\nkept' > "$rf" && printf 'new report\nline 2' | as "$z" --report-file "$z" >/dev/null &&
+  [ "$(cat "$rf")" = "$(printf 'new report\nline 2\n\n## Handoff\nnext: do X\n## Older\nkept')" ] &&
+  printf 'newest\n\n## Handoff\nnext: do Y' | as "$z" --report-file "$z" >/dev/null && [ "$(cat "$rf")" = "$(printf 'newest\n\n## Handoff\nnext: do Y')" ] &&
+  [ "$(printf 'keyed' | as "$z" --report-file "$z" PROJ-9)" = "$root/replies/PROJ-9.md" ] && rm "$root/replies/PROJ-9.md" &&
+  mkdir -p "$tmp/.cache/session-status" && printf 'task PROJ-8 - 0 0\nre\n' > "$tmp/.cache/session-status/handoff-$z.kind" &&
+  [ "$(printf 'cached key' | as "$z" --report-file "$z")" = "$root/replies/PROJ-8.md" ] && rm "$root/replies/PROJ-8.md" &&
+  printf 'chunk PROJ-7 2 0 0\n' > "$tmp/.cache/session-status/handoff-$z.kind" &&
+  [ "$(printf 'chunk report' | as "$z" --report-file "$z")" = "$rf" ] && [ ! -e "$root/replies/PROJ-7.md" ] &&
+  rm "$tmp/.cache/session-status/handoff-$z.kind" &&
+  [ -z "$(find "$root/replies" -name '*.md.[0-9]*')" ] || { echo "--report-file"; cat "$rf"; exit 1; }
+[ "$(printf 'x' | as "$z" --report-file 0d0d0d0d-1111-3333-4444-555555555555 2>&1; echo $?)" = "$(printf 'session 0d0d0d0d has no name to file the report under: pass key, or name_session first\n2')" ] &&
+  [ "$(printf 'x' | as "$z" --report-file "$z" 'fix login' 2>&1; echo $?)" = "$(printf 'key "fix login": letters, digits, . _ - only (a keyless task: its session name)\n2')" ] &&
+  [ "$(printf '' | as "$z" --report-file "$z" 2>/dev/null; echo $?)" = 2 ] || { echo "--report-file without a name or a report"; exit 1; }
+rm "$rf"
 [ "$(as "$o" --successor --done; echo $?)" = "$(printf 'you still hold "p-coordinator": rename first (name_session with what --prev-name prints)\n3')" ] &&
   ! as "$o" --await renamed --timeout 1 >/dev/null || { echo "--successor --done or --await renamed before the rename"; exit 1; }
 setacct cfg "$(sess "$o" p-coordinator-prev-1 busy 1 interactive),$(sess "$x" p-coordinator-next idle 1 interactive)"

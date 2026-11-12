@@ -954,6 +954,39 @@ test('reply answers the from it is given, else tries the live coordinators the p
     'proj-coordinator: PROJ-1 · b · blocked', 'old-coordinator: PROJ-1 · b · blocked', 'proj-coordinator: PROJ-1 · b · done', 'PROJ-2-x: PROJ-2 go'])
 })
 
+test('reply with report writes it to the replies file first; not written, nothing is sent', async ($, on) => {
+  on('session.cwd', async () => ({ value: '/work/proj/.worktrees/PROJ-1' }))
+  on('session.id', async () => ({ value: 'sess-3' }))
+  let file = { exitCode: 0, stdout: '/work/docs/replies/PROJ-1-fix.md\n', stderr: '' }
+  const filed: unknown[] = []
+  let checked: string[] = []
+  on('process.run', async (_, e) => {
+    if (e.argv[1] === '-c') checked = e.argv.slice(4)
+    if (e.argv[2] === '--report-file') filed.push([e.argv.slice(2), e.init?.cwd, e.init?.stdin])
+    const r = e.argv[2] === '--report-file' ? file : { exitCode: 0, stdout: 'proj-coordinator\n', stderr: '' }
+    return { value: { ...r, isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const sent: string[] = []
+  on('session.send', async (_, e) => { sent.push(e.text); return { isDelivered: true } })
+  const reply = (input: Record<string, unknown>) => $.tool.call({ tool: 'mcp__session-orchestration__reply', ...input })
+  expect((await reply({ text: 'PROJ-1 · b · coding', report: ' ' })).deny).toBe('reply: report, when given, is the report text.')
+  expect((await reply({ text: 'PROJ-1 · b · coding', report: '# PROJ-1\nfull report' })).result)
+    .toBe('Sent to proj-coordinator. Report written to /work/docs/replies/PROJ-1-fix.md.')
+  expect(filed).toEqual([[['--report-file', 'sess-3'], '/work/proj', '# PROJ-1\nfull report']])
+  await reply({ text: 'PROJ-1 · b · coding', report: 'r', key: 'PROJ-1' })
+  expect(filed.at(-1)).toEqual([['--report-file', 'sess-3', 'PROJ-1'], '/work/proj', 'r'])
+  file = { exitCode: 3, stdout: '', stderr: 'no replies folder' }
+  expect((await reply({ text: 'PROJ-1 · b · coding', report: 'r' })).result).toBe('Sent to proj-coordinator. No replies folder, so the report went with the message.')
+  file = { exitCode: 2, stdout: '', stderr: 'session sess-3 has no name to file the report under: name_session first\n' }
+  expect((await reply({ text: 'PROJ-1 · b · coding', report: 'r' })).deny)
+    .toBe('reply: not sent, the report wasn\'t written (session sess-3 has no name to file the report under: name_session first). Fix that and reply again.')
+  expect(sent).toEqual(['PROJ-1 · b · coding', 'PROJ-1 · b · coding', 'PROJ-1 · b · coding\n\nr'])
+  // done report: the paths the report names are checked too
+  file = { exitCode: 0, stdout: '/work/docs/replies/PROJ-1-fix.md\n', stderr: '' }
+  await reply({ text: 'spike done', report: 'see /home/u/notes.md', done: 'report' })
+  expect(checked).toEqual(['/home/u/notes.md'])
+})
+
 test('a done reply is sent only once its kind holds: clean, pushed, a PR on the board without failing checks; a report\'s files exist', async ($, on) => {
   on('session.cwd', async () => ({ value: '/work/proj/.claude/worktrees/PROJ-1' }))
   on('session.id', async () => ({ value: 'sess-3' }))

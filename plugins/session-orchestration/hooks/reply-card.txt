@@ -5,8 +5,8 @@ Coordinated session (session-orchestration): messages from other Claude sessions
   working: `<KEY> accepted` (or why not), then one report when it's done or blocked, nothing in
   between. Asked a question: the answer, at most 5 lines. Code, diffs and logs go in a file: send its path.
 - The status report: at most 5 lines, on your own work (<KEY>: the task key, else a 3-5 word name).
-  Also write it to <KEY>.md (overwrite) in the replies folder your project's CLAUDE.md names; anything
-  else you add there (a handoff, a log) updates the report at its top in the same write.
+  Also pass it as reply's `report` with `key`: it writes <KEY>.md in the replies folder (keeping its
+  handoff); anything else you add there by hand (a handoff, a log) updates the report at its top too.
   <KEY> · <branch> · <coding | PR #N open | in review | ready to merge | merged, deploying | blocked | idle>
   Done: <what changed since the last report; when finished, the check that proves it>
   Blocker: <none | what, and who unblocks it>

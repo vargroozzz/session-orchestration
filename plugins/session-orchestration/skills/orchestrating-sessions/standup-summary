@@ -6,7 +6,7 @@
 # Cached per start day in ${XDG_CACHE_HOME:-~/.cache}/session-orchestration/standup/DAY.txt and written again only
 # when that day's data changes: its fingerprint leaves out sessions' spans and last text lines, which move at every
 # refresh while a session works. Exit 1 with the reason on stdout when the model call fails (or takes over 90s).
-# SESSION_STATUS_SUMMARY_MODEL picks another model; standup-summary --self-test runs against a stub claude.
+# SESSION_STATUS_SUMMARY_MODEL picks another model; standup-summary.test.sh runs it against a stub claude.
 set -uo pipefail
 
 PROMPT="You turn a developer's raw activity log into what they would say at the daily standup: first person, plain
@@ -58,45 +58,4 @@ summarize() {
   printf '%s\n' "$text"
 }
 
-self_test() {
-  local out
-  t=$(mktemp -d); trap 'rm -rf "$t"' EXIT   # global: the trap runs after this returns
-  mkdir "$t/bin"
-  cat > "$t/bin/claude" <<EOF
-#!/bin/bash
-echo run >> "$t/runs"; cat > "$t/stdin"
-[ -z "\${STUB_FAIL:-}" ] || { echo '{"is_error":true,"result":"rate limited"}'; exit 1; }
-[ -z "\${STUB_HANG:-}" ] || exec sleep 30
-echo 'warning: an update is available' >&2
-echo '{"result":"Yesterday I finished ABC-1."}'
-EOF
-  chmod +x "$t/bin/claude"
-  export XDG_CACHE_HOME=$t/cache PATH=$t/bin:$PATH
-  log=$'Since: 2030-01-03 Thu (last working day)\nABC-1\tDone\tFix it\n  Thu 10:00\tsession "a" (09:00–10:00): working on it'
-  out=$(summarize <<<"$log") && [ "$out" = "Yesterday I finished ABC-1." ] || { echo "self-test: first run: $out"; exit 1; }
-  # A session's span and last text moved: cached, no second run.
-  out=$(summarize <<<"${log/10:00): working on it/11:00): done}") && [ "$out" = "Yesterday I finished ABC-1." ] &&
-    [ "$(grep -c . "$t/runs")" = 1 ] || { echo "self-test: a session's new text ran the model again"; exit 1; }
-  # A new event: run again.
-  summarize <<<"$log"$'\n  Thu 12:00\tapp#1 merged' >/dev/null && [ "$(grep -c . "$t/runs")" = 2 ] ||
-    { echo "self-test: a new event didn't run the model"; exit 1; }
-  # A failure: exit 1 and the reason, the cache untouched.
-  out=$(STUB_FAIL=1 summarize <<<"$log"$'\n  Thu 13:00\tJira: A → B') && { echo "self-test: a failed call exited 0"; exit 1; }
-  grep -q 'rate limited' <<<"$out" || { echo "self-test: failure reason missing: $out"; exit 1; }
-  [ "$(sed -n 2p "$t/cache/session-orchestration/standup/2030-01-03.txt")" = "Yesterday I finished ABC-1." ] ||
-    { echo "self-test: a failure changed the cache"; exit 1; }
-  out=$(summarize <<<"no since line") && { echo "self-test: no Since: line exited 0"; exit 1; }
-  # A hung call: killed at the cap, not waited out.
-  local s=$SECONDS
-  out=$(STUB_HANG=1 STANDUP_SUMMARY_CAP_S=1 summarize <<<"$log"$'\n  Thu 14:00\tJira: B → C') && { echo "self-test: a hung call exited 0"; exit 1; }
-  [ $((SECONDS - s)) -lt 10 ] || { echo "self-test: a hung call took $((SECONDS - s))s"; exit 1; }
-  # Another model: written again, though the data is the same.
-  SESSION_STATUS_SUMMARY_MODEL=sonnet summarize <<<"$log" >/dev/null && [ "$(grep -c . "$t/runs")" = 5 ] ||
-    { echo "self-test: another model reused the cache"; exit 1; }
-  echo "standup-summary self-test: ok"
-}
-
-case "${1:-}" in
-  --self-test) self_test ;;
-  *) summarize ;;
-esac
+summarize
