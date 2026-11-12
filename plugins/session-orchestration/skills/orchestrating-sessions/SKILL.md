@@ -212,12 +212,18 @@ flips itself, so never wrap it in a loop or filter. Report what changed, then re
 arming if one already runs. Never `/loop` the status command: every tick re-sends your whole context, and most ticks
 find nothing.
 
-**PR events go to the owner, not the user.** A `PR events` section in the output lists each owned open PR that newly
-failed CI, got a conflict or had changes requested: `* REPO#ID EVENT @SHA (KEY) → "NAME" ID`. Send each line's session
-`PR REPO#ID (KEY): EVENT on SHA. Fix it and push; force-push, post or merge only with the usual approval. Reply when
-pushed, or blocked.` through `session-status --send-when-idle ID TEXT` (it prints `send:` when SendMessage is yours
-to do; [resuming.md](resuming.md)). Don't relay it to the user or ask first: it is the worker's own task. The script
-lists each PR, event and head SHA once.
+**PR events go to the owner, and the watcher sends them.** An owned open PR that newly failed CI, got a conflict or
+had changes requested, and a task whose PRs are all merged while it is still on the board (its status not moved on),
+is a PR event: `* REPO#ID EVENT @SHA (KEY) → "NAME" ID`, or `* REPO#ID[,…] all-merged (KEY, STATUS) → "NAME" ID`. The
+watcher sends the owner its nudge itself (fix and push; or deploy per the project doc, then move the task on) and
+wakes no one for it: a retired session or one in another account through `--send-when-idle`, a live one of this
+account through your pane's timer (keep the pane open). What it sent shows under `Forwarded` beside the next change
+that wakes you: nothing to do. A `PR events` section in the output is one it couldn't send (`not forwarded: WHY`, or
+`→ no owner`): send that session `PR REPO#ID (KEY): EVENT on SHA. Fix it and push; force-push, post or merge only with
+the usual approval. Reply when pushed, or blocked.` through `session-status --send-when-idle ID TEXT` (it prints
+`send:` when SendMessage is yours to do; [resuming.md](resuming.md)); an all-merged one with no owner: revive or start
+its session for the deploy and the status move. Don't relay it to the user or ask first: it is the worker's own task.
+The script lists each PR, event and head SHA once.
 
 ## Rules
 

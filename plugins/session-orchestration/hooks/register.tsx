@@ -1339,6 +1339,22 @@ async function openInTerminal($: EngineInterface, p: UiPressArgument, term: stri
   $.ui.toast(c.isCopied ? `${why}: copied ${fallback}` : `${why}, and couldn't copy (${c.reason}): ${fallback}`)
 }
 
+// The PR events the watcher couldn't deliver itself (a live session of this account: a script can't SendMessage; SKILL.md,
+// Watching): sent from here, without waking the coordinator; what came of each goes back for the watcher's next report.
+async function forwardOutbox($: EngineInterface) {
+  const out = await runStatus($, ['--outbox'])
+  if (!out || out.startsWith('failed: ')) return
+  const done: string[] = []
+  for (const row of out.split('\n')) {
+    const [, id, , line, text] = row.split('\t')
+    if (!id || !line || !text) continue
+    const sent = await $.session.send({ to: { sessionId: id }, text }).catch((err: unknown) => ({ isDelivered: false, reason: err instanceof Error ? err.message : String(err) }))
+    done.push(sent.isDelivered ? `ok\t${line}\tsent` : `failed\t${line}\t${oneLine(sent.reason ?? '') || 'not delivered'}`)
+  }
+  if (done.length) await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--outbox-done'],
+    { stdin: `${done.join('\n')}\n`, timeoutMs: 60_000 })
+}
+
 // ponytail: the timers (sweep 10 min, activity 1 min, ~1s each) run for the module's life once opened, a
 // closed pane included; cancel both on ui.close if they cost too much.
 let timer: { cancel: () => void } | undefined
@@ -1347,6 +1363,7 @@ async function open($: EngineInterface) {
   if (!timer) {
     timer = $.clock.every(600_000, () => void refresh($))
     $.clock.every(60_000, () => void refreshActivity($))
+    $.clock.every(60_000, () => void forwardOutbox($).catch(() => undefined))
     // Another coordinator's asks and answers (a handover's overlap) reach this pane within a minute.
     $.clock.every(60_000, () => void loadAsks($).then(() => notifyWaiting($)).catch(() => undefined))
     void loadAsks($).catch(() => undefined)

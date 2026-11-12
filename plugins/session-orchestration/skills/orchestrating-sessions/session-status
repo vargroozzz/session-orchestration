@@ -728,7 +728,7 @@ if [ "${1:-}" = --watch ]; then
   case $tries in ''|*[!0-9]*|0) echo "SESSION_STATUS_WATCH_TRIES needs a positive number"; exit 2 ;; esac
   fails=0 seen=
   while :; do
-    if [ -n "$seen" ]; then out=$("$SELF" --changes "$@"); else out=$(SESSION_STATUS_PEEK=1 "$SELF" --changes "$@"); fi; rc=$?
+    if [ -n "$seen" ]; then out=$(SESSION_STATUS_FORWARD=1 "$SELF" --changes "$@"); else out=$(SESSION_STATUS_PEEK=1 "$SELF" --changes "$@"); fi; rc=$?
     if [ "$rc" != 0 ]; then
       # A change waiting to be confirmed keeps the short CONFIRM_S retry, so a blip doesn't delay it by SECS.
       fails=$((fails + 1)) wait=$every out=${out:-"(no output, exit $rc; see stderr)"}; [ -z "$seen" ] || wait=$confirm
@@ -748,6 +748,26 @@ fi
 if [ "${1:-}" = --stale ]; then
   shift; out=$(SESSION_STATUS_NO_FEEDBACK=1 "$SELF" "$@"); rc=$?
   awk '$0 == "Stale:" { s = 1; next } s && /^  \* / { print substr($0, 5); next } { s = 0 }' <<<"$out"; exit "$rc"
+fi
+
+# The watcher's forwarded PR events (--changes, SESSION_STATUS_FORWARD): the outbox (EPOCH ID NAME LINE TEXT, tab-
+# separated) holds those for the coordinator pane to SendMessage; .forwarded (ok|failed LINE NOTE) what came of each.
+fwd_file() { echo ~/.cache/session-status/"$ENC.$1"; }
+locked_append() { mkdir -p ~/.cache/session-status; ( inbox_lock "$1"; grep . >> "$1" ); }   # FILE < LINES
+locked_drop() { ( inbox_lock "$1"; [ -f "$1" ] && grep -vxF -f <(printf '%s\n' "$2") "$1" > "$1.$$"; mv "$1.$$" "$1" ) 2>/dev/null; }  # FILE LINES
+locked_take_old() {   # FILE SECS: prints the entries older than SECS and drops them
+  ( inbox_lock "$1"; [ -f "$1" ] || exit 0
+    awk -F'\t' -v t=$(( $(date +%s) - $2 )) -v keep="$1.$$" 'BEGIN { printf "" > keep } $1 < t { print; next } { print > keep }' "$1" &&
+      mv "$1.$$" "$1" )
+}
+# --outbox: the outbox's entries (the coordinator pane sends each). --outbox-done < `ok|failed<TAB>LINE<TAB>NOTE` lines:
+# what came of them, for the watcher's next report; their entries leave the outbox only then, so none is lost between.
+[ "${1:-}" != --outbox ] || { cat "$(fwd_file outbox)" 2>/dev/null; exit 0; }
+if [ "${1:-}" = --outbox-done ]; then
+  d=$(cat); grep . <<<"$d" | locked_append "$(fwd_file forwarded)"
+  ob=$(fwd_file outbox); [ -f "$ob" ] || exit 0
+  printf '%s\n' "$d" > "$ob.done.$$"; inbox_lock "$ob"
+  awk -F'\t' 'NR == FNR { done[$2]; next } !($4 in done)' "$ob.done.$$" "$ob" > "$ob.$$" && mv "$ob.$$" "$ob"; rm -f "$ob.done.$$"; exit 0
 fi
 
 # --changes: print only lines that differ from the previous --changes run (for --watch). Idle/busy and
@@ -791,35 +811,68 @@ if [ "${1:-}" = --changes ]; then
     [ -z "$u" ] || { new+=$'\nFeedback (feedback list --plugin):'; while IFS= read -r l; do new+=$'\n  * '"$l"; done <<<"$u"; }
   fi
   # PR events: an open PR of a row with an owner newly failing CI (CI-FAILED), in conflict (CONFLICT) or with changes
-  # requested (!NAME, `changes requested by`) is a line `* REPO#ID EVENT @SHA (KEY) → "NAME" ID`, for the coordinator
-  # to send the owner (SKILL.md, PR events). At most once per PR, event and head SHA ($last.pr-events): CI and a
-  # conflict again only on a new head; changes requested not again while it stays (a push doesn't clear it, a review
-  # does). The SHA is the PR's repo's worktree head as pushed (the only one, when the names differ), else `-`.
+  # requested (!NAME, `changes requested by`) is a line `* REPO#ID EVENT @SHA (KEY) → "NAME" ID`; a row whose PRs are
+  # all MERGED while it is still on the board (its status not moved to done) is `* REPO#ID[,…] all-merged (KEY,
+  # STATUS) → "NAME" ID`, or `→ no owner`. Each comes with the nudge for its owner (SKILL.md, Watching). At most once
+  # per PR, event and head SHA ($last.pr-events): CI and a conflict again only on a new head; changes requested not
+  # again while it stays (a push doesn't clear it, a review does); all-merged once per task and PR set. The SHA is the
+  # PR's repo's worktree head as pushed (the only one, when the names differ), else `-`.
   # shortcut: `-` (no pushed worktree found) fires once per PR and event; an adapter giving each PR's head would fix it.
-  # Entries go with their PR leaving the board. The first run only records what's there (a peek too, then); a later
-  # peek records nothing.
+  # Entries go with their PR (task) leaving the board. The first run only records what's there (a peek too, then); a
+  # later peek records nothing.
   ev= first=1; [ ! -f "$last.pr-events" ] || first=0
   [ -f "$last.prs.$$" ] && ev=$(awk -F'\t' -v sent="$last.pr-events" -v out="$last.pr-events.$$" -v first=$first '
-    BEGIN { while ((getline l < sent) > 0) old[l] }
+    BEGIN { while ((getline l < sent) > 0) old[l]; firstm = first || !("#all-merged" in old) }
+    function emit(k, line, text, f) { if (!(k in cur) && !(k in old) && !f)
+        printf "  * %s → %s\037%s\037%s\037%s\n", line, ($2 == "" ? "no owner" : "\"" $3 "\" " substr($2, 1, 8)), $2, $3, text
+      cur[k] }
     { delete h; nh = split($4, hs, " "); for (i = 1; i <= nh; i++) { split(hs[i], kv, "="); h[kv[1]] = kv[2] }
-      n = split($5, w, /[ \t]+/); pr = ""
+      n = split($5, w, /[ \t]+/); pr = ""; np = nm = 0; delete ps; board[$1]
       for (i = 1; i <= n; i++) { x = w[i]; if (x == "|") break
-        if (x ~ /#[0-9]+$/) { pr = x; open = w[i + 1] == "OPEN"; board[pr]
+        if (x ~ /#[0-9]+$/) { pr = x; open = w[i + 1] == "OPEN"; board[pr]; np++; nm += (w[i + 1] == "MERGED")
+          for (j = np - 1; j > 0 && ps[j] > pr; j--) ps[j + 1] = ps[j]; ps[j + 1] = pr   # sorted: an adapter may list them in another order
           rn = substr(pr, 1, index(pr, "#") - 1); sub(/.*\//, "", rn)
           sha = (rn in h) ? h[rn] : nh == 1 ? kv[2] : "-"; continue }
         if (pr == "" || !open || $2 == "") continue
         e = x == "CI-FAILED" ? "ci-failed" : x == "CONFLICT" ? "conflict" : \
           (x ~ /(^|,)!/ || (x == "changes" && w[i + 1] == "requested")) ? "changes-requested" : ""
         if (e == "") continue
-        k = pr " " e (e == "changes-requested" ? "" : " " sha)
-        if (!(k in cur) && !(k in old) && !first) printf "  * %s %s @%s (%s) → \"%s\" %s\n", pr, e, sha, $1, $3, substr($2, 1, 8)
-        cur[k] } }
-    END { for (k in old) { split(k, p, " "); if ((p[1] in board) && (p[2] != "changes-requested" || k in cur)) cur[k] }
+        emit(pr " " e (e == "changes-requested" ? "" : " " sha), sprintf("%s %s @%s (%s)", pr, e, sha, $1),
+          sprintf("PR %s (%s): %s on %s. Fix it and push; force-push, post or merge only with the usual approval. Reply when pushed, or blocked.", pr, $1, e, sha), first) }
+      prs = ""; for (j = 1; j <= np; j++) prs = prs (j > 1 ? "," : "") ps[j]
+      if (np && nm == np) emit($1 " all-merged " prs, sprintf("%s all-merged (%s, %s)", prs, $1, $6),
+        sprintf("%s (%s): all merged, and the task is still %s. Unless you already have: deploy per the project doc (a deploy only with the usual approval), then move the task on if nothing blocks. Reply when done, or blocked.", prs, $1, $6), firstm) }
+    # "#all-merged": all-merged events are recorded, so the first run after an upgrade only records them too.
+    END { for (k in old) { split(k, p, " "); if ((p[1] in board) && (p[2] != "changes-requested" || k in cur)) cur[k] }; cur["#all-merged"]
       printf "" > out; for (k in cur) print k > out }' "$last.prs.$$")
   [ -n "${SESSION_STATUS_PEEK:-}" ] && [ "$first" = 0 ] || ! [ -f "$last.pr-events.$$" ] || mv "$last.pr-events.$$" "$last.pr-events"
   rm -f "$last.pr-events.$$" "$last.prs.$$"
-  [ -z "$ev" ] || ev=$'PR events (send each owner the nudge, SKILL.md):\n'$ev
-  if [ -f "$last" ]; then
+  # Under --watch (SESSION_STATUS_FORWARD) a committing run sends each owned event's nudge itself: --send-when-idle
+  # without waiting, and a live session of this account (`send:`, or busy) through the outbox, which the coordinator
+  # pane's timer sends (--outbox). What was sent shows under Forwarded beside the next change that wakes the
+  # coordinator, not as one; what wasn't stays a PR event, with why. An outbox entry no pane took in OUTBOX_S (600)
+  # comes back as a PR event too.
+  fw=$(fwd_file forwarded) ob=$(fwd_file outbox) evl=
+  if [ -n "$ev" ]; then
+    while IFS=$'\037' read -r line id name text; do
+      if [ -n "${SESSION_STATUS_FORWARD:-}" ] && [ -z "${SESSION_STATUS_PEEK:-}" ] && [ -n "$id" ]; then
+        r=$(SESSION_STATUS_WAIT_S=0 "$SELF" --send-when-idle "$id" "$text" </dev/null 2>/dev/null); rc=$?
+        r=$(tail -1 <<<"$r"); r=${r:-exit $rc}
+        if [ "$rc" = 0 ] && [[ $r != send:* ]]; then printf 'ok\t%s\t%s\n' "${line#  \* }" "$r" | locked_append "$fw"; continue; fi
+        if [ "$rc" = 0 ] || [[ $r == *"still busy"* ]]; then
+          printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$id" "$name" "${line#  \* }" "$text" | locked_append "$ob"; continue; fi
+        line+=" (not forwarded: $r)"
+      fi
+      evl+="$line"$'\n'
+    done <<<"$ev"
+  fi
+  if [ -z "${SESSION_STATUS_PEEK:-}" ]; then old=$(locked_take_old "$ob" "${SESSION_STATUS_OUTBOX_S:-600}"); else old=$(awk -F'\t' -v t=$(( $(date +%s) - ${SESSION_STATUS_OUTBOX_S:-600} )) '$1 < t' "$ob" 2>/dev/null); fi
+  [ -z "$old" ] || evl+=$(awk -F'\t' '{ print "  * " $4 " (not forwarded: no coordinator pane sent it)" }' <<<"$old")$'\n'
+  fwc=$(cat "$fw" 2>/dev/null)
+  evl+=$(awk -F'\t' '$1 == "failed" { print "  * " $2 " (not forwarded: " $3 ")" }' <<<"$fwc")
+  evl=$(grep . <<<"$evl"); ev=; [ -z "$evl" ] || ev=$'PR events (send each owner the nudge, SKILL.md):\n'$evl
+  sent=$(awk -F'\t' '$1 == "ok" { print "  * " $2 " (" $3 ")" }' <<<"$fwc")
+  { if [ -f "$last" ]; then
     # A notice going away (read, answered) isn't news: removed notice lines don't count. Nor does a session
     # merely starting work: a row whose only change is its session entering `working` is dropped, both
     # halves. Nor is a working session's worktree changing its dirty/unpushed counts, nor a row flipping between
@@ -856,7 +909,14 @@ if [ "${1:-}" = --changes ]; then
           for (i = 1; i <= NR; i++) if (!(i in drop)) print line[i] }'; echo "$ev"; } | grep . || echo "no changes"
   else
     echo "$new"; [ -z "$ev" ] || printf '\n%s\n' "$ev"
+  fi; } > "$last.out.$$"
+  # Forwarded rides along with news; alone it is none, and waits for the next (put back, when taken).
+  cat "$last.out.$$"
+  if [ "$(cat "$last.out.$$")" != "no changes" ]; then
+    [ -z "$sent" ] || printf 'Forwarded (PR events sent to their owners; nothing to do):\n%s\n' "$sent"
+    [ -n "${SESSION_STATUS_PEEK:-}" ] || [ -z "$fwc" ] || locked_drop "$fw" "$fwc"
   fi
+  rm -f "$last.out.$$"
   [ -n "${SESSION_STATUS_PEEK:-}" ] || echo "$new" > "$last"; exit
 fi
 
@@ -1675,8 +1735,8 @@ keys=$(cut -f1 "$TMP/tasks")
 
 # \037 instead of tab: read drops empty tab-separated fields.
 # For --changes' PR events (SESSION_STATUS_PRS_OUT): KEY, owner id (empty: none), name, `REPO=SHA …` (each worktree's
-# pushed head: its upstream, else origin/BRANCH; never an unpushed commit), EXTRA, per row naming a PR.
-pr_owner() {  # KEY EXTRA
+# pushed head: its upstream, else origin/BRANCH; never an unpushed commit), EXTRA, STATUS, per row naming a PR.
+pr_owner() {  # KEY EXTRA STATUS
   local id name= r wt b sha shas=
   id=$(awk -v k="$1" '$1==k {print $2}' "$TMP/owners.exact")
   [ -z "$id" ] || name=$(awk -F'\t' -v id="$id" '$1==id {print $2}' "$TMP/agents.all")
@@ -1685,14 +1745,14 @@ pr_owner() {  # KEY EXTRA
     sha=$(git -C "$wt" rev-parse --short=12 '@{u}' 2>/dev/null || git -C "$wt" rev-parse --short=12 "refs/remotes/origin/$b" 2>/dev/null) &&
       shas+="${shas:+ }${r##*/}=$sha"
   done < <(worktrees_for "$1")
-  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$id" "${name:-${id:0:8}}" "$shas" "$2"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$id" "${name:-${id:0:8}}" "$shas" "$2" "$3"
 }
 : > "$TMP/prs"
 tr '\t' '\037' < "$TMP/tasks" | while IFS=$'\037' read -r k st title extra; do
   wt=$(local_for "$k")
   line=$(printf '%-9s %-14s %s%s | %s' "$k" "$st" "$extra" "$wt" "$(session_for "$k" "$extra" "$wt")")
   echo "$line${title:+ | $title}"
-  [ -z "${SESSION_STATUS_PRS_OUT:-}" ] || ! grep -qE '#[0-9]+( |$)' <<<"$extra" || pr_owner "$k" "$extra" >> "$TMP/prs"
+  [ -z "${SESSION_STATUS_PRS_OUT:-}" ] || ! grep -qE '#[0-9]+( |$)' <<<"$extra" || pr_owner "$k" "$extra" "$st" >> "$TMP/prs"
 done | tee "$TMP/rows"
 [ -z "${SESSION_STATUS_PRS_OUT:-}" ] || cp "$TMP/prs" "$SESSION_STATUS_PRS_OUT"
 # The full sweep's rows, for the next sweep's messages module (it runs alongside this one, so it reads the last).

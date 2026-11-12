@@ -250,7 +250,7 @@ grep -qxF "$(pev ci-failed -)" <<<"$out" && git init -q --bare "$tmp/origin.git"
   [ "$(run --changes | tail -1)" = "$(pev ci-failed)" ] && [ "$(run --changes)" = "no changes" ] &&
   echo 'app#1 OPEN CI-FAILED !bob | ' > "$tmp/prs" && [ "$(run --changes | grep -c '^  \* app#1')" = 1 ] && push &&
   [ "$(run --changes | grep '^  \* app#1')" = "$(pev ci-failed)" ] &&
-  echo 'app#1 MERGED CONFLICT | ' > "$tmp/prs" && ! run --changes | grep -q '^  \* app#1' &&
+  echo 'app#1 MERGED CONFLICT | ' > "$tmp/prs" && ! run --changes | grep -q '^  \* app#1 conflict' &&
   rm "$tmp/prs" && run --changes >/dev/null && git -C "$root/wt" reset -q --soft HEAD~2 && git -C "$root/wt" branch -q --unset-upstream &&
   git -C "$root/wt" remote remove origin || { echo "PR events failed: $out"; exit 1; }
 # The first run with no record (an upgrade) only records, even as a watcher's peek; the next new event still fires.
@@ -258,6 +258,40 @@ rm "$tmp/.cache/session-status/"*.pr-events; echo 'app#1 OPEN CONFLICT | ' > "$t
 [ "$(SESSION_STATUS_PEEK=1 run --changes | grep -c '^  \* app#1')" = 0 ] && echo 'app#1 OPEN CONFLICT CI-FAILED | ' > "$tmp/prs" &&
   [ "$(run --changes | grep '^  \* app#1')" = "$(pev ci-failed -)" ] && rm "$tmp/prs" && run --changes >/dev/null ||
   { echo "PR events' first run failed"; exit 1; }
+# All of a task's PRs merged while it is on the board is one all-merged event for its owner, once per PR set in any
+# order; the first run after an upgrade (no "#all-merged" record) only records them.
+echo 'app#1 OPEN app#2 MERGED | ' > "$tmp/prs"; run --changes >/dev/null; echo 'app#2 MERGED app#1 MERGED | ' > "$tmp/prs"
+out=$(run --changes); grep -qxF '  * app#1,app#2 all-merged (ABC-12, -) → "fix it" 11111111' <<<"$out" &&
+  echo 'app#1 MERGED app#2 MERGED | ' > "$tmp/prs" && ! run --changes | grep -q 'all-merged' &&
+  rm "$tmp/prs" && run --changes >/dev/null && sed -i '' '/^#all-merged$/d' "$tmp/.cache/session-status/"*.pr-events &&
+  echo 'app#1 MERGED | ' > "$tmp/prs" && ! run --changes | grep -q 'all-merged' && grep -qx '#all-merged' "$tmp/.cache/session-status/"*.pr-events &&
+  rm "$tmp/prs" && run --changes >/dev/null || { echo "all-merged failed: $out"; exit 1; }
+# Under --watch (SESSION_STATUS_FORWARD) a committing run sends the nudge itself (here a resume: the stub lists no pid)
+# and lists it under Forwarded beside other news, never as news alone; a peek sends nothing.
+ss=$tmp/.cache/session-status; e=$(ls "$ss/"*.pr-events); e=${e%.last.pr-events}
+cp "$tmp/bin/claude" "$tmp/claude.keep"; { echo '#!/bin/sh'; echo '[ "$1" != --bg ] || { echo "backgrounded · $(echo "$3" | cut -c1-8)"; exit 0; }'
+  sed 1d "$tmp/claude.keep"; } > "$tmp/bin/claude"
+echo 'app#1 OPEN CONFLICT | ' > "$tmp/prs"
+out=$(SESSION_STATUS_PEEK=1 SESSION_STATUS_FORWARD=1 run --changes) && grep -q '^  \* app#1 conflict' <<<"$out" && [ ! -s "$e.forwarded" ] &&
+  out=$(SESSION_STATUS_FORWARD=1 run --changes) && ! grep -q '^PR events' <<<"$out" &&
+  grep -q '^Forwarded (PR events sent to their owners; nothing to do):$' <<<"$out" &&
+  grep -q '^  \* app#1 conflict @- (ABC-12) → "fix it" 11111111 (woke "fix it"' <<<"$out" && [ ! -s "$e.forwarded" ] ||
+  { echo "forwarding failed: $out"; exit 1; }
+mv "$tmp/claude.keep" "$tmp/bin/claude"
+# A forward alone wakes no one and waits for the next news; a failed one is news (the pane's --outbox-done).
+printf 'ok\tapp#7 conflict @- (ABC-12) → "fix it" 11111111\tsent\n' | run --outbox-done
+[ "$(run --changes)" = "no changes" ] && grep -q '^ok' "$e.forwarded" &&
+  printf 'failed\tapp#8 conflict @- (ABC-12) → "fix it" 11111111\tno such session\n' | run --outbox-done && out=$(run --changes) &&
+  grep -qxF '  * app#8 conflict @- (ABC-12) → "fix it" 11111111 (not forwarded: no such session)' <<<"$out" &&
+  grep -q '^  \* app#7 conflict .* (sent)$' <<<"$out" && [ ! -s "$e.forwarded" ] || { echo "forwarded alone or failed: $out"; exit 1; }
+# The outbox: --outbox lists its entries for the pane, and only --outbox-done drops them; one no pane took in OUTBOX_S
+# is a PR event.
+printf '%s\tid\tfix it\tapp#9 ci-failed @- (ABC-12) → "fix it" 11111111\tText\n' "$(date +%s)" > "$e.outbox"
+[ "$(run --outbox | cut -f3,5)" = "$(printf 'fix it\tText')" ] && [ -s "$e.outbox" ] &&
+  printf 'ok\tapp#9 ci-failed @- (ABC-12) → "fix it" 11111111\tsent\n' | run --outbox-done && [ ! -s "$e.outbox" ] && : > "$e.forwarded" &&
+  printf '1\tid\tfix it\tapp#9 ci-failed @- (ABC-12) → "fix it" 11111111\tText\n' > "$e.outbox" && out=$(run --changes) &&
+  grep -qxF '  * app#9 ci-failed @- (ABC-12) → "fix it" 11111111 (not forwarded: no coordinator pane sent it)' <<<"$out" && [ ! -s "$e.outbox" ] &&
+  rm "$tmp/prs" && run --changes >/dev/null || { echo "outbox failed: $out"; exit 1; }
 # A working <-> idle flip doesn't wake: working -> blocked (its turn is over) and back.
 echo working > "$tmp/state"; run --changes >/dev/null; echo blocked > "$tmp/state"
 [ "$(run --changes)" = "no changes" ] && echo working > "$tmp/state" && [ "$(run --changes)" = "no changes" ] || { echo "idle flip woke --changes"; exit 1; }
