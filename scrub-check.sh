@@ -3,8 +3,8 @@
 # case-insensitive) from $SCRUB_DENY, else the untracked file ${XDG_CONFIG_HOME:-~/.config}/scrub-deny, plus a
 # macOS home path always. The pattern is kept out of the repo because it spells out what it hides; CI gets it from
 # the SCRUB_DENY secret. A known hit is listed in scrub-allow.txt as `path<TAB>the whole line`; an allow-list line
-# that no longer matches fails too, so the list can't go stale. Run from anywhere in the repo; plugin-release and CI
-# run it. Prints "ok" or each problem. No pattern: fails, except on a fork's pull request (SCRUB_FORK_PR=true, set
+# that no longer matches fails too, so the list can't go stale. Run from anywhere in the repo; CI
+# runs it. Prints "ok" or each problem. No pattern: fails, except on a fork's pull request (SCRUB_FORK_PR=true, set
 # by CI: it gets no secrets), where it says so and passes.
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 1

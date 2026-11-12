@@ -1,0 +1,28 @@
+name: release
+# Numbers what a push to main changed: release.sh adds the release commit `<plugin> <version>: <text>` and pushes it.
+# Runs one at a time; release.sh reads what's pending from main itself, so a run that GitHub drops from the queue
+# (it keeps one pending) is covered by the next, and the run on the release commit's own push finds nothing.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # The deploy key main's ruleset lets bypass its rules. Unset, checkout and push use GITHUB_TOKEN, which
+          # only works while main is unprotected.
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+      - run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          .github/release.sh --push
