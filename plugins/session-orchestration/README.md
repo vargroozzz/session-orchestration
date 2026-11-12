@@ -106,6 +106,10 @@ Installing the plugin adds these to every Claude Code session, in every project:
 - **Coordinator guard** (`hooks/coordinator-guard.sh`): in a coordinator session only, refuses a Bash command that
   starts with `cd`, and an edit of a project file outside `.claude/`, the replies folder, the handoff file and the
   project memory: those belong to a task session.
+- **Local history** (`skills/orchestrating-sessions/history-git`, Stop): when a turn ends, commits what changed in the
+  project's replies folder and handoff files to a local git repo whose git dir sits outside the folder; never
+  pushed, files over 1 MB left out. `session-status --git-history replies|handoff` reads it. A project with neither
+  configured gets nothing.
 
 The background-session guards (no question box, plan mode or stray `EnterWorktree` in a `--bg` session; a compound
 Bash command split instead of raising a prompt) come with [project-memory](../project-memory/README.md), which this

@@ -15,7 +15,7 @@
 #                                the index line, the line out of FILE, each a copy swapped in with mv, in that order.
 #   pending history LABEL [--last N]  an entry's history (open or archived), or its header and last N changes.
 #   pending history --find KEY   the history file (path from the root) of the entry naming KEY; open ones first.
-#   pending history --scan       every version of FILE in the project's transcripts, every account (lib.sh
+#   pending history --scan       every version of FILE in its folder's git history (history-git), else in the project's transcripts, every account (lib.sh
 #                                list_accounts), diffed oldest first: TIME ID8 LABEL SLUG change|gone LINE|REASON.
 #                                A Bash write to FILE: TIME ID8 <empty> <empty> gap COMMAND (LABEL and SLUG empty).
 #   pending history --seed       the scan written out, once when adopting: a history for each open entry without
@@ -126,6 +126,16 @@ drop_lines() {
     b == 1 && !/^- / && (/^#/ || /[^[:space:]]/) { b = 2 } { print }' "$P" > "$P.$$" && mv "$P.$$" "$P"
 }
 
+# merged LABEL EVENTS HISTORY: a history file from pending-diff.jq's EVENTS (one slug) and HISTORY's lines, by time,
+# a wording once per run of it
+merged() {
+  printf '# %s: history\n\n' "$1"
+  # HISTORY's lines first: a version from the same minute sorts after the hook's wordings
+  { grep '^- ' "$3" 2>/dev/null
+    awk -F'\t' '$5 != "gap" { printf "- %s (%s) %s%s\n", $1, $2, ($5 == "gone" ? "resolved: " : ""), $6 }' "$2"; } | sort -s -k2,3 |
+    awk '{ t = $0; sub(/^- [0-9-]+ [0-9:]+ \([^)]*\) /, "", t) } t != p { print } { p = t }'
+}
+
 # update: FILE against the last snapshot: new lines recorded, gone entries archived (reason unknown).
 update() {
   local l sl line
@@ -176,13 +186,17 @@ case ${1:-} in
           [ -f "$f" ] && head -1 "$f" | grep -qw -- "$2" && { echo "${f#"$ROOT"/}"; exit 0; }
         done; exit 1 ;;
       --scan|--seed)
-        hdr=$(head -1 "$P"); enc=$(sed 's/[^A-Za-z0-9]/-/g' <<<"$ROOT")
+        hdr=$(head -1 "$P"); enc=$(sed 's/[^A-Za-z0-9]/-/g' <<<"$ROOT"); src=git
+        # the folder's git history (history-git) where it has FILE's commits, else the transcripts; --seed, adopting
+        # the history once, reads both (the transcripts hold what came before the repo)
+        bash "$here/history-git" versions "$P" > "$s.scan.$$" 2>/dev/null && [ "$1" = --scan ] || {
+        [ -s "$s.scan.$$" ] && src="git and transcripts" || src=transcripts
         list_accounts | cut -f1 | while read -r a; do (cd "$a/projects" 2>/dev/null && pwd -P); done | sort -u |
           while read -r pd; do ls -d "$pd/$enc" "$pd/$enc"-* 2>/dev/null; done |
           while read -r d; do grep -l -F -e "$hdr" -e "$rel" "$d"/*.jsonl 2>/dev/null; done | sort -u |
           while read -r f; do
             jq -cnR --arg header "$hdr" --arg rel "$rel" --arg abs "$P" --arg sid "$(basename "$f" .jsonl)" -f "$here/pending-versions.jq" "$f" 2>/dev/null
-          done > "$s.scan.$$"
+          done >> "$s.scan.$$"; }
         # the file as it is now closes the scan: an entry no transcript saw leave is gone by now
         jq -cn --rawfile v "$P" --arg t "$(date -u +%Y-%m-%dT%H:%M:%S.999Z)" '{k: "v", v: $v, t: $t, i: 0, s: "now", turn: ""}' >> "$s.scan.$$"
         jq -rs -f "$here/pending-diff.jq" "$s.scan.$$" > "$s.events.$$"; rm -f "$s.scan.$$"
@@ -196,10 +210,7 @@ case ${1:-} in
           if cut -f2 "$s.cur" | grep -qxF "$sl"; then
             # merged with what the hook recorded already, by time, a wording once per run of it
             mkdir -p "$D"; h=$D/$sl.history.md
-            { printf '# %s: history\n\n' "$l"
-              { awk -F'\t' '{ printf "- %s (%s) %s%s\n", $1, $2, ($5 == "gone" ? "resolved: " : ""), $6 }' "$s.one"
-                grep '^- ' "$h" 2>/dev/null; } | sort -s -k2,3 |
-                awk '{ t = $0; sub(/^- [0-9-]+ [0-9:]+ \([^)]*\) /, "", t) } t != p { print } { p = t }'; } > "$h.$$" && mv "$h.$$" "$h"
+            merged "$l" "$s.one" "$h" > "$h.$$" && mv "$h.$$" "$h"
             opened=$((opened + 1))
           else
             [ ! -f "$A/$sl.history.md" ] || continue
@@ -217,12 +228,24 @@ case ${1:-} in
         while IFS=$'\t' read -r l sl line; do record "$l" "$sl" "$line"; pointer "$sl"; done < "$s.cur"
         gaps=$(awk -F'\t' '$5 == "gap" {n++} END {print n+0}' "$s.events.$$")
         snapshot; rm -f "$s.cur" "$s.one" "$s.events.$$"
-        echo "seeded from transcripts: $opened open entries' histories, $closed resolved entries archived (${AI#"$ROOT"/})"
+        echo "seeded from $src: $opened open entries' histories, $closed resolved entries archived (${AI#"$ROOT"/})"
         [ "$gaps" = 0 ] || echo "$gaps Bash write(s) to $rel seen only through later versions: --scan lists them as gap" ;;
       ''|--*) echo "usage: session-status --pending-history LABEL [--last N] | --find KEY | --scan | --seed"; exit 2 ;;
       *)
         sl=$(sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+|-+$//g' <<<"$1" | cut -c1-60)
         f=$D/$sl.history.md; [ -f "$f" ] || f=$A/$sl.history.md
+        # with a git history (history-git), its versions of FILE merged in: what the hook missed shows too
+        trap 'rm -f "$s.git.$$"' EXIT
+        if bash "$here/history-git" versions "$P" > "$s.git.$$" 2>/dev/null; then
+          jq -cn --rawfile v "$P" --arg t "$(date -u +%Y-%m-%dT%H:%M:%S.999Z)" '{k: "v", v: $v, t: $t, i: 0, s: "now", turn: ""}' >> "$s.git.$$"
+          jq -rs -f "$here/pending-diff.jq" "$s.git.$$" |   # a resolution is the history file's (its reason), when there is one
+            awk -F'\t' -v s="$sl" -v h="$([ -f "$f" ] && echo 1)" '$4 == s && !(h && $5 == "gone")' > "$s.one.$$"
+          if [ -s "$s.one.$$" ]; then
+            l=$(head -1 "$f" 2>/dev/null | sed -E 's/^# (.*): history$/\1/'); [ -n "$l" ] || l=$(cut -f3 "$s.one.$$" | tail -1)
+            merged "$l" "$s.one.$$" "$f" > "$s.git.$$"; f=$s.git.$$
+          fi
+          rm -f "$s.one.$$"
+        fi
         [ -f "$f" ] || { echo "no history for $1 (looked for $DN/$sl.history.md and $AN/$sl.history.md)"; exit 2; }
         if [ "${2:-}" = --last ] && [[ ${3:-} =~ ^[0-9]+$ ]]; then head -1 "$f"; grep '^- ' "$f" | tail -n "$3"
         else cat "$f"; fi ;;

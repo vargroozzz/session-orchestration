@@ -119,11 +119,12 @@ find_root() {
   done
   git rev-parse --show-toplevel 2>/dev/null || pwd
 }
-# replies_path: the replies folder the project's CLAUDE.md section names, absolute (run in the
-# project root ROOT); empty when it names none.
+# replies_path [ROOT]: the replies folder ROOT's CLAUDE.md section names (ROOT: $ROOT, else find_root), absolute; empty when it
+# names none.
 replies_path() {
-  local r; r=$(sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
-  r=${r%/}; r=${r/#\~/$HOME}; case $r in ''|/*) echo "$r" ;; *) echo "$ROOT/$r" ;; esac
+  local root=${1:-${ROOT:-$(find_root)}} r
+  r=$(cd "$root" && sed -nE 's/.*[Rr]eplies folder[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
+  r=${r%/}; r=${r/#\~/$HOME}; case $r in ''|/*) echo "$r" ;; *) echo "$root/$r" ;; esac
 }
 # plugin_root: the project root of config feedback.repo_dir, whose coordinator is the plugin coordinator
 # (features/plugin-coordinator.md); fails when the key is unset.

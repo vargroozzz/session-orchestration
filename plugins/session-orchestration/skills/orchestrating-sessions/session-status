@@ -92,6 +92,7 @@
 #        session-status --pending       the adapter's `pending` text only
 #        session-status --pending-done LABEL [--] REASON   archive a handoff entry (config pending.file; `pending`)
 #        session-status --pending-history LABEL [--last N] | --find KEY | --scan | --seed   an entry's history
+#        session-status --git-history replies|handoff [GIT ARGS…]   git on the folder's local history repo (history-git)
 #        session-status --urls          the adapter's `urls` text only
 #        session-status --root          the project root: where the adapter and .claude/coordinator-actions.json are
 #        session-status --agents        the sessions the last sweep saw: id, name, state, command prefix, started
@@ -783,6 +784,8 @@ adapter() { [ -n "$ADAPTER" ] && "$ADAPTER" "$@"; }
 [ "${1:-}" = --pending ] && { adapter pending 2>/dev/null; exit; }
 # The handoff file's archive and per-entry history (config pending.file): next to this script, `pending`.
 case ${1:-} in --pending-done|--pending-history) a=${1#--pending-}; shift; exec bash "$(dirname "$SELF")/pending" "$a" "$@" ;; esac
+# The replies folder's and the handoff files' local git history (the Stop hook keeps it): `history-git`.
+[ "${1:-}" = --git-history ] && { shift; exec bash "$(dirname "$SELF")/history-git" run "$@"; }
 PENDING=$(config pending.file 2>/dev/null)
 [ "${1:-}" = --urls ] && { adapter urls 2>/dev/null; exit; }
 [ "${1:-}" = --agents ] && { cat ~/.cache/session-status/"$ENC".agents 2>/dev/null; exit; }
