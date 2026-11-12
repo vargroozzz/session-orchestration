@@ -284,6 +284,55 @@ out=$(XDG_STATE_HOME=$tmp/state rnd chunks 7)
 grep -q $'^PROJ-3\t1\tscan/opus/low\t11\t10\t' <<<"$out" && grep -q $'^PROJ-3\t2\tscan/opus/low\t22\t30\t' <<<"$out" ||
   fail "chunks: each log line on the chunk whose --done printed it" "$out"
 
+# kinds: start lines joined by sha256(name)[:12]. kind-worker (17:00, build) ran in dddddd01 (a nudge, a done reply
+# the gate refused) and its successor dddddd02 (done at 17:30); dddddd00, an older session of that name, isn't it.
+# kind-scan ran on haiku: $1 for 1M input where opus would be $5. A start without sess stays unjoined.
+h() { printf %s "$1" | shasum -a 256 | cut -c1-12; }
+cat > "$a/dddddd00-1111.jsonl" <<'EOF'
+{"type":"agent-name","agentName":"kind-worker"}
+{"type":"user","timestamp":"2026-10-12T16:00:00.000Z","message":{"content":"Work on kind-worker: old"}}
+{"type":"assistant","timestamp":"2026-10-12T16:00:01.000Z","requestId":"d0","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000000}}}
+EOF
+cat > "$a/dddddd01-1111.jsonl" <<'EOF'
+{"type":"agent-name","agentName":"kind-worker"}
+{"type":"user","timestamp":"2026-10-12T17:00:30.000Z","message":{"content":"Work on kind-worker: go"}}
+{"type":"assistant","timestamp":"2026-10-12T17:00:31.000Z","requestId":"d1","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000000},"content":[{"type":"tool_use","id":"dr","name":"mcp__session-orchestration__reply","input":{"text":"done","done":"pr"}}]}}
+{"type":"user","timestamp":"2026-10-12T17:01:00.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"dr","is_error":true,"content":"<tool_use_error>reply: not sent, done pr doesn't hold yet: no PR</tool_use_error>"}]}}
+{"type":"user","timestamp":"2026-10-12T17:05:00.000Z","message":{"content":"<cross-session-message from=\"x\">status?</cross-session-message>"}}
+{"type":"agent-name","agentName":"kind-worker-prev-1"}
+EOF
+cat > "$a/dddddd02-1111.jsonl" <<'EOF'
+{"type":"agent-name","agentName":"kind-worker"}
+{"type":"user","timestamp":"2026-10-12T17:10:00.000Z","message":{"content":"Work on kind-worker: continue. Supersedes: dddddd01 (transcript x)"}}
+{"type":"assistant","timestamp":"2026-10-12T17:29:00.000Z","requestId":"d2","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000000},"content":[{"type":"tool_use","id":"ds","name":"mcp__session-orchestration__reply","input":{"text":"done","done":"pr"}}]}}
+{"type":"user","timestamp":"2026-10-12T17:30:00.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"ds","content":"Sent to c."}]}}
+EOF
+cat > "$a/dddddd03-1111.jsonl" <<'EOF'
+{"type":"custom-title","customTitle":"kind-scan"}
+{"type":"user","timestamp":"2026-10-12T17:00:10.000Z","message":{"content":"Work on kind-scan: look"}}
+{"type":"assistant","timestamp":"2026-10-12T17:00:11.000Z","requestId":"d3","message":{"model":"claude-haiku-4-5","usage":{"input_tokens":1000000}}}
+EOF
+printf '%s\n' "{\"t\":1791824400,\"k\":\"start\",\"what\":\"build\",\"model\":\"opus\",\"effort\":\"medium\",\"sess\":\"$(h kind-worker)\"}" \
+  "{\"t\":1791824400,\"k\":\"start\",\"what\":\"scan\",\"model\":\"haiku\",\"effort\":\"low\",\"sess\":\"$(h kind-scan)\"}" \
+  '{"t":1791824400,"k":"start","what":"build","model":"opus","effort":"medium"}' >> "$st/usage.jsonl"
+out=$(XDG_STATE_HOME=$tmp/state rnd kinds 7)
+[ "$(grep -v '^kind' <<<"$out")" = $'build\topus\tmedium\t2\t1\t10.0\t10.0\t1.00\t1\t1\t30\nscan\thaiku\tlow\t1\t1\t1.0\t1.0\t0.00\t0\t0\t-' ] ||
+  fail "kinds: join by hashed name and Supersedes:, haiku rates, done, handovers, nudges, minutes" "$out"
+out=$(RATES=1,1,1,1 XDG_STATE_HOME=$tmp/state rnd kinds 7)
+grep -q $'^build\topus\tmedium\t2\t1\t2.0\t' <<<"$out" || fail "kinds: RATES prices every model alike" "$out"
+# kind-scan started again at 18:00 (review) in dddddd04, on claude-opus-4-1 ($15 for 1M input) with 1M 5-minute cache
+# writes ($6.25 at 1.25x input): the 17:00 start keeps only dddddd03, the 18:00 one gets dddddd04.
+cat > "$a/dddddd04-1111.jsonl" <<'EOF'
+{"type":"custom-title","customTitle":"kind-scan"}
+{"type":"user","timestamp":"2026-10-12T18:00:10.000Z","message":{"content":"Work on kind-scan: again"}}
+{"type":"assistant","timestamp":"2026-10-12T18:00:11.000Z","requestId":"d4","message":{"model":"claude-opus-4-1-20250805","usage":{"input_tokens":1000000}}}
+{"type":"assistant","timestamp":"2026-10-12T18:00:12.000Z","requestId":"d5","message":{"model":"claude-opus-4-5-20251101","usage":{"cache_creation_input_tokens":1000000,"cache_creation":{"ephemeral_5m_input_tokens":1000000}}}}
+EOF
+echo "{\"t\":1791828000,\"k\":\"start\",\"what\":\"review\",\"model\":\"opus\",\"effort\":\"xhigh\",\"sess\":\"$(h kind-scan)\"}" >> "$st/usage.jsonl"
+out=$(XDG_STATE_HOME=$tmp/state rnd kinds 7)
+grep -q $'^scan\thaiku\tlow\t1\t1\t1.0\t' <<<"$out" && grep -q $'^review\topus\txhigh\t1\t1\t21.25\t' <<<"$out" ||
+  fail "kinds: a reused name joins the later start only; older opus and 5-minute cache-write rates" "$out"
+
 # handoff: a coordinated root with one open entry (reworded once) and one resolved twice (recurring), whose history
 # one session read
 hr=$tmp/hroot; mkdir -p "$hr/.claude" "$hr/n/p" "$hr/n/p-archive" "$home/.claude/projects/-x-hroot"

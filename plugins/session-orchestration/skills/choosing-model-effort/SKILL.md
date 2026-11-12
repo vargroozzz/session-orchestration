@@ -42,6 +42,6 @@ Size by what the hardest step needs, not by the task's label. A "fix" can be `me
   model id: pass its family's alias. Set `effort` only when the user, a CLAUDE.md or a skill asks for that effort.
   Nothing is logged.
 - **An R&D run**: the usage log's start lines (`{"k":"start","what":KIND,"model":…,"effort":…,"sess":…}`) carry
-  `sess`, the first 12 hex characters of the session name's sha256. Hash each session's name the same way to join a
-  start to that session's cost and outcome (the hash only keeps the name out of clear text: someone who can guess a
-  name can confirm it), and compare them per kind.
+  `sess`, the first 12 hex characters of the session name's sha256 (the hash only keeps the name out of clear text:
+  someone who can guess a name can confirm it). rnd's `kinds` report joins them to sessions that way and compares
+  cost and outcome per kind.

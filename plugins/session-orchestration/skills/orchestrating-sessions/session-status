@@ -156,8 +156,8 @@ set -uo pipefail
 . "$(dirname "$0")/../../lib.sh" || exit 1
 [ "${1:-}" = --config ] && { config "${2:-}"; exit; }
 # --kind KIND [NAME]: `--model M --effort E` from plan.models.KIND for a plain task start's `claude --bg` line, logged as
-# a usage start line (lib.sh usage) with NAME (the -n session name) hashed, so rnd can tie a kind to its session's
-# cost (no reader yet).
+# a usage start line (lib.sh usage) with NAME (the -n session name) hashed, so `rnd.py kinds` ties a kind to its
+# session's cost and outcome.
 if [ "${1:-}" = --kind ]; then
   { [ $# = 2 ] || { [ $# = 3 ] && [[ $3 =~ ^[A-Za-z0-9._-]{1,80}$ ]]; }; } && me=$(config "plan.models.$2" 2>/dev/null) ||
     { echo "usage: session-status --kind design|build|mechanical|review|release|scan [SESSION-NAME]" >&2; exit 2; }

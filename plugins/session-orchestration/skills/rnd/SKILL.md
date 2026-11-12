@@ -35,6 +35,11 @@ schedules it.
 - Two commands read the planner's work: `chunks [days] [--session PREFIX]` gives one row per chunk (growth,
   peak, cost, compactions, handoff before or after one) and a per-kind `ratio` line; `trial [days=28]` gives the
   planner arm against the off arm.
+- `kinds [days]` reads the usage log's `start` lines (`session-status --kind KIND NAME`), joins each to its session
+  by hashed name (and the successors it handed over to), and gives per kind, model and effort: starts, joined, cost,
+  share reaching `reply … done`, handovers, nudges (every cross-session message in, answers and approvals too) and
+  minutes to done. Every command's cost uses each request's model's list rates (from the release after the `kinds`
+  report; before it, all at Opus rates): to compare with a run from before that, rerun its window with `--until`.
 - Replies folder: the one the project's `CLAUDE.md` names (its "Replies folder" line). None named: stop and
   say so. Below, `<R>` is that folder.
 - Reports: `<R>/rnd-run-<N>.md` and `.html`. Data: `<R>/rnd/run-<N>/*.tsv`, a fresh folder per run.
@@ -99,6 +104,9 @@ schedules it.
    - Planner sizing, when the usage log has chunk lines: `chunks 7 > chunks.tsv`. Report the `ratio` per kind
      (median act/est), and propose a new size multiplier for a kind whose median strays past 1.0 ± 0.3. Add
      `trial > trial.tsv`: it prints the arms, and the run compares them week over week against last run's.
+   - Sizing per kind, when the usage log has start lines: `kinds 7 > kinds.tsv`. Report cost per start and done
+     share per kind beside last run's, and propose a plan.models change for a kind that costs more than the next
+     kind up or reaches done less than the one below it.
    - Handoff entries, when the project sets `pending.file`: `handoff 28 > handoff.tsv 2> handoff.txt`. Give
      the on-you wait per blocker bucket, entries with reason `unknown`, recurring entries (rounds > 1), and
      detail and history bytes beside last run's. Read the top 5 rows by `wait_d` and the top 5 by `rewordings`

@@ -28,6 +28,9 @@ usage: python3 -I rnd.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args]
                                   Supersedes: and summed) or per matching session: kind/model/effort, est, act growth
                                   (K), peak, cache read, out, USD, turns, compactions, handoff (none|before|after a
                                   compaction), minutes; then a `ratio` line per kind (median act/est, last 20)
+  kinds [days=7]                  per kind/model/effort of the usage log's start lines (session-status --kind KIND NAME),
+                                  joined to sessions by hashed name and their successors: starts, joined, USD (sum,
+                                  median), share reaching `reply … done`, handovers, nudges, median minutes to done
   trial [days=28]                 the planner trial's arms side by side (tasks with a chunk session vs the rest):
                                   units, median USD and tokens per unit, peak, compactions, handoffs, /code-review
                                   findings and runs per unit, step-ins per unit
@@ -49,12 +52,19 @@ usage: python3 -I rnd.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args]
 Transcripts: <account>/projects/*/*.jsonl for every account dir ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*),
 each distinct projects/ tree once (accounts that share one through a symlink are read once).
 The window is the `days` before --until (UTC, default now): rerun an old window with --until.
-Cost uses rough Opus-class list rates (USD/Mtok in, out, cache read, cache write), override via env RATES="in,out,cr,cw".
+Cost prices each request at its model's list rates (USD/Mtok in, out, cache read, 1-hour cache write: opus 5,25,0.5,10,
+sonnet 3,15,0.3,6, haiku 1,5,0.1,2, older opus 4/4.1 and haiku 3/3.5 at theirs; any other model, fable too, as opus;
+5-minute cache writes at 1.25x input); env RATES="in,out,cr,cw" prices every model alike.
 """
 import glob, html, json, os, re, statistics, sys, time
 from datetime import datetime, timezone
 
-R_IN, R_OUT, R_CR, R_CW = map(float, os.environ.get("RATES", "5,25,0.5,10").split(","))
+# Model id pattern -> list rates, first match wins: older generations before their family.
+# shortcut: fable and unknown models are priced as opus; add a row when their list rate is known.
+RATES = [(r"opus-4-(?:1-)?2025|3-opus", (15, 75, 1.5, 30)), (r"3-5-haiku", (0.8, 4, 0.08, 1.6)),
+         (r"3-haiku", (0.25, 1.25, 0.03, 0.5)), (r"opus", (5, 25, 0.5, 10)), (r"sonnet", (3, 15, 0.3, 6)),
+         (r"haiku", (1, 5, 0.1, 2))]
+RATES_ALL = tuple(map(float, os.environ["RATES"].split(","))) if os.environ.get("RATES") else None
 HOME = os.path.expanduser("~")
 P = lambda s: datetime.fromisoformat(s.replace("Z", "+00:00"))
 END = time.time()
@@ -96,8 +106,18 @@ def lines(f):
             continue
 
 
-def usd(i, o, cr, cw):
-    return (i * R_IN + o * R_OUT + cr * R_CR + cw * R_CW) / 1e6
+def usd(i, o, cr, cw, model=""):
+    r_in, r_out, r_cr, r_cw = RATES_ALL or next((r for rx, r in RATES if re.search(rx, str(model or ""))), dict(RATES)["opus"])
+    return (i * r_in + o * r_out + cr * r_cr + cw * r_cw) / 1e6
+
+
+def req_tokens(u):
+    """A request's usage as usd's (in, out, cache read, cache write). Cache write is priced at the 1-hour rate (2x input),
+    so 5-minute writes (1.25x input), when the usage splits them out, count as 0.625 of a token each."""
+    cw = u.get("cache_creation_input_tokens", 0)
+    w5 = (u.get("cache_creation") or {}).get("ephemeral_5m_input_tokens", 0)
+    return (u.get("input_tokens", 0), u.get("output_tokens", 0), u.get("cache_read_input_tokens", 0),
+            cw - w5 * 0.375)
 
 
 def clip(s, n=220):
@@ -109,7 +129,7 @@ def sessions(days=7):
     home_enc = re.sub(r"[^A-Za-z0-9]", "-", HOME) + "-"
     print("project\tsession\tname\tstart\tend\tturns\tpeak_ctx\tcompacts\tout_tok\tcache_write\tcache_read\tusd\thuman_msgs\tdenials\tbang_cmds\tasks\ttool_errs\txmsg_in\tsendmsg\tfirst_prompt")
     for f in transcripts():
-        seen, peak, comp, out, cw, cr, inp = set(), 0, 0, 0, 0, 0, 0
+        seen, peak, comp, out, cw, cr, inp, cost = set(), 0, 0, 0, 0, 0, 0, 0.0
         human = den = bang = asks = errs = xin = sm = 0
         name, first, ts = "", "", []
         for _, o in lines(f):
@@ -134,6 +154,7 @@ def sessions(days=7):
                     seen.add(rid)
                     ctx = u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
                     peak = max(peak, ctx)
+                    cost += usd(*req_tokens(u), m.get("model"))
                     out += u.get("output_tokens", 0); cw += u.get("cache_creation_input_tokens", 0)
                     cr += u.get("cache_read_input_tokens", 0); inp += u.get("input_tokens", 0)
                 for b in c if isinstance(c, list) else []:
@@ -161,7 +182,7 @@ def sessions(days=7):
         proj = os.path.basename(os.path.dirname(f)).replace(home_enc, "")
         sid = os.path.basename(f)[:8]
         print("\t".join(map(str, [proj[-45:], sid, name, min(ts)[:16], max(ts)[:16], len(seen), peak, comp, out, cw, cr,
-                                  round(usd(inp, out, cr, cw), 2), human, den, bang, asks, errs, xin, sm, first.replace("\t", " ")])))
+                                  round(cost, 2), human, den, bang, asks, errs, xin, sm, first.replace("\t", " ")])))
 
 
 SELF = re.compile(r"\b(I was wrong|my mistake|I retract|retracting|I misread|that was wrong|I got that wrong|correction:|I stand corrected|wrongly (said|claimed)|I (incorrectly|wrongly))\b", re.I)
@@ -245,7 +266,7 @@ def headless(f):
 
 
 def requests(f, whole=False):
-    """Main-loop requests inside the window (all of them if WHOLE), each once: (ts, context tokens, usage)."""
+    """Main-loop requests inside the window (all of them if WHOLE), each once: (ts, context tokens, USD)."""
     seen = set()
     for _, o in lines(f):
         ts = o.get("timestamp") or ""
@@ -253,8 +274,10 @@ def requests(f, whole=False):
         if (out_of(ts) and not whole) or o.get("type") != "assistant" or o.get("isSidechain") or not rid or rid in seen:
             continue
         seen.add(rid)
-        u = (o.get("message") or {}).get("usage") or {}
-        yield ts, u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0), u
+        m = o.get("message") or {}
+        u = m.get("usage") or {}
+        yield ts, u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0), \
+            usd(*req_tokens(u), m.get("model"))
 
 
 def context(days=7, split="", project=""):
@@ -324,8 +347,7 @@ def units(days=7, *opts):
         if not proj.search(os.path.basename(os.path.dirname(f))):
             continue
         sid = os.path.basename(f)[:8]
-        cost = sum(usd(u.get("input_tokens", 0), u.get("output_tokens", 0), u.get("cache_read_input_tokens", 0),
-                       u.get("cache_creation_input_tokens", 0)) for _, _, u in requests(f))
+        cost = sum(c for _, _, c in requests(f))
         total += cost
         hits, is_review, first = unit_hits(f, rx)
         if k := TASK.search(first):
@@ -478,8 +500,9 @@ def stat(f):
     """One session's numbers inside the window, for chunks and trial. growth: the sum of context increases between
     requests (each message id once), not counting a session's first request or the one after a compaction."""
     s = dict(sid=os.path.basename(f)[:8], first="", ts0="", ts1="", growth=0, peak=0, inp=0, out=0, cr=0, cw=0,
-             turns=0, comp=0, models={}, findings=0, reviews=0, steps=0, done_t=set())
-    seen, prev, done_ids = set(), None, set()
+             turns=0, comp=0, models={}, findings=0, reviews=0, steps=0, done_t=set(), usd=0.0, names=set(), nudges=0,
+             done_at="")
+    seen, prev, done_ids, reply_ids = set(), None, set(), set()
     for _, o in lines(f):
         ts, t = o.get("timestamp") or "", o.get("type")
         m = o.get("message") or {}
@@ -491,6 +514,8 @@ def stat(f):
             continue
         if out_of(ts) or o.get("isSidechain"):
             continue
+        if t in ("agent-name", "custom-title"):   # every name it had: a handed-over session is renamed NAME-prev-K
+            s["names"].add(o.get("agentName") or o.get("customTitle") or "")
         if t == "system" and o.get("subtype") == "compact_boundary":
             s["comp"] += 1
             prev = None
@@ -506,6 +531,7 @@ def stat(f):
                 s["inp"] += u.get("input_tokens", 0); s["out"] += u.get("output_tokens", 0)
                 s["cr"] += u.get("cache_read_input_tokens", 0); s["cw"] += u.get("cache_creation_input_tokens", 0)
                 s["turns"] += 1
+                s["usd"] += usd(*req_tokens(u), m.get("model"))
                 s["ts1"] = max(s["ts1"], ts)
                 mod = re.search(r"opus|sonnet|haiku|fable", str(m.get("model")))
                 if mod:
@@ -519,18 +545,28 @@ def stat(f):
                 if b.get("type") == "tool_use" and b.get("name") == "Skill" and \
                         str((b.get("input") or {}).get("skill", "")).split(":")[-1] == "code-review":
                     s["reviews"] += 1
+                if b.get("type") == "tool_use" and re.search(r"(?:^|__)reply$", str(b.get("name"))) and \
+                        (b.get("input") or {}).get("done"):
+                    reply_ids.add(b.get("id"))
         if t == "user":
             for b in blocks:   # the chunk line this session's own `--plan --done` printed: its t joins it to the log
-                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in done_ids:
-                    r = b.get("content")
-                    r = r if isinstance(r, str) else " ".join(x.get("text", "") for x in r or [] if isinstance(x, dict))
+                if not isinstance(b, dict) or b.get("type") != "tool_result":
+                    continue
+                r = b.get("content")
+                r = r if isinstance(r, str) else " ".join(x.get("text", "") for x in r or [] if isinstance(x, dict))
+                if b.get("tool_use_id") in done_ids:
                     s["done_t"].update(int(x) for x in re.findall(r'\{"t":(\d+),"k":"chunk"', r))
+                # a `reply … done` the done gate let through (a refused one comes back as an error)
+                if b.get("tool_use_id") in reply_ids and not b.get("is_error"):
+                    s["done_at"] = s["done_at"] or ts
             s["reviews"] += len(re.findall(r"<command-name>/?(?:[\w-]+:)?code-review</command-name>", txt))
             k = said(o, txt)
             if k == "ran":
                 s["steps"] += len(RAN.findall(txt))
             elif k == "human":
                 s["steps"] += 1
+            elif k == "xmsg":
+                s["nudges"] += 1
     if not seen:
         return None
     # /code-review runs in a subagent (the session's subagents/ transcripts): it reports through ReportFindings, or as
@@ -552,7 +588,7 @@ def stat(f):
     mark = lambda rx: (re.search(rx, s["first"], re.M) or [None, ""])[1]
     # A key: `Session task: KEY` (trailing punctuation dropped), or a brief starting `Work on PROJ-123`.
     s.update(task=mark(r"^Session task: ([\w./-]*\w)") or mark(r"^Work on ([A-Za-z][\w]*-\d+)\b"), chunk=mark(r"^Chunk: (\S+)"), sup=mark(SUP.pattern),
-             model=max(s["models"], key=s["models"].get, default="?"), usd=usd(s["inp"], s["out"], s["cr"], s["cw"]))
+             model=max(s["models"], key=s["models"].get, default="?"))
     s["ts0"] = s["ts0"] or s["ts1"]
     return s
 
@@ -573,13 +609,58 @@ def stats():
     return ss
 
 
-def chunk_lines():
-    """The usage log's chunk lines (lib.sh usage): [{t, what, model, effort, est, act}], up to the window's end."""
+def log_lines(k):
+    """The usage log's lines of kind K (lib.sh usage), up to the window's end: chunk {t, what, model, effort, est, act},
+    start {t, what, model, effort, sess}."""
     log = os.path.join(STATE, "usage.jsonl")
     if not os.path.exists(log):
         return []
-    return sorted((o for _, o in lines(log) if isinstance(o, dict) and o.get("k") == "chunk"
+    return sorted((o for _, o in lines(log) if isinstance(o, dict) and o.get("k") == k
                    and isinstance(o.get("t"), (int, float)) and o["t"] <= END), key=lambda o: o["t"])
+
+
+def kinds(days=7):
+    """Per kind, model and effort of the usage log's start lines in the window (session-status --kind KIND NAME): starts,
+    joined (a session whose name hashes to the line's sess, started from it to that name's next start, plus its
+    Supersedes: successors),
+    USD (sum, median per start), the share whose `reply … done` the gate let through, handovers, nudges (cross-session
+    messages in), median minutes from start to done. A start without sess (before the name was logged) is unjoined."""
+    import hashlib
+    window(days)
+    ss = stats()
+    epoch = lambda ts: P(ts).timestamp() if ts else 0
+    by_hash = {}
+    for s in ss.values():
+        for n in s["names"]:
+            by_hash.setdefault(hashlib.sha256(n.encode()).hexdigest()[:12], []).append(s)
+    succ = {}
+    for s in ss.values():
+        succ.setdefault(s["sup"], []).append(s)
+    groups, starts = {}, log_lines("start")
+    for i, o in enumerate(starts):
+        if o["t"] < CUT:
+            continue
+        # A reused name: this start's sessions began from it (a minute of clock slack) to the name's next start.
+        nxt = next((x["t"] for x in starts[i + 1:] if o.get("sess") and x.get("sess") == o["sess"]), float("inf"))
+        g = [s for s in by_hash.get(o.get("sess"), []) if o["t"] - 60 <= epoch(s["ts0"]) < nxt - 60]
+        seen = {s["sid"] for s in g}
+        for s in g:   # its successors (handovers), whatever they're named; g grows as it's walked
+            for n in succ.get(s["sid"], []):
+                if n["sid"] not in seen:
+                    seen.add(n["sid"]); g.append(n)
+        groups.setdefault((o.get("what", "?"), o.get("model", "?"), o.get("effort", "?")), []).append((o["t"], g))
+    print("kind\tmodel\teffort\tstarts\tjoined\tusd\tusd_median\tdone_share\thandovers\tnudges\tminutes_to_done")
+    for (kind, model, effort), rows in sorted(groups.items()):
+        j = [(t, g) for t, g in rows if g]
+        cost = [sum(s["usd"] for s in g) for _, g in j]
+        done = [min((s["done_at"] for s in g if s["done_at"]), default="") for _, g in j]
+        mins = [(epoch(d) - t) / 60 for (t, _), d in zip(j, done) if d]
+        print("\t".join(map(str, [kind, model, effort, len(rows), len(j), round(sum(cost), 2),
+                                  round(statistics.median(cost), 2) if cost else "-",
+                                  f"{len(mins) / len(j):.2f}" if j else "-",
+                                  sum(1 for _, g in j for s in g if s.get("handoff")),
+                                  sum(s["nudges"] for _, g in j for s in g),
+                                  round(statistics.median(mins)) if mins else "-"])))
 
 
 def chunks(days=7, *opts):
@@ -607,7 +688,7 @@ def chunks(days=7, *opts):
         for s in stats().values():
             if s["chunk"]:
                 groups.setdefault(s["chunk"], []).append(s)
-    logged = chunk_lines()
+    logged = log_lines("chunk")
     own = set().union(*(s["done_t"] for g in groups.values() for s in g))
     pool = [o for o in logged if o["t"] not in own]   # the time match below is for sessions without their own --done
     epoch = lambda ts: P(ts).timestamp()
@@ -631,7 +712,7 @@ def chunks(days=7, *opts):
                                   sum(s["comp"] for s in g), ",".join(s["handoff"] for s in g if s.get("handoff")) or "none",
                                   round((epoch(t1) - epoch(t0)) / 60)])))
     by = {}
-    for o in chunk_lines():
+    for o in log_lines("chunk"):
         if o.get("est") and isinstance(o.get("act"), (int, float)):
             by.setdefault(o.get("what", "?"), []).append(o["act"] / o["est"])
     for kind, rs in sorted(by.items()):
@@ -947,7 +1028,7 @@ def triggers(sid, days=7):
             u = m.get("usage") or {}
             a = agg.setdefault(cur, [0, 0, 0.0])
             a[1] += 1
-            a[2] += usd(u.get("input_tokens", 0), u.get("output_tokens", 0), u.get("cache_read_input_tokens", 0), u.get("cache_creation_input_tokens", 0))
+            a[2] += usd(*req_tokens(u), m.get("model"))
     for k, (w, n, d) in sorted(agg.items(), key=lambda x: -x[1][2]):
         print(f"{sid}\t{k}\twakes={w}\trequests={n}\tusd={d:.2f}\tper_wake={d / max(w, 1):.2f}")
 
@@ -1442,7 +1523,7 @@ def search(text="", days=7):
 
 
 CMDS = {"sessions": sessions, "events": events, "context": context, "units": units, "waits": waits, "bgtasks": bgtasks, "replies": replies,
-        "triggers": triggers, "usage": usage, "chunks": chunks, "trial": trial, "handoff": handoff, "start": start, "loads": loads, "search": search,
+        "triggers": triggers, "usage": usage, "chunks": chunks, "kinds": kinds, "trial": trial, "handoff": handoff, "start": start, "loads": loads, "search": search,
         "html": md2html}
 
 if __name__ == "__main__":
