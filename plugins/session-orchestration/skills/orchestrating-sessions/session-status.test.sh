@@ -263,7 +263,7 @@ rm "$tmp/.cache/session-status/"*.pr-events; echo 'app#1 OPEN CONFLICT | ' > "$t
 echo 'app#1 OPEN app#2 MERGED | ' > "$tmp/prs"; run --changes >/dev/null; echo 'app#2 MERGED app#1 MERGED | ' > "$tmp/prs"
 out=$(run --changes); grep -qxF '  * app#1,app#2 all-merged (ABC-12, -) → "fix it" 11111111' <<<"$out" &&
   echo 'app#1 MERGED app#2 MERGED | ' > "$tmp/prs" && ! run --changes | grep -q 'all-merged' &&
-  rm "$tmp/prs" && run --changes >/dev/null && sed -i '' '/^#all-merged$/d' "$tmp/.cache/session-status/"*.pr-events &&
+  rm "$tmp/prs" && run --changes >/dev/null && sed -i.bak '/^#all-merged$/d' "$tmp/.cache/session-status/"*.pr-events &&
   echo 'app#1 MERGED | ' > "$tmp/prs" && ! run --changes | grep -q 'all-merged' && grep -qx '#all-merged' "$tmp/.cache/session-status/"*.pr-events &&
   rm "$tmp/prs" && run --changes >/dev/null || { echo "all-merged failed: $out"; exit 1; }
 # Under --watch (SESSION_STATUS_FORWARD) a committing run sends the nudge itself (here a resume: the stub lists no pid)
