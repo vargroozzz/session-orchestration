@@ -1390,3 +1390,44 @@ test('a fresh pane reads the seen store: a folded Decisions still draws only the
   expect(await ui.find({ type: 'Button', key: 'on-PROJ-1004 on you: pick 4.:lead' })).toBeUndefined()
   await ui.unmount()
 })
+
+// Windows with Git for Windows' default PATH (Git\cmd only): git runs, a bare bash doesn't (issue 71)
+const windows = (on: On, gitBash: boolean) => {
+  mock.clock(on)
+  on('session.id', async () => ({ value: 'sess-w' }))
+  on('env.get', async (_, e) => ({ value: e.name === 'OS' ? 'Windows_NT' : undefined }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  const ran: string[] = []
+  on('process.run', async (_, e) => {
+    const a = e.argv
+    ran.push(a[0] ?? '')
+    if (a[0] === 'bash') throw new Error('spawn bash ENOENT')
+    if (a[0] === 'git' && !gitBash) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    const stdout = a[0] === 'git' ? 'C:\\Program Files\\Git\\mingw64\\libexec\\git-core\n'
+      : a.includes('--check') ? 'configured: /c/u/proj (proj-coordinator)\n' : a.includes('--root') ? '/c/u/proj' : a.includes('--name-check') ? 'free other\n' : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  return ran
+}
+
+test('on Windows without bash on PATH, open_pane runs Git for Windows\' bash.exe from git --exec-path (issue 71)', async ($, on) => {
+  const ran = windows(on, true)
+  const r = await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  expect(String(r.result)).toContain('This session becomes "proj-coordinator"')
+  expect(ran.filter(a => a === 'git')).toEqual(['git'])
+  expect(ran).not.toContain('bash')
+  expect(ran).toContain('C:/Program Files/Git/bin/bash.exe')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  await ui.press({ key: 'refresh' }) // joins the sweep the open started
+  await ui.unmount()
+})
+
+test('on Windows with no bash at all, open_pane names bash as the cause instead of "No project root" (issue 71)', async ($, on) => {
+  windows(on, false)
+  const r = await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  expect(String(r.result)).toContain('Couldn\'t find the project root, so this session keeps its name: bash failed to run (')
+  expect(String(r.result)).toContain('set CLAUDE_CODE_GIT_BASH_PATH')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  await ui.press({ key: 'refresh' })
+  await ui.unmount()
+})

@@ -53,7 +53,7 @@ test('hand_command writes the command for the pane, with who handed it', async (
   on('fs.read', async (_, e) => ({ value: wrote.find(w => w.path === e.path)?.text ?? '' }))
   const rm: string[] = []
   on('process.run', async (_, e) => {
-    if (e.argv[0] === 'rm') rm.push(String(e.argv[2]))
+    if (e.argv[2] === 'rm -f "$@"') rm.push(String(e.argv[4]))
     return { value: ok }
   })
   const bad = await $.tool.call({ tool: 'mcp__session-orchestration__hand_command', key: 'PROJ-1', command: 'a\nb', what: 'x' })
@@ -114,7 +114,7 @@ async function pane($: Engine, on: On, files: object[], bash: () => ToolCallResu
     return { value: undefined }
   })
   on('process.run', async (_, e) => {
-    if (e.argv[0] === 'rm') rm.push(String(e.argv[2]))
+    if (e.argv[2] === 'rm -f "$@"') rm.push(String(e.argv[4]))
     const out = e.argv.includes('--root') ? '/w\n' : e.argv.includes('--agents') ? 'sess-9\tplugin-x\tworking\tclaude\t1\t/repo\tbackground\n' : ''
     return { value: { ...ok, stdout: out } }
   })

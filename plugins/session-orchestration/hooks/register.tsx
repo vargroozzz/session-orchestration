@@ -319,8 +319,7 @@ export function parseSections(text: string): Record<string, SectionState> | unde
 }
 export const usageName = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 export const PANE_SLUGS = new Set(USAGE_SECTIONS.map(sectionSlug))
-const logPress = ($: EngineInterface, label: string) => void $.process
-  .run(['bash', '-c', '. "$0" && usage "$1" press', `${$.plugin.root}/lib.sh`, usageName(label)], { timeoutMs: 10_000 })
+const logPress = ($: EngineInterface, label: string) => void runBash($, ['-c', '. "$0" && usage "$1" press', `${$.plugin.root}/lib.sh`, usageName(label)], { timeoutMs: 10_000 })
   .catch(() => undefined)
 export const ACTIONS_FILE = '.claude/coordinator-actions.json'
 const FIELDS = ['label', 'hotkey', 'command', 'when']
@@ -755,7 +754,7 @@ async function runAction($: EngineInterface, a: PaneAction) {
   try {
     const cwd = (await read($, actions))?.root
     if (!cwd) throw new Error('project root unknown (session-status --root)')
-    const r = await $.process.run(['bash', '-c', a.command], { cwd, timeoutMs: 300_000 })
+    const r = await runBash($, ['-c', a.command], { cwd, timeoutMs: 300_000 })
     const last = `${r.stdout}\n${r.stderr}`.split('\n').map(l => l.trim()).filter(Boolean).at(-1) ?? ''
     result = { label: a.label, ok: r.exitCode === 0, line: r.exitCode === 0 ? last : `exit ${r.exitCode}${last ? `: ${last}` : ''}` }
   } catch (err) {
@@ -979,7 +978,7 @@ async function doneGaps($: EngineInterface, done: string, key: unknown, text: st
     // A file: an absolute or ~/ path with an extension, a `:LINE` after it dropped (a slash command or route has none).
     const paths = [...new Set([...text.matchAll(/(?<![\w.~/:-])(~?\/[\w.~/-]*\.\w+)(?::\d+)*/g)].map(m => m[1] ?? ''))]
     if (!paths.length) return []
-    const r = await run(['bash', '-c', 'for p; do [ -e "${p/#\\~/$HOME}" ] || echo "$p"; done', '_', ...paths], root)
+    const r = await runBash($, ['-c', 'for p; do [ -e "${p/#\\~/$HOME}" ] || echo "$p"; done', '_', ...paths], { cwd: root, timeoutMs: 30_000 }).catch(() => undefined)
     if (r?.exitCode !== 0) return [`the named files couldn't be checked (${r ? `exit ${r.exitCode}` : 'no run'})`]
     return r.stdout.split('\n').filter(Boolean).map(p => `${p} doesn't exist`)
   }
@@ -1007,11 +1006,34 @@ async function doneGaps($: EngineInterface, done: string, key: unknown, text: st
   return gaps
 }
 
+// Every bash this module starts. Windows: Git for Windows' default install puts only Git\cmd on PATH, so a bare
+// `bash` doesn't spawn (issue 71): take Claude Code's own CLAUDE_CODE_GIT_BASH_PATH, else <git>/bin/bash.exe from
+// `git --exec-path` (<git>/mingw64/libexec/git-core), else `bash`; asked once per module life. Elsewhere: `bash`,
+// with no lookup.
+const findBash = async ($: EngineInterface) => {
+  if ((await $.env.get('OS').catch(() => undefined)) !== 'Windows_NT') return { bash: 'bash', windows: false }
+  const set = (await $.env.get('CLAUDE_CODE_GIT_BASH_PATH').catch(() => undefined))?.replace(/^"|"$/g, '')
+  if (set) return { bash: set, windows: true }
+  const g = await $.process.run(['git', '--exec-path'], { timeoutMs: 10_000 }).catch(() => undefined)
+  const dir = g?.exitCode === 0 ? g.stdout.trim().replace(/\\/g, '/').match(/^(.+)\/[^/]+\/libexec\/git-core$/i)?.[1] : undefined
+  return { bash: dir ? `${dir}/bin/bash.exe` : 'bash', windows: true }
+}
+let bashFound: ReturnType<typeof findBash> | undefined
+async function runBash($: EngineInterface, args: string[], init: Parameters<EngineInterface['process']['run']>[1] = {}) {
+  const { bash, windows } = await (bashFound ??= findBash($))
+  try {
+    return await $.process.run([bash, ...args], init)
+  } catch (err) {
+    if (!windows) throw err
+    throw new Error(`${bash} failed to run (${err instanceof Error ? err.message : String(err)}): this plugin runs its scripts in Git for Windows' bash. If it isn't installed there, install Git for Windows, or set CLAUDE_CODE_GIT_BASH_PATH to its bash.exe (C:\\Program Files\\Git\\bin\\bash.exe), then restart Claude Code`)
+  }
+}
+
 async function runStatus($: EngineInterface, args: string[], init: { cwd?: string, env?: Record<string, string>, timeoutMs?: number } = {}) {
   const script = `${$.plugin.root}/skills/orchestrating-sessions/session-status`
   try {
     // The plugin-feedback footer is the coordinator's to read, once a day: the pane's sweeps mustn't use it up.
-    const r = await $.process.run(['bash', script, ...args], { timeoutMs: 180_000, ...init, env: { ...init.env, SESSION_STATUS_NO_FEEDBACK: '1' } })
+    const r = await runBash($, [script, ...args], { timeoutMs: 180_000, ...init, env: { ...init.env, SESSION_STATUS_NO_FEEDBACK: '1' } })
     return r.exitCode === 0 || r.stdout ? r.stdout.trimEnd() : ''
   } catch (err) {
     return `failed: ${err instanceof Error ? err.message : String(err)}`
@@ -1022,9 +1044,11 @@ async function runStatus($: EngineInterface, args: string[], init: { cwd?: strin
 // wrong with the file. Read again each sweep, so an edit shows at the next one.
 // ponytail: the root is asked once per module life; a pane of another project is another session.
 let root: string | undefined
+let rootFailed = '' // why the last --root failed to run, for open_pane to name
 async function projectRoot($: EngineInterface) {
   if (!root) {
     const r = await runStatus($, ['--root'])
+    rootFailed = r.startsWith('failed: ') ? r.slice(8) : ''
     if (r.startsWith('/') && !r.includes('\n')) root = r
   }
   return root
@@ -1093,7 +1117,7 @@ async function loadActions($: EngineInterface): Promise<Actions | null> {
   const checks = await Promise.all(list.map(async a => {
     if (!a.when) return true
     try {
-      return (await $.process.run(['bash', '-c', a.when], { cwd, timeoutMs: 10_000 })).exitCode === 0
+      return (await runBash($, ['-c', a.when], { cwd, timeoutMs: 10_000 })).exitCode === 0
     } catch (err) {
       errors.push(`"${a.label}" when: ${err instanceof Error ? err.message : String(err)}`)
       return false
@@ -1274,7 +1298,7 @@ async function loadHanded($: EngineInterface) {
   const read_ = await Promise.all(files.map(async f => {
     const h = parseHanded(String(await $.fs.read(`${dir}/${f.name}`).catch(() => '')))
     if (h && now - h.at > HANDED_TTL) {
-      await $.process.run(['rm', '-f', `${dir}/${f.name}`]).catch(() => undefined)
+      await runBash($, ['-c', 'rm -f "$@"', '_', `${dir}/${f.name}`]).catch(() => undefined)
       return
     }
     return h && f.name === `${h.id}.json` ? h : undefined
@@ -1295,7 +1319,7 @@ async function loadHanded($: EngineInterface) {
 }
 async function dropHanded($: EngineInterface, h: Handed) {
   droppedHanded.set(h.id, h.at)
-  await $.process.run(['rm', '-f', `${await handedDir($)}/${h.id}.json`])
+  await runBash($, ['-c', 'rm -f "$@"', '_', `${await handedDir($)}/${h.id}.json`])
   await update($, handed, l => l.filter(x => x.id !== h.id))
   await syncStatus($)
 }
@@ -1353,7 +1377,7 @@ async function runHanded($: EngineInterface, h: Handed) {
 // would find the session stopped and resume it alongside the first, starting a copy.
 async function nameCoordinator($: EngineInterface) {
   const r = await projectRoot($)
-  if (!r) return 'No project root, so this session keeps its name.'
+  if (!r) return rootFailed ? `Couldn't find the project root, so this session keeps its name: ${rootFailed}.` : 'No project root, so this session keeps its name.'
   const name = `${(r.split('/').pop() ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-coordinator`
   // Two live sessions under one name would split the workers' messages: a successor waits for the old one's rename.
   const [held, role, holder = ''] = (await nameCheck($, name)).split(' ')
@@ -1375,7 +1399,7 @@ async function nameCheck($: EngineInterface, name: string) {
 async function initCheck($: EngineInterface): Promise<{ setUp: boolean, text: string, inbox?: string }> {
   notifyMin = 0 // on only while this folder's config says so
   try {
-    const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--init', '--check'], { timeoutMs: 30_000 })
+    const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--init', '--check'], { timeoutMs: 30_000 })
     const line = oneLine(r.stdout)
     if (r.exitCode === 1) return { setUp: false, text: ` Not set up for coordination (${line}): run session-status --init and propose the setup (skill setting-up-coordination).` }
     if (r.exitCode === 3) return { setUp: false, text: ` This folder is ${line}. Tell the user, and ask whether this folder gets a coordinator of its own; if they meant the parent's project, its coordinator runs from there (skill setting-up-coordination).` }
@@ -1414,7 +1438,7 @@ async function runCompact($: EngineInterface, id: string, name: string) {
   await update($, compacting, l => ((taken = !l.includes(id)) ? [...l, id] : l))
   if (!taken) return $.ui.toast(`Compact "${name}" is already running`)
   try {
-    const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--compact', id], { timeoutMs: 300_000 })
+    const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--compact', id], { timeoutMs: 300_000 })
     $.ui.toast(r.exitCode === 0 ? oneLine(r.stdout) : `Compact "${name}": ${oneLine(r.stdout || r.stderr) || `exit ${r.exitCode}`}`)
   } catch (err) {
     $.ui.toast(`Compact "${name}" failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1461,7 +1485,7 @@ async function summarize($: EngineInterface, of: string) {
   let text = ''
   let failed: string | undefined
   try {
-    const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/standup-summary`], { stdin: of, timeoutMs: 120_000 })
+    const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/standup-summary`], { stdin: of, timeoutMs: 120_000 })
     text = r.exitCode === 0 ? r.stdout.trim() : ''
     if (!text) failed = oneLine(r.stdout || r.stderr) || `exit ${r.exitCode}`
   } catch (err) {
@@ -1489,7 +1513,7 @@ export function openArgs(view: 'attach' | 'logs', command: string, name: string,
 async function openInTerminal($: EngineInterface, p: UiPressArgument, term: string, view: 'attach' | 'logs', command: string, name: string, cwd: string) {
   const fallback = command.replace(/ attach (\S+)$/, ` ${view} $1`)
   const args = openArgs(view, command, name, cwd, await $.env.get('CLAUDE_CONFIG_DIR'))
-  const r = args && await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, ...args], { timeoutMs: 30_000 })
+  const r = args && await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, ...args], { timeoutMs: 30_000 })
   if (r?.exitCode === 0) return $.ui.toast(`${view === 'attach' ? 'Attached' : 'Logs of'} "${name}" in ${term}${r.stdout.startsWith('reused') ? ' (its open tab)' : ''}`)
   if (r && r.exitCode !== 2) return $.ui.toast(`${term}: ${oneLine(r.stderr || r.stdout) || 'no output'} (exit ${r.exitCode})`)
   const c = await $.ui.copy({ text: fallback, surface: p.surface })
@@ -1510,7 +1534,7 @@ async function forwardOutbox($: EngineInterface) {
     const sent = await $.session.send({ to: { sessionId: id }, text }).catch((err: unknown) => ({ isDelivered: false, reason: err instanceof Error ? err.message : String(err) }))
     done.push(sent.isDelivered ? `ok\t${line}\tsent` : `failed\t${line}\t${oneLine(sent.reason ?? '') || 'not delivered'}`)
   }
-  if (done.length) await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--outbox-done'],
+  if (done.length) await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--outbox-done'],
     { stdin: `${done.join('\n')}\n`, timeoutMs: 60_000 })
 }
 
@@ -1640,7 +1664,7 @@ export const register: Register = on => {
     let filed = ''
     let body = text
     if (report) {
-      const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--report-file', id, ...(typeof key === 'string' && key.trim() ? [key.trim()] : [])],
+      const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--report-file', id, ...(typeof key === 'string' && key.trim() ? [key.trim()] : [])],
         { cwd, stdin: report, timeoutMs: 60_000 }).catch(() => undefined)
       // No replies folder: the report has nowhere to live, so it goes with the message.
       if (r?.exitCode === 3) { body = `${text}\n\n${report}`; filed = ' No replies folder, so the report went with the message.' }
@@ -1659,7 +1683,7 @@ export const register: Register = on => {
     // No live coordinator took it (none runs, it is mid-handover, or under another account): the coordinator inbox,
     // which the next coordinator reads at Start and a live one's watcher reports.
     if (!toName || /-coordinator(-next)?$/.test(toName)) {
-      const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--inbox-add', id],
+      const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--inbox-add', id],
         { cwd, stdin: text, timeoutMs: 60_000 }).catch(() => undefined)
       if (r?.exitCode === 0) return { result: `Queued, no coordinator live${why.length ? ` (${why.join('; ')})` : ''}: it is in ${r.stdout.trim()}, which the coordinator reads. Don't send it again.${filed}` }
     }
@@ -1678,7 +1702,7 @@ export const register: Register = on => {
       const h = await $.fs.read(file).then(parseHanded, () => undefined)
       if (h && h.session === session && h.key === key) {
         if (timer) await dropHanded($, h)
-        else await $.process.run(['rm', '-f', file])
+        else await runBash($, ['-c', 'rm -f "$@"', '_', file])
         return { result: `Withdrawn (id ${id}): the pane no longer offers it.` }
       }
       // The coordinator, its pane open: every command its pane lists under key whose action it saw done another way (the
@@ -2128,7 +2152,7 @@ export const register: Register = on => {
         await update($, paneSections, c => ({ ...c, [slug]: next }))
         if (items) void markItemsSeen($, slug, items.map(i => i.id))
         if (!PANE_SLUGS.has(slug)) return
-        const r = await $.process.run(['bash', `${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--pane-section', slug, next], { timeoutMs: 30_000 })
+        const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--pane-section', slug, next], { timeoutMs: 30_000 })
           .catch((err: unknown) => ({ exitCode: 1, stdout: '', stderr: err instanceof Error ? err.message : String(err) }))
         if (r.exitCode === 0) return void secUnsaved.delete(slug)
         secUnsaved.add(slug)
