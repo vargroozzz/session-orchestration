@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Temporary CI diagnostic: approved-action.test.sh with each check named as it starts, and timed.
-h=$PWD/plugins/session-orchestration/hooks
-sed -e "5s#.*#here=$h#" -e 's/^check() { got=\$(run "\$1");/check() { local t0=$SECONDS; echo "START $3"; got=$(run "$1"); [ $((SECONDS - t0)) -ge 2 ] \&\& echo "SLOW $((SECONDS - t0))s: $3";/' "$h/approved-action.test.sh" > /tmp/timed.test.sh
-bash /tmp/timed.test.sh
+# Temporary CI diagnostic: every shell suite with start/end times, so a hang names its suite.
+git config --global user.email ci@example.com
+git config --global user.name ci
+while IFS= read -r t; do
+  [ "$t" = plugins/session-orchestration/hooks/approved-action.test.sh ] && continue
+  echo "== $(date +%T) START $t"
+  bash "$t" > /tmp/suite.out 2>&1; rc=$?
+  echo "== $(date +%T) END rc=$rc $t"; [ $rc = 0 ] || tail -5 /tmp/suite.out
+done < <(git ls-files '*.test.sh')
