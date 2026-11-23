@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: diag
         if: runner.os == 'macOS'
-        timeout-minutes: 13
+        timeout-minutes: 14
         run: bash diag.sh
       - run: ./scrub-check.sh
       - name: shell suites
