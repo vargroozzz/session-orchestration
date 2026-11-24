@@ -277,19 +277,38 @@ check "gh issue create -R acme/app -l bug --title Crash --body-file $tmp/body.tx
 echo '{"approvals":{"pr_create":true}}' > "$root/.claude/coordination.local.json"
 check "gh pr create -R acme/app --fill" pass "gh pr create under approvals.pr_create"
 check "gh issue create -R acme/app --title Crash2 --body-file $tmp/body.txt" deny "gh issue create still asks under approvals.pr_create"
-# feedback.send auto: a create on the plugin's own repo passes when scrub finds nothing personal in title and body;
-# another repo, a hit in the body or title, a merge, or the default (ask) still asks.
-fbrepo=$("$here/../skills/orchestrating-sessions/feedback" repo)
+# feedback.send auto: an apply session's create (first prompt from feedback brief) on the plugin's own repo passes when
+# scrub finds nothing personal in its flags and body; a hit denies with the scrub's lines. Another repo, another
+# session, a merge, or the default (ask) still asks; a flag outside the allow-list (a glued -F/path too) is refused.
+fbrepo=$("$here/../skills/orchestrating-sessions/feedback" repo) me=$(id -un)
 printf 'A relay from a desktop session is rejected.\n' > "$tmp/fb-clean.txt"; printf 'seen at %s/x\n' "$home" > "$tmp/fb-hit.txt"
+printf 'The landing turns on auto-merge.\n' > "$tmp/fb-auto.txt"
+fbc="gh pr create -R $fbrepo --title 'Fix relay'"
 echo '{"feedback":{"send":"auto"}}' > "$root/.claude/coordination.local.json"
-check "gh pr create -R $fbrepo --title 'Fix relay' --body-file $tmp/fb-clean.txt" pass "feedback.send auto, clean PR"
-check "gh issue create -R $fbrepo --title 'Relay bug' --body-file $tmp/fb-clean.txt" pass "feedback.send auto, clean issue"
+check "$fbc --body-file $tmp/fb-clean.txt" deny "feedback.send auto outside an apply session"
+grep -qF "needs the user's approval" <<<"$(run_reason "$fbc --body-file $tmp/fb-clean.txt")" || { echo "FAIL (feedback.send auto outside an apply session asks)"; exit 1; }
+wmain=$w w=$tmp/apply.jsonl
+typed "Work on fb-relay: Apply plugin feedback: $tmp/c.md. Follow feedback.md, Applying, for these cases only." "$now" > "$w"
+check "$fbc --body-file $tmp/fb-clean.txt" pass "feedback.send auto, clean PR"
+check "gh issue create -R $fbrepo --title 'Relay bug' --body-file $tmp/fb-clean.txt -l bug" pass "feedback.send auto, clean issue"
+check "$fbc --body-file $tmp/fb-auto.txt" pass "feedback.send auto: its own value isn't a scrub word (body)"
+check "gh pr create -R $fbrepo --title 'Fix auto mode' --body-file $tmp/fb-clean.txt" pass "feedback.send auto: its own value isn't a scrub word (title)"
+check "$fbc --body-file $tmp/fb-clean.txt -d -B main -H $me:fix" pass "feedback.send auto, -H's fork owner isn't scrubbed"
+check "$fbc --body-file $tmp/fb-clean.txt -H fork:$me-fix" deny "feedback.send auto, -H's branch is scrubbed"
 check "gh pr create -R acme/app --title 'Fix relay' --body-file $tmp/fb-clean.txt" deny "feedback.send auto, another repo"
-check "gh pr create -R $fbrepo --title 'Fix relay' --body-file $tmp/fb-hit.txt" deny "feedback.send auto, scrub hit in the body"
+check "$fbc --body-file $tmp/fb-hit.txt" deny "feedback.send auto, scrub hit in the body"
 check "gh pr create -R $fbrepo --title 'Fix $home/x' --body-file $tmp/fb-clean.txt" deny "feedback.send auto, scrub hit in the title"
+r=$(run_reason "$fbc --body-file $tmp/fb-hit.txt")
+[[ $r == *"feedback scrub found"*"fb-hit.txt:1: "* &&$r != *"needs the user's approval"* ]] || { echo "FAIL (feedback.send auto, a hit names its lines): $r"; exit 1; }
+for c in "$fbc --body-file $tmp/fb-clean.txt -F$tmp/fb-hit.txt" "gh issue create -R $fbrepo --title 'Relay bug' --body-file $tmp/fb-clean.txt -F$tmp/fb-hit.txt" \
+    "$fbc --body-file $tmp/fb-clean.txt -F=$tmp/fb-hit.txt" "$fbc --body-file $tmp/fb-clean.txt -a someone" "$fbc --body-file $tmp/fb-clean.txt --no-maintainer-edit"; do
+  check "$c" deny "feedback.send auto refuses a flag outside its allow-list"
+  grep -qF 'under feedback.send auto' <<<"$(run_reason "$c")" || { echo "FAIL (feedback.send auto names the refused flag): $c"; exit 1; }
+done
 check "gh pr merge 5 -R $fbrepo" deny "feedback.send auto never covers a merge"
 echo '{"feedback":{"send":"ask"}}' > "$root/.claude/coordination.local.json"
-check "gh pr create -R $fbrepo --title 'Fix relay' --body-file $tmp/fb-clean.txt" deny "feedback.send ask"
+check "$fbc --body-file $tmp/fb-clean.txt" deny "feedback.send ask"
+w=$wmain
 echo '{}' > "$root/.claude/coordination.local.json"
 check "gh api -X PUT repos/acme/app/pulls/12/merge" deny "gh api write method"
 check "gh api repos/acme/app/issues/12/comments -f body=hi" deny "gh api fields"

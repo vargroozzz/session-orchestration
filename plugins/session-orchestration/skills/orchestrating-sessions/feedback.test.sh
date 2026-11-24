@@ -77,6 +77,8 @@ out=$("$FB" brief fix-x 'it breaks.' "$a")
 [[ $out == "Work on fix-x: Apply plugin feedback: $a. Follow feedback.md, Applying,"*" Open your PR yourself (approvals.pr_create is on). Why: it breaks. Done when:"* ]] || fail "brief, pr_create on: $out"
 echo '{"approvals": {"pr_create": false}}' > .claude/coordination.local.json
 [[ $("$FB" brief fix-x why "$a") == *" Ask before gh pr create. Why: why."* ]] || fail "brief, pr_create off"
+echo '{"approvals": {"pr_create": true}, "feedback": {"send": "auto"}}' > .claude/coordination.local.json
+[[ $("$FB" brief fix-x why "$a") == *" Open your PR or issue yourself once feedback scrub passes"*"(feedback.send is auto: "*" Why: why."* ]] || fail "brief, feedback.send auto"
 "$FB" brief fix-x why "$T/none.md" 2>/dev/null && fail "brief with a missing case file"
 [[ $("$FB" brief fix-x 'does it hang?' "$a") == *" Why: does it hang? Done when:"* ]] || fail "brief, a WHY ending in ?"
 echo '{}' > .claude/coordination.local.json
@@ -175,6 +177,11 @@ grep -qF ': names a local name:' <<<"$("$FB" scrub "$dirty")" || fail "scrub mis
 echo '{"start":{"mode":"glimwick-room"}}' > "$T/other-proj/.claude/coordination.local.json"
 printf '# x\n- in glimwick-room\n' > "$dirty"
 grep -qF ': names a local name:' <<<"$("$FB" scrub "$dirty")" || fail "scrub skipped a value outside a key's fixed set"
+for s in auto ask; do
+  echo "{\"feedback\":{\"send\":\"$s\"}}" > "$T/other-proj/.claude/coordination.local.json"
+  printf '# x\n- The landing turns on auto-merge; Fix auto mode\n- The hook asks; the user can ask again.\n' > "$dirty"
+  "$FB" scrub "$dirty" >/dev/null || fail "scrub flagged feedback.send $s"
+done
 echo '{}' > "$T/other-proj/.claude/coordination.local.json"
 # A worktree inside its checkout is that checkout: its feature name passes, the project's name and a key in it don't.
 git worktree add -q .claude/worktrees/frobnicate 2>/dev/null || fail "inner worktree setup"

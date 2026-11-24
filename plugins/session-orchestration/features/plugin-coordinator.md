@@ -52,8 +52,10 @@ feature `design`), never one kind for all.
 `session-status --kind <its kind> <name>`
 first (this start has its own brief, so it's one `--launch` doesn't cover; `<name>`: a task name the project's key pattern matches; exit 2 names a wrong one), then `claude --bg -n <name>` as the coordinator skill's sessions.md says, with this
 brief, which starts with the name so the status shows its owner: what `feedback brief <name> '<what the cases say goes
-wrong>' <case files…>` prints (an apostrophe in it: `'\''`). Its PR line follows `approvals.pr_create`: on (the default in this project), they open
-their PR without asking; off, it reaches you as an ask like any other (the approval hook refuses it without your relay).
+wrong>' <case files…>` prints (an apostrophe in it: `'\''`). Its PR line follows `feedback.send`, then `approvals.pr_create`: with `feedback.send` `auto`, they open their PR or
+issue themselves once `feedback scrub` passes ([feedback.md](../skills/orchestrating-sessions/feedback.md), Applying
+step 4); else with `approvals.pr_create` on (the default in this project), they open their PR without asking; off, it
+reaches you as an ask like any other (the approval hook refuses it without your relay).
 Because they work in your project, relayed approvals verify for them ([approvals.md](../skills/orchestrating-sessions/approvals.md)).
 
 **Releases.** A batch's PR lands the way the repo's `CLAUDE.md` says (or the landing doc it points to). Once the release is on the repo's main (check it

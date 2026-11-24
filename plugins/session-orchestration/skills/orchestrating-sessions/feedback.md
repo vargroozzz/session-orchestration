@@ -116,17 +116,28 @@ footer's `— apply?` is then answered already.
 
    Each outgoing `gh pr create` or `gh issue create` (with `--title` and `--body-file <absolute path>`) goes to the
    user as one approval: the approval hook refuses it without a relay and prints the action to report. With
-   `approvals.pr_create` `true`, the `pr` mode's `gh pr create` runs without one (an issue and a fork PR still ask). With `feedback.send` `auto` (the
-   person's standing yes for plugin feedback) a `gh pr create` or `gh issue create` on the plugin's own repo
-   (`feedback repo`) runs without one too, once the hook's own `feedback scrub` of its flags and body file finds
-   nothing; a hit asks as before. Run `feedback scrub` on the change itself first, which the hook doesn't see, and
-   report the URL to the coordinator afterwards.
-   An apply session that the plugin coordinator started works in that coordinator's folder, so it asks the way
-   worker.md's Approvals says, and a relayed approval verifies for it. Run nothing outward-facing before that yes.
+   `approvals.pr_create` `true`, the `pr` mode's `gh pr create` runs without one (an issue and a fork PR still ask).
+   Otherwise an apply session that the plugin coordinator started works in that coordinator's folder, so it asks the
+   way worker.md's Approvals says, and a relayed approval verifies for it. Run nothing outward-facing before that yes.
+
+   With `feedback.send` `auto` (the person's standing yes for plugin feedback), an apply session (first prompt from
+   `feedback brief`) runs its `gh pr create` or `gh issue create` on the plugin's own repo (`feedback repo`) with no
+   relay, once the hook's own `feedback scrub` of its flags and body file finds nothing, and reports the URL to the
+   coordinator afterwards. Under `auto` the create takes only `-R`, `-t`/`--title`, `-F`/`--body-file <absolute path>`
+   (space-separated), `-l`/`--label`, `-B`/`--base`, `-H`/`--head` and `-d`/`--draft`; any other flag is refused. A
+   hit is refused with the scrub's lines: reword and run it again, never send it with a hit. `-H`'s fork owner isn't
+   scrubbed (it is public), its branch is. Any other session (a handed-over apply session's successor too: its first
+prompt is the handover's), and any other repo, asks as above. The change itself
+   goes through the repo's own checks (its `CLAUDE.md`, `./scrub-check.sh` here), not `feedback scrub`, which flags
+   test keys, URLs and hashes in code. What `auto` gives up: the scrub is then the only gate, and it is a deny list of
+   what this machine knows (step 3). It can't catch a colleague's or customer's name, a company or product name that
+   is no root, remote or config value, an internal host written without `https://` in a project with no adapter, or
+   pasted log text. The person-wide config holds in every project on the machine, work projects included: turn
+   `auto` on only where you'd let a session publish its own wording.
 5. `feedback mark FILE sent <url>` for each case sent.
 
 Config (person keys): `feedback.mode` (`auto` default, or `pr`, `fork-pr`, `issue`, `local`), `feedback.send` (`ask`
-default, or `auto`: the standing yes above), `feedback.repo_dir`
+default, or `auto`: the standing yes in step 4), `feedback.repo_dir`
 (a clone of the plugin repo you can push to; its coordinator is the plugin coordinator). They hold for you in every project, so set them once in
 `${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json`; a project's `.claude/coordination.local.json`
 outranks that file. `feedback.project_dir` (Project cases) is per project: set it in that project's
