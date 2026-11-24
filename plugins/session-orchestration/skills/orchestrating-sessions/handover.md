@@ -10,7 +10,9 @@ and as a successor (your first prompt says `You succeed "NAME"`). The status com
 Overwrite `<replies>/coordinator-handover.md` with the state that's in no file: live sessions worth knowing and what
 each waits on, and why the restart. Pane asks and their answers carry over by themselves: your successor's `--start`
 lists the answers to relay ([approvals.md](approvals.md#the-relay-block)). An approval the user gave you in chat or
-the question box that a session will still need: ask it again on the pane first. No rules and no files to read: the next
+the question box that a session will still need: ask it again on the pane first. So is every decision still open on the
+user, queued with `ask_approval` before you write the note: the note never carries one as prose, which a successor
+may read as nothing to ask (a pane that isn't on screen still keeps its asks, shown once it opens). No rules and no files to read: the next
 coordinator's Start reads those, and each restated rule is re-sent on its every wake. Then start your successor:
 
 1. `session-status --successor` (`--account DIR` for the weekly-limit move): it opens a tab running an interactive
@@ -42,5 +44,7 @@ other side session (one it still holds keeps it unarchived, for the user), detac
 - The note's blockers (a login out, a session stuck, a PR failing) are claims from when it was written: check each
   against `--start`'s output (a login: whether its source's notices line still starts `(failed)`; a session: its
   row) before you tell the user, and drop the ones that cleared.
+- `open_pane` saying the pane is waiting doesn't mean it can't hold asks: queue every open decision from the note with
+  `ask_approval`, and say it in plain text too.
 - A live session other than the one you succeed holds `NAME` (`open_pane` says so): stop and ask the user.
 - An `--await` that times out: check the other coordinator (`--activity`), then re-arm or finish by hand.

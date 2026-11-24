@@ -181,4 +181,18 @@ echo '{"session":"w2","key":"ABC-1","command":"echo other"}' > "$hd/2.json"
 echo '{"session":"w1","key":"ABC-2","command":"echo key"}' > "$hd/3.json"
 [ "$(CLAUDE_CODE_SESSION_ID=w1 CFG=$home/.claude v ABC-1 yes)" = "$(printf 'verified, answering: Merge ABC-1?\nyou also handed the user this command for ABC-1: teams-send a.txt\nif the approved action is the same, withdraw it before you act: hand_command with this key and command and withdraw: true')" ] ||
   { echo "FAIL handed command not named: $(CLAUDE_CODE_SESSION_ID=w1 CFG=$home/.claude v ABC-1 yes)"; exit 1; }
+# A Desktop app coordinator: its message's from-name and its Source are local_<uuid>, mapped to its CLI session id by the
+# app's own record. Its transcript has no agent name, and the listing names it by its title, so the id is the name.
+echo "$home/.claude" > "$tmp/coord"
+d=$home/Library/Application\ Support/Claude/claude-code-sessions/a/b; mkdir -p "$d"
+echo "{\"cliSessionId\":\"$cid\"}" > "$d/local_aaaaaaaa-1111-2222-3333-444444444444.json"
+echo '{"cliSessionId":"11111111-2222-3333-4444-555555555555"}' > "$d/local_bbbbbbbb-1111-2222-3333-444444444444.json"
+dv() { (cd "$root" && HOME=$home CLAUDE_CONFIG_DIR=$home/.claude PATH=$tmp/bin:$PATH bash "$here/verify-approval.sh" "$1" "$root" "$2" ABC-1 <<<yes) || true; }
+dl=local_aaaaaaaa-1111-2222-3333-444444444444
+[ "$(dv $cid $dl)" = "verified, answering: Merge ABC-1?" ] || { echo "FAIL desktop sender, CLI Source: $(dv $cid $dl)"; exit 1; }
+[ "$(dv $dl $dl)" = "verified, answering: Merge ABC-1?" ] || { echo "FAIL desktop sender and Source: $(dv $dl $dl)"; exit 1; }
+[ "$(dv $dl coord)" = "verified, answering: Merge ABC-1?" ] || { echo "FAIL desktop Source, named sender: $(dv $dl coord)"; exit 1; }
+[ "$(dv $cid local_bbbbbbbb-1111-2222-3333-444444444444)" = "rejected: sender isn't the source session" ] || { echo "FAIL another desktop session as sender"; exit 1; }
+[ "$(dv $cid local_cccccccc-1111-2222-3333-444444444444)" = "rejected: sender isn't the source session" ] || { echo "FAIL unknown desktop sender"; exit 1; }
+[ "$(dv local_cccccccc-1111-2222-3333-444444444444 coord)" = "rejected: no Desktop session record for local_cccccccc-1111-2222-3333-444444444444" ] || { echo "FAIL unknown desktop Source"; exit 1; }
 echo ok

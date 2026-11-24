@@ -2169,14 +2169,6 @@ CUR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}; CUR=${CUR%/}
 TRANSCRIPTS=$CUR/projects/$ENC
 # A session's transcript, wherever it ran (accounts asked above share this store), and what it's doing.
 transcript_of() { ls "$CUR"/projects/*/"$1".jsonl 2>/dev/null | head -1; }
-# desk_id ID: the CLI session id behind a Claude Code Desktop sidebar id (local_<uuid>), from the app's record of it.
-# shortcut: macOS's app folder only (the app's Windows folder isn't reachable from WSL); add another when one is.
-desk_id() {
-  [[ $1 =~ ^local_[0-9a-f-]{8,}$ ]] || return 1
-  local f; f=$(ls "$HOME/Library/Application Support/Claude/claude-code-sessions"/*/*/"$1"*.json 2>/dev/null | head -1)
-  # the session that wrote its last reply first: a resume or /clear may move it off the first one
-  [ -n "$f" ] && jq -er '.lastAssistantCliSessionId // .cliSessionId | select(type == "string" and test("^[0-9a-f-]{8,}$"))' "$f" 2>/dev/null
-}
 # Doing, since, last, ctx and window for a transcript, tab-separated, placeholders when it can't be read. The
 # window is 1M when the model id has [1m] or the context already holds more than 200k tokens, else 200k. The
 # model id is the latest in the tail (session-activity.jq), else the first in the file (named at the start).

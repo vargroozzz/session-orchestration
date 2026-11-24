@@ -86,8 +86,8 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
   one. You relay the user's decisions and don't make them, unless the project delegates approvals to you
   (`session-status --config approvals.delegate` prints `true`).
 - **Every decision waiting on the user goes on the pane**: one `ask_approval` per decision, approval or not, your
-  recommended option first ([approvals.md](approvals.md), Asking). Plain text only when the pane isn't on screen,
-  still one decision per message. Never a numbered round.
+  recommended option first ([approvals.md](approvals.md), Asking). When the pane isn't on screen, queue it all the same
+  (it shows once the pane opens) and also say it in plain text, one decision per message. Never a numbered round.
 - **A session on a permission prompt** (a new `— blocked:` line under **Waiting on you**): at once open its attach tab (`session-status --open
   view`) and queue one ask, "Approve it in the tab" or "Stop it and resume with a workaround"
   ([resuming.md](resuming.md#permission-prompts-and-trust)). Not a chat line alone.

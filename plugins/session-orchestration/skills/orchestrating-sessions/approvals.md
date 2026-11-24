@@ -19,6 +19,9 @@ Action: <one action on one task>
 Source: <your sessionId> <your cwd>
 ```
 
+In Claude Code Desktop your sidebar id (`local_<uuid>`) works as `<your sessionId>`, and it is the `from-name` the worker
+sees: `verify-approval.sh` maps it to your CLI session id through the app's record.
+
 For a pane answer, `session-status --relay KEY ACTION` writes the block (KEY's newest answer of the last 24h, Source
 filled in) once it passes the check below, and never for a "No, …" answer (exit 1 says why). Send its output as is
 once its Quote approves ACTION. The auto-mode classifier may refuse the call (it reads a merge or post Action as the
@@ -92,8 +95,9 @@ user a command).
     which keeps that one to its own click ([Approval asks](status-reference.md#approval-asks)).
   - `features.notify` (`../../features/notify.md`) may show a local "N decisions waiting" notification for asks left
     unseen; the answer is still the pane click. Ask the same way either way.
-  - Plain text only when the pane isn't on screen (the tool says so: a narrow terminal, the agent view, a background
-    session). Then each decision is still its own message, recommended answer first.
+  - When the pane isn't on screen (the tool says so: a narrow terminal, the agent view, a background session), the
+    ask is still queued and shows once the pane opens, so queue it all the same, then say the decision in plain text
+    too: each its own message, recommended answer first. "The pane is waiting" never means don't queue.
 - **Resuming after a restart is one ask for the whole list**, not one per session: when `--start` lists sessions
   that ended while the background service was off, ask once (key `resume-after-restart`, each session named in the
   question; "Yes, resume all N" recommended, "No, leave them") and on a yes run its `--resume-ended` line

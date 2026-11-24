@@ -770,6 +770,15 @@ list_sessions() {
       r > k[$1] { b[$1] = $0; k[$1] = r } END { for (i = 1; i <= n; i++) print b[o[i]] }'
 }
 
+# desk_id ID: the CLI session id behind a Claude Code Desktop sidebar id (local_<uuid>), from the app's record of it.
+# shortcut: macOS's app folder only (the app's Windows folder isn't reachable from WSL); add another when one is.
+desk_id() {
+  [[ $1 =~ ^local_[0-9a-f-]{8,}$ ]] || return 1
+  local f; f=$(ls "$HOME/Library/Application Support/Claude/claude-code-sessions"/*/*/"$1"*.json 2>/dev/null | head -1)
+  # the session that wrote its last reply first: a resume or /clear may move it off the first one
+  [ -n "$f" ] && jq -er '.lastAssistantCliSessionId // .cliSessionId | select(type == "string" and test("^[0-9a-f-]{8,}$"))' "$f" 2>/dev/null
+}
+
 # weekly_use: "CONFIG_DIR<TAB>PERCENT<TAB>RESETS" (whole percent, epoch s) per account list_accounts names, the current
 # one first, from the last 7-day reading any of its sessions took (register.tsx's session.measure hook writes
 # usage/<config dir's name> under the stamp folder). PERCENT and RESETS are empty with no reading, or once it reset.

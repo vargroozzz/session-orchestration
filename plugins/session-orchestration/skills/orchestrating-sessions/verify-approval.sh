@@ -7,7 +7,8 @@
 #        EOF
 # The quote comes on stdin and is only ever handled as data (jq --arg), never by the shell.
 # Checks:
-#  1. sessionId is a UUID, and cwd is this project (equal to, inside, or containing $PWD).
+#  1. sessionId is a UUID (or a Desktop app `local_<uuid>`, mapped to its CLI session id, as is a `local_<uuid>` sender,
+#     which must be that same session; a Desktop session has no agent name to match, so its id is its name), and cwd is this project (equal to, inside, or containing $PWD).
 #  2. The sender (the message's from-name) is that session: its transcript (under this session's account's config
 #     dir, or with features.accounts any account sharing its transcript store) shows no bg turn, the sender's name,
 #     and a SendMessage of this whole relay (Quote, the Action given as <action>, Source), running or stopped since.
@@ -32,13 +33,24 @@ reject() { echo "rejected: $1"; exit 1; }
 # A relay may carry the double quotes of the quote escaped (\") or curled: both sides compare with them straight.
 quotes_def='def quotes: gsub("\\\\\""; "\"") | gsub("[“”„]"; "\"") | gsub("[‘’]"; "'"'"'"); '
 
+. "$(dirname "$0")/../../lib.sh" || reject "lib.sh not found"
+# A Claude Code Desktop coordinator is `local_<uuid>` in the app (that is the message's from-name, and the Source it may
+# give); its transcript is under the CLI session id the app records for it (lib.sh desk_id).
+desk=; src=$id
+if [[ $id == local_* ]]; then
+  id=$(desk_id "$id") || reject "no Desktop session record for $src"
+fi
+if [[ $sender == local_* ]]; then
+  # the sender must be the source itself: its Desktop id maps to the Source's CLI id
+  [ "$(desk_id "$sender" 2>/dev/null)" = "$id" ] || reject "sender isn't the source session"
+  desk=$sender
+fi
 [[ $id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || reject "sessionId is not a UUID"
 [ -n "$key" ] && [ -n "$sender" ] && [ -n "$q" ] || reject "missing sender, task key or quote"
 case "$PWD/" in "$cwd"/*) ;; *) case "$cwd/" in "$PWD"/*) ;; *) reject "source cwd is outside this project" ;; esac ;; esac
 
 # The source session's transcript (lib.sh's list_sessions: with features.accounts on, a coordinator under ~/.claude is
 # found by a worker under CLAUDE_CONFIG_DIR=~/.claude-work, both sharing the transcript store).
-. "$(dirname "$0")/../../lib.sh" || reject "lib.sh not found"
 CUR=${CLAUDE_CONFIG_DIR:-$HOME/.claude}; CUR=${CUR%/}
 f=$CUR/projects/$(enc_path "$cwd")/$id.jsonl
 ref=$(date +%s)
@@ -47,8 +59,8 @@ ref=$(date +%s)
 # spares runs `claude agents` once per account, which took past the hook's 60 s on a loaded machine. The quote's age
 # then counts to that send.
 sent=
-[ -z "$action" ] || [ ! -f "$f" ] || sent=$(jq -rn --arg rl "APPROVAL relayed from the user"$'\n'"Quote: $q"$'\n'"Action: $action"$'\n'"Source: $id $cwd" --arg n "$sender" "$quotes_def"'($rl | quotes) as $rl |
-    reduce inputs as $e ({bg: false, named: false, at: null};
+[ -z "$action" ] || [ ! -f "$f" ] || sent=$(jq -rn --arg rl "APPROVAL relayed from the user"$'\n'"Quote: $q"$'\n'"Action: $action"$'\n'"Source: $src $cwd" --arg n "$sender" --argjson desk "$([ -n "$desk" ] && echo true || echo false)" "$quotes_def"'($rl | quotes) as $rl |
+    reduce inputs as $e ({bg: false, named: $desk, at: null};
       if $e.sessionKind == "bg" then .bg = true
       elif $e.type == "agent-name" and $e.agentName == $n then .named = true
       elif $e.type == "assistant" and any($e.message.content[]?; .type == "tool_use" and .name == "SendMessage"
@@ -62,7 +74,7 @@ if [[ $sent =~ ^[0-9]+$ ]] && [ "$sent" -ge $(( ref - max_age_h * 3600 )) ]; the
 else
   IFS=$'\037' read -r _ s_name _ _ _ s_cwd s_kind _ <<<"$(list_sessions | awk -F'\t' -v id="$id" '$1 == id' | head -1 | tr '\t' '\037')"
   if [ -n "$s_name$s_cwd" ]; then
-    [ "$s_name" = "$sender" ] || reject "sender isn't the source session"
+    [ -n "$desk" ] || [ "$s_name" = "$sender" ] || reject "sender isn't the source session"
     [ "$s_kind" = interactive ] || reject "source session isn't interactive"
     [ "$s_cwd" = "$cwd" ] || reject "source cwd doesn't match the running session"
     [ -f "$f" ] || reject "no transcript for the source session"

@@ -1751,7 +1751,7 @@ export const register: Register = on => {
     await loadAsks($, init.setUp).catch(() => undefined)
     const migrated = init.setUp ? await migrateAsks($).catch(() => '') : ''
     const queued = queuedText(await liveAsks($), await $.clock.now())
-    return { result: `${isPlaced ? 'Coordinator pane open.' : 'The pane is waiting: this terminal is too narrow, or this app draws no panes (a background session, the agent view, a Desktop session over WSL). Tell the user /coordinator opens it at any width; where none shows, ask in plain text.'} ${named}${init.text}${inbox}${migrated}${queued}` }
+    return { result: `${isPlaced ? 'Coordinator pane open.' : 'The pane is waiting: this terminal is too narrow, or this app draws no panes (a background session, the agent view, a Desktop session over WSL). Tell the user /coordinator opens it at any width. Asks you queue with ask_approval still queue and show once it opens, so keep queueing every decision there, and also put each in plain text where none shows.'} ${named}${init.text}${inbox}${migrated}${queued}` }
   })
 
   // Any session's own name, `<KEY>-<short-desc>` once it knows its task, through open_pane's /rename at turn end.
@@ -2033,7 +2033,7 @@ export const register: Register = on => {
     const unsaved = storeError ? ` (not saved for the next coordinator: ${storeError}; mention it in the handover)` : ''
     const queued = `${again ? `Re-queued ${key} (id ${id}): it replaces the same question waiting there` : `Queued ${key} (id ${id})`}${unsaved}`
     if (!isPlaced) {
-      return { result: `${queued}, but the pane isn't on screen (terminal too narrow, or no panes here). Ask the user in plain text instead, and tell them /coordinator opens the pane at any width.` }
+      return { result: `${queued}, but the pane isn't on screen (terminal too narrow, or no panes here). It is saved and shows once the pane opens: tell the user /coordinator opens it at any width, and say the decision in plain text too.` }
     }
     return { result: `${queued} in the coordinator pane. The answer arrives as a prompt; don't wait for it.` }
   })
