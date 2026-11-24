@@ -301,6 +301,9 @@ detect_host() {
 #                       project's CLAUDE.md reserves                    default false
 #   approvals.pr_create true | false: a session opens its own task's PR (gh pr create) without an ask (person only)
 #                       default true in the plugin coordinator's project (plugin_root), else false
+#   feedback.send       ask | auto: auto lets a session open its plugin-feedback PR or issue on the plugin's own repo
+#                       (gh pr|issue create) without a relay once feedback scrub passes the title and body (person only)
+#                       default ask
 #   features.accounts   true | false: ask every Claude account sharing this transcript store (features/accounts.*)
 #                                                                       default false
 #   features.accounts_weekly_switch  true | false: past 90% of the weekly limit, the coordinator hands over to an
@@ -476,7 +479,7 @@ DOCS_WATCH_PLUGIN_DOC=plugins/session-orchestration/writing-instructions.md
 config() {
   local key=${1:-} v ok=
   case $key in
-    tracker|host|key_pattern|approvals.delegate|approvals.pr_create|features.accounts|features.accounts_weekly_switch|features.review_inbox|features.notify|start.mode|start.kinds.feedback_apply|start.sidebar|terminal|messages|feedback.mode|feedback.repo_dir|feedback.project_dir|telemetry|pending.file|history.dirs|fable.accounts) ;;
+    tracker|host|key_pattern|approvals.delegate|approvals.pr_create|features.accounts|features.accounts_weekly_switch|features.review_inbox|features.notify|start.mode|start.kinds.feedback_apply|start.sidebar|terminal|messages|feedback.mode|feedback.send|feedback.repo_dir|feedback.project_dir|telemetry|pending.file|history.dirs|fable.accounts) ;;
     features.retro|features.remote|retro.scope|retro.schedule|retro.account|retro.sections) ;;
     features.docs_watch|docs_watch.files|docs_watch.pattern) ;;
     plan.enabled|plan.max_parallel|plan.models.design|plan.models.build|plan.models.mechanical|plan.models.review|plan.models.release|plan.models.scan|plan.models.coordinator|plan.models.retro|plan.models.research) ;;
@@ -485,7 +488,7 @@ config() {
     pane.sections) pane_sections; return 0 ;;
     coordinator.purpose) coord_purpose; return 0 ;;
     features.report_artifacts|report_artifacts.account) report_artifacts_cfg "$key"; return 0 ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections features.report_artifacts report_artifacts.account)" >&2; return 2 ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.send feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections features.report_artifacts report_artifacts.account)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
@@ -508,6 +511,7 @@ config() {
     messages) [ "$v" = none ] && ok=1 || { [[ $v =~ ^[A-Za-z0-9_-]+$ ]] && find_module messages "$v" >/dev/null && ok=1; } ;;
     start.*) case $v in read_only|propose|at_once) ok=1 ;; esac ;;
     feedback.mode) case $v in auto|pr|fork-pr|issue|local) ok=1 ;; esac ;;
+    feedback.send) case $v in ask|auto) ok=1 ;; esac ;;
     telemetry) case $v in full|local|off) ok=1 ;; esac ;;
     pending.file) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [[ $v == *.md && $v != '~'* && $v != *..* ]] && ok=1 ;;
     # a JSON list of folders, printed one per line
@@ -533,7 +537,7 @@ config() {
     docs_watch.pattern) echo "$DOCS_WATCH_PATTERN" ;;
     approvals.delegate|features.*|start.sidebar) echo false ;; terminal) echo plain ;; messages) echo none ;;
     start.mode) echo read_only ;; start.kinds.feedback_apply) config start.mode ;;
-    feedback.mode) echo auto ;; feedback.repo_dir|feedback.project_dir|pending.file|history.dirs|fable.accounts|retro.schedule|retro.sections|plan.advisor.*) ;;
+    feedback.mode) echo auto ;; feedback.send) echo ask ;; feedback.repo_dir|feedback.project_dir|pending.file|history.dirs|fable.accounts|retro.schedule|retro.sections|plan.advisor.*) ;;
     retro.scope) echo project ;; retro.account) echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ;; telemetry) [ -n "$v" ] && echo off || echo full ;;   # a mistyped value opts out
     plan.enabled) echo true ;; plan.max_parallel) echo 3 ;;
     plan.models.*) case ${key#plan.models.} in design|review) v=opus/xhigh ;; build|coordinator) v=opus/medium ;;

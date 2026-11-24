@@ -116,12 +116,17 @@ footer's `— apply?` is then answered already.
 
    Each outgoing `gh pr create` or `gh issue create` (with `--title` and `--body-file <absolute path>`) goes to the
    user as one approval: the approval hook refuses it without a relay and prints the action to report. With
-   `approvals.pr_create` `true`, the `pr` mode's `gh pr create` runs without one (an issue and a fork PR still ask).
+   `approvals.pr_create` `true`, the `pr` mode's `gh pr create` runs without one (an issue and a fork PR still ask). With `feedback.send` `auto` (the
+   person's standing yes for plugin feedback) a `gh pr create` or `gh issue create` on the plugin's own repo
+   (`feedback repo`) runs without one too, once the hook's own `feedback scrub` of its flags and body file finds
+   nothing; a hit asks as before. Run `feedback scrub` on the change itself first, which the hook doesn't see, and
+   report the URL to the coordinator afterwards.
    An apply session that the plugin coordinator started works in that coordinator's folder, so it asks the way
    worker.md's Approvals says, and a relayed approval verifies for it. Run nothing outward-facing before that yes.
 5. `feedback mark FILE sent <url>` for each case sent.
 
-Config (person keys): `feedback.mode` (`auto` default, or `pr`, `fork-pr`, `issue`, `local`), `feedback.repo_dir`
+Config (person keys): `feedback.mode` (`auto` default, or `pr`, `fork-pr`, `issue`, `local`), `feedback.send` (`ask`
+default, or `auto`: the standing yes above), `feedback.repo_dir`
 (a clone of the plugin repo you can push to; its coordinator is the plugin coordinator). They hold for you in every project, so set them once in
 `${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json`; a project's `.claude/coordination.local.json`
 outranks that file. `feedback.project_dir` (Project cases) is per project: set it in that project's
