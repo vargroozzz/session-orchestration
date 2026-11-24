@@ -12,7 +12,7 @@
 #                                            retro.*, start.*,
 #                                            terminal, messages
 #                                            (and its module's block, e.g. msgraph), trusted, team, feedback.mode,
-#                                            feedback.repo_dir, feedback.project_dir, telemetry, handoff.*, compact.window,
+#                                            feedback.send, feedback.repo_dir, feedback.project_dir, telemetry, handoff.*, compact.window,
 #                                            pending.file, history.dirs, coordinator.purpose (always excluded;
 #                                            the repo file can't set them)
 # No file means every default. `config KEY` prints the key's value; an unknown value prints the default and one
@@ -301,7 +301,7 @@ detect_host() {
 #                       project's CLAUDE.md reserves                    default false
 #   approvals.pr_create true | false: a session opens its own task's PR (gh pr create) without an ask (person only)
 #                       default true in the plugin coordinator's project (plugin_root), else false
-#   feedback.send       ask | auto: auto lets a session open its plugin-feedback PR or issue on the plugin's own repo
+#   feedback.send       ask | auto: auto lets an apply session open its plugin-feedback PR or issue on the plugin's own repo
 #                       (gh pr|issue create) without a relay once feedback scrub passes the title and body (person only)
 #                       default ask
 #   features.accounts   true | false: ask every Claude account sharing this transcript store (features/accounts.*)

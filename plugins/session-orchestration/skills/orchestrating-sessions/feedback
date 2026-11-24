@@ -188,6 +188,7 @@ scrub)
         | select(
             ($k | test("^pane\\.sections\\.")) and ($v | IN("open", "line", "hidden"))
             or $k == "feedback.mode" and ($v | IN("auto", "pr", "fork-pr", "issue", "local"))
+            or $k == "feedback.send" and ($v | IN("ask", "auto"))
             or $k == "telemetry" and ($v | IN("full", "local", "off"))
             or ($k | test("^start\\.")) and ($v | IN("read_only", "propose", "at_once"))
             or ($k | test("^plan\\.models\\.")) and ($v | test("^(haiku|sonnet|opus|fable|claude-[a-z0-9.-]+)(\\[1m\\])?/(low|medium|high|xhigh|max)$"))

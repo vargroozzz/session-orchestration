@@ -4,8 +4,8 @@
 # (bitbucketdc-cli or forgejo-cli pr merge) and their GitHub twins (gh pr merge|comment|review, gh issue comment), and
 # gh pr|issue create (its Action: "create pr|issue on OWNER/REPO from BODYFILE (sha256 SHA) <its other flags, word for
 # word>", --title required, --fill/--template/--editor/--web denied; gh pr create passes when approvals.pr_create is
-# true, and gh pr|issue create on the plugin's own repo when feedback.send is auto and feedback scrub finds nothing in
-# its flags and body file), run only on a relayed approval that names it: a coordinator's "APPROVAL relayed from the user" block, received by this session, whose quote
+# true, and an apply session's gh pr|issue create on the plugin's own repo when feedback.send is auto, its flags are
+# on the allow-list and feedback scrub finds nothing in them and its body file; a hit or another flag is denied), run only on a relayed approval that names it: a coordinator's "APPROVAL relayed from the user" block, received by this session, whose quote
 # verify-approval.sh verifies and whose Action line names the target (REPO#ID for a PR, the issue key for Jira),
 # plus the body file's sha256 for a post (and, for a gh review, its kind), or "merge"/"approve" (and no sha256) for a
 # merge or a bodiless approval. A forgejo-cli REPO is its --repo OWNER/REPO. A gh REPO is OWNER/REPO (HOST/OWNER/REPO off github.com), from -R/--repo or the PR's
@@ -75,6 +75,15 @@ decide() {
 attended() { local d=deny; if [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" = 1 ]; then d=ask; fi; decide "$d" "$1"; }
 ask_for() {
   attended "Blocked: $1 needs the user's approval, relayed by the coordinator and naming exactly this. Don't retry it, and don't route it another way. Send the coordinator your blocked status report with the line: needs your approval: $2. Then end your turn. When the relay arrives (Action naming $3), run the same command again; this hook verifies it."
+}
+# first_prompt TRANSCRIPT: its first prompt as lib.sh first_prompt reads it (not sourced here), and only when it isn't a
+# peer's message.
+first_prompt() {
+  head -n 50 "$1" | jq -Rrn 'first(inputs | fromjson? | select(.type == "user" and (.isMeta | not))
+    | [.origin.kind?, (.message.content
+      | if type == "string" then . elif type == "array" then map(select(.type == "text") | .text) | join("\n") else "" end)]
+    | select((.[1] | length > 0) and (.[1] | startswith("This session is being continued") | not)))
+    | select(.[0] != "peer") | .[1]' 2>/dev/null
 }
 
 cmd=$(jq -r '.tool_input.command // ""' <<<"$input") || exit 1
@@ -549,7 +558,7 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     'pr comment'|'issue comment') k=prpost ;;
     'pr review') k=review ;;
     # create's flags aren't the others' (-a assignee, -r reviewer, -f fill, -B base): its words are read again.
-    'pr create'|'issue create') k=create crk=${pos[0]} crx=() r= bf= bd= hp= crt=
+    'pr create'|'issue create') k=create crk=${pos[0]} crx=() r= bf= bd= hp= crt= cro= crh=
       set -- ${args[@]+"${args[@]}"}
       while [ $# -gt 0 ]; do
         case "$1" in --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}" ;; esac
@@ -561,8 +570,12 @@ while [ "$i" -lt "${#toks[@]}" ]; do
           # They fill in text (commits, a template, an editor, the browser) the approval can't name.
           -f|--fill|--fill-first|--fill-verbose|-e|--editor|-w|--web|-T|--template|--recover) crf=$1; [ "$1" = -T ] || [ "$1" = --template ] || [ "$1" = --recover ] && shift ;;
           -t|--title) crt=1; crx+=("$1 ${2:-}"); shift ;;
-          -B|--base|-H|--head|-l|--label|-a|--assignee|-r|--reviewer|-m|--milestone|-p|--project) crx+=("$1 ${2:-}"); shift ;;
-          -*) crx+=("$1") ;;
+          -H|--head) v=${2:-}; crh+=" ${v#*:}"; crx+=("$1 $v"); shift ;;
+          -B|--base|-l|--label) crx+=("$1 ${2:-}"); shift ;;
+          # cro: the flags feedback.send auto refuses (glued -F/path included: gh reads it as the body file)
+          -a|--assignee|-r|--reviewer|-m|--milestone|-p|--project) cro+=" $1"; crx+=("$1 ${2:-}"); shift ;;
+          -d|--draft) crx+=("$1") ;;
+          -*) cro+=" $1"; crx+=("$1") ;;
         esac
         shift
       done ;;
@@ -656,15 +669,24 @@ else
   [ -n "$bodyfile" ] && [ "$bodyfile" != - ] || decide deny "Blocked: post the comment with $bf, so the approval can name the file's sha256."
   case "$bodyfile" in /*) ;; *) decide deny "Blocked: give the body file as an absolute path: $bf." ;; esac
   [ -f "$bodyfile" ] || decide deny "Blocked: no such body file: $bodyfile"
-  # feedback.send auto: the person's standing yes for plugin feedback: a create on the plugin's own repo passes once
-  # feedback scrub finds nothing personal in its flags (title) and body (the apply session scrubs the change itself).
-  if [ "$kind" = create ] && [ "$host" = gh ] &&
+  # feedback.send auto: the person's standing yes for plugin feedback. An apply session's create on the plugin's own
+  # repo (its first prompt from feedback brief) passes once feedback scrub finds nothing personal in its flags and body.
+  # Cheapest test first: feedback repo and config each source lib.sh, and the scrub is slow (up to a minute on a busy
+  # machine: hooks.json gives this hook 180 s).
+  fb="$here/../skills/orchestrating-sessions/feedback"
+  if [ "$kind" = create ] && [ "$host" = gh ] && [ -f "$tp" ] &&
+     grep -qE '^Work on [^ :]+: Apply plugin feedback: ' <<<"$(first_prompt "$tp")" &&
+     [ "$repo" = "$("$fb" repo 2>/dev/null)" ] &&
      [ "$(cd "$cwd" 2>/dev/null && . "$here/../lib.sh" >/dev/null 2>&1 && config feedback.send 2>/dev/null)" = auto ]; then
-    fb="$here/../skills/orchestrating-sessions/feedback"
-    if [ -n "$repo" ] && [ "$(norm "$repo")" = "$("$fb" repo 2>/dev/null)" ]; then
-      ft=$(mktemp) && printf '%s\n' "${crx[*]:-}" > "$ft" && "$fb" scrub "$ft" "$bodyfile" >/dev/null 2>&1; fr=$?
-      rm -f "$ft"; [ "$fr" != 0 ] || pass
-    fi
+    [ -z "$cro" ] || decide deny "Blocked: under feedback.send auto, gh $crk create takes only -R, -t/--title, -F/--body-file <absolute path> (space-separated), -l/--label, -B/--base, -H/--head and -d/--draft; not:$cro. Drop it and run it again."
+    # The scrubbed flags: all but -H, whose fork owner is public and a local remote's owner; its branch is scrubbed.
+    ft=$(mktemp) || exit 1
+    for x in ${crx[@]+"${crx[@]}"}; do case $x in '-H '*|'--head '*) ;; *) printf '%s\n' "$x" ;; esac; done > "$ft"
+    [ -z "$crh" ] || printf -- '-H%s\n' "$crh" >> "$ft"
+    out=$("$fb" scrub "$ft" "$bodyfile" 2>&1); fr=$?; rm -f "$ft"
+    [ "$fr" != 0 ] || pass
+    decide deny "Blocked: feedback scrub found something personal in this gh $crk create (the flags or $bodyfile). Reword it and run it again; never send it with a hit:
+${out//"$ft"/the flags}"
   fi
   sha=$(shasum -a 256 "$bodyfile" | cut -d' ' -f1); [ "${#sha}" = 64 ] || exit 1
   if [ "$kind" = review ]; then action="post $mode review $bodyfile on $what (sha256 $sha)"
@@ -695,12 +717,7 @@ while [ -f "$f" ] && (( hops++ < 20 )); do
     | $b | [scan("APPROVAL relayed from the user\\nQuote: ([\\s\\S]*?)\\nAction: ([^\\n]*)\\nSource: ([0-9a-f-]{36}) ([^\\n]+)")]
     | .[] | {name: $o.name, quote: .[0], action: .[1], sid: .[2], scwd: .[3], tp: $f}' "$f" 2>/dev/null)${relays:+
 $relays}" || exit 1   # the predecessor's go first: older, and the loop below reads newest first
-  # The first prompt as lib.sh first_prompt reads it (not sourced here), and only when it isn't a peer's message.
-  first=$(head -n 50 "$f" | jq -Rrn 'first(inputs | fromjson? | select(.type == "user" and (.isMeta | not))
-    | [.origin.kind?, (.message.content
-      | if type == "string" then . elif type == "array" then map(select(.type == "text") | .text) | join("\n") else "" end)]
-    | select((.[1] | length > 0) and (.[1] | startswith("This session is being continued") | not)))
-    | select(.[0] != "peer") | .[1]' 2>/dev/null)
+  first=$(first_prompt "$f")
   sup=$(grep -m1 -oE 'Supersedes: [0-9a-f]{8}-[0-9a-f-]{27}' <<<"$first") || break; sup=${sup#Supersedes: }
   # --handover's task prompt names the predecessor's transcript (another account's projects folder, maybe); a chunk's
   # doesn't: then it is beside this one's.
