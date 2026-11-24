@@ -3225,6 +3225,9 @@ leftover_wt() {
         old=0 ln="$kl — worktree $rel has ignored or hidden files the main checkout lacks — check before removing"
       elif [ "$unmerged" = 0 ]; then
         ln="$kl — worktree clean+merged: ${fo}git -C $repo worktree remove $rel && git -C $repo branch -d $br"
+      elif all_landed "$wt" "$base"; then
+        # a rebase landing: every patch is on the base under another SHA, so branch -d would refuse
+        ln="$kl — worktree clean+merged (rebased): ${fo}git -C $repo worktree remove $rel && git -C $repo branch -D $br"
       elif [ "$local_only" = 0 ]; then
         # an orphan's open PR may still be under review: not Resolved, whatever its age
         [ -z "$orphan" ] || old=0
@@ -3234,11 +3237,12 @@ leftover_wt() {
       fi
       printf '%s\t  %s\n' "$old" "$ln"
       # For the watcher's removal (--changes): every account's sessions listed, nothing to lose (keeps_nothing), on a
-      # branch naming no open row's key, not the main checkout, no live session on the key or in the folder (any
+      # branch naming no open row's key (a key-pattern match equal to one: grep -w would take a row claude-x for a
+      # word of the branch claude-x-s2), not the main checkout, no live session on the key or in the folder (any
       # session dir) but this key's ones it stops, and everything landed (a stale base is fetched once per repo, then
       # checked again).
       if [ -n "${SESSION_STATUS_FINISHED_OUT:-}" ] && [ ! -e "$TMP/agents.failed" ] && [ "$dirty" = 0 ] && [ "$kn" = 1 ] &&
-          [ -z "$held" ] && [ "$wt" != "$r" ] && [ "$br" != HEAD ] && ! grep -qwF -f <(printf '%s\n' $keys | grep .) <<<"$br" &&
+          [ -z "$held" ] && [ "$wt" != "$r" ] && [ "$br" != HEAD ] && ! grep -oE -- "$KEYRE" <<<"$br" | grep -qxF -f <(printf '%s\n' $keys | grep .) &&
           [ -z "$(awk -F'\t' -v w="$wt" '$6 == w || index($6, w "/") == 1 {print $1}' "$TMP/agents.every" |
             grep -vxF -f <(awk -F'\t' -v k="$kl" '$2 == k {print $1}' "$TMP/finished"))" ]; then
         f=$TMP/fetched.$(tr / _ <<<"$r")

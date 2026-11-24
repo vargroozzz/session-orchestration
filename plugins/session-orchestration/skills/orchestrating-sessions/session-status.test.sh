@@ -720,6 +720,8 @@ git -C "$root" worktree add -q -b feature/ABC-34-link "$root/wt12" origin/main &
 touch "$tmp/agents.fail"; SESSION_STATUS_FINISHED_OUT=$tmp/fo run >/dev/null; rm "$tmp/agents.fail"
 [ -f "$tmp/fo.wt" ] && [ ! -s "$tmp/fo.wt" ] || { echo "a failed session listing left a worktree removable: $(cat "$tmp/fo.wt")"; exit 1; }
 SESSION_STATUS_FINISHED_OUT=$tmp/fo run >/dev/null; [ "$(cut -f3 "$tmp/fo.wt")" = feature/ABC-34-old ] || { echo "removable: $(cat "$tmp/fo.wt")"; exit 1; }
+# its Leftovers line says it landed, not "unmerged commit(s) all on origin"
+[[ $(cut -f7 "$tmp/fo.wt") == 'ABC-34 Done — worktree clean+merged (rebased): '*'branch -D feature/ABC-34-old' ]] || { echo "rebased line: $(cut -f7 "$tmp/fo.wt")"; exit 1; }
 run --changes >/dev/null
 out=$(SESSION_STATUS_PEEK=1 SESSION_STATUS_FORWARD=1 run --changes) && [ -d "$root/wt2" ] &&
   [ "$(grep -c 'would remove' <<<"$out")" = 1 ] && grep -qxF '  * would remove: ABC-34 Done — worktree wt2, branch feature/ABC-34-old' <<<"$out" &&

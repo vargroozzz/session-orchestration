@@ -12,6 +12,7 @@ mkdir -p "$proj" "$tmp/bin"
 now=$(date -u +%Y-%m-%dT%H:%M:%S.000Z) old=2020-01-01T00:00:00.000Z
 printf 'Looks good to me.\n' > "$tmp/body.txt"; sha=$(shasum -a 256 "$tmp/body.txt" | cut -d' ' -f1)
 printf 'Ship it.\n' > "$tmp/other.txt"
+cp "$tmp/body.txt" "$tmp/x-review-pr-20-comment.md"
 
 typed() { jq -nc --arg ts "$2" --arg t "$1" '{type: "user", origin: {kind: "human"}, timestamp: $ts, message: {content: $t}}'; }
 {
@@ -26,6 +27,7 @@ typed() { jq -nc --arg ts "$2" --arg t "$1" '{type: "user", origin: {kind: "huma
   typed "yes, merge app#15" "$now"
   typed "yes, merge app#19" "$now"
   typed "yes, post the ACME-9 note" "$now"
+  typed "yes, post the ACME-20 comment" "$now"
   typed "yes, request changes on ACME-10" "$now"
   typed "yes, merge PROJ-11 (app#301)" "$now"
   typed "yes, post the PROJ-12 comment" "$now"
@@ -67,6 +69,7 @@ w=$tmp/worker.jsonl
   relay "yes, merge app#15" "merge acme/app#15 (app-fix-login)"
   relay "yes, merge app#19" "merge acme/app#19"
   relay "yes, post the ACME-9 note" "post comment $tmp/body.txt on acme/app#16 (sha256 $sha) for ACME-9"
+  relay "yes, post the ACME-20 comment" "post comment $tmp/x-review-pr-20-comment.md on acme/app#20 (sha256 $sha) for ACME-20"
   relay "yes, request changes on ACME-10" "post request-changes review $tmp/body.txt on acme/app#18 (sha256 $sha) for ACME-10"
   relay "yes, merge PROJ-11 (app#301)" "merge org/app#301 (PROJ-11)"
   relay "yes, post the PROJ-12 comment" "post comment $tmp/body.txt on org/app#302 (sha256 $sha) for PROJ-12"
@@ -252,6 +255,7 @@ check "gh pr review 18 -R acme/app --comment -F $tmp/body.txt" deny "review kind
 check "gh pr review 18 -R acme/app -r -a -F $tmp/body.txt" deny "two review kinds"
 check "gh pr review 18 -R acme/app --request-changes -F $tmp/body.txt" allow "gh request-changes review, relayed as one"
 check "gh issue comment 16 -R acme/app -F $tmp/body.txt" allow "gh issue comment"
+check "gh pr comment 20 -R acme/app -F $tmp/x-review-pr-20-comment.md" allow "gh comment whose body file's name holds review"
 # gh pr|issue create: the Action names the repo, the body file's sha256 and every other flag, word for word.
 check "gh pr create -R acme/app --title 'Fix login' -F $tmp/body.txt" deny "gh pr create, no relay (approvals.pr_create false)"
 check "gh pr create -R acme/app --title Fix -F $tmp/body.txt --dry-run" pass "gh pr create --dry-run"

@@ -739,9 +739,11 @@ while IFS= read -r r; do
     grep -qiE "(^|[^a-z])$kind([^a-z]|$)" <<<"$act" && ! grep -qE '[0-9a-f]{64}' <<<"$act" || continue
   else
     grep -qF "$sha" <<<"$act" || continue
-    # A gh comment's relay isn't a review's, and a review's names its kind.
-    [ "$kind" != prpost ] || [ -z "$host$fj" ] || ! grep -qiw review <<<"$act" || continue
-    [ "$kind" != review ] || { grep -qiE "(^|[^a-z-])$mode([^a-z-]|$)" <<<"$act" && grep -qiw review <<<"$act"; } || continue
+    # A gh comment's relay isn't a review's, and a review's names its kind: read outside the body file's path,
+    # whose name may hold either word (…-review-pr-12-comment.md).
+    nb=${act//"$bodyfile"/}
+    [ "$kind" != prpost ] || [ -z "$host$fj" ] || ! grep -qiw review <<<"$nb" || continue
+    [ "$kind" != review ] || { grep -qiE "(^|[^a-z-])$mode([^a-z-]|$)" <<<"$nb" && grep -qiw review <<<"$nb"; } || continue
   fi
   # (A send's key from outside its action: a subject or id there may hold words like UTF-8.)
   a=$act; [ "$kind" != send ] && [ "$kind" != create ] || a=${act/"$action"/}

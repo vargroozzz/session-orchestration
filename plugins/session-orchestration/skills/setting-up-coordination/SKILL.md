@@ -193,6 +193,9 @@ below reads the project's:
   any key but `team` (the project's file only), meant for the person-wide ones (`feedback`, `telemetry`). Setup
   doesn't write it.
 
+Both person files are the user's to change: a session's edit of either asks the user, or is refused in a background
+session (`hooks/coordinator-guard.sh`), so run setup in a session you attend to have it write them.
+
 `handoff.*`, `compact.window`, `pending.file` and `history.dirs` are person-only too: dropped from the repo file (the
 last two name personal state), and setup never writes `pending.file`.
 Set `autoCompactWindow` in Claude Code settings to `compact.window` (220000). An env

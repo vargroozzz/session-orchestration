@@ -515,7 +515,10 @@ test('a full sweep gets 7 minutes; one that fails keeps the last good rows under
   fail = true
   await ui.press({ key: 'refresh' })
   expect(caps.at(-1)).toBe(420_000)
-  expect(await ui.find({ type: 'Text', text: /failed: .*\(sweep at .*; the rows below are from / })).toBeDefined()
+  // the rows' age said plainly, and the first failure of a run retries in a minute; the next one waits for the tick
+  expect(await ui.find({ type: 'Text', text: /failed: .*\(sweep at .*; the rows below are from \d\d:\d\d, (just now|\d+[mh] ago); trying again in a minute\)/ })).toBeDefined()
+  await ui.press({ key: 'refresh' })
+  expect(await ui.find({ type: 'Text', text: /the rows below are from \d\d:\d\d, (just now|\d+[mh] ago)\)/ })).toBeDefined()
   expect(await ui.find({ type: 'Button', key: 'task-PROJ-4679' })).toBeDefined()
   await ui.unmount()
 })
