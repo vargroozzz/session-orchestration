@@ -277,6 +277,19 @@ check "gh issue create -R acme/app -l bug --title Crash --body-file $tmp/body.tx
 echo '{"approvals":{"pr_create":true}}' > "$root/.claude/coordination.local.json"
 check "gh pr create -R acme/app --fill" pass "gh pr create under approvals.pr_create"
 check "gh issue create -R acme/app --title Crash2 --body-file $tmp/body.txt" deny "gh issue create still asks under approvals.pr_create"
+# feedback.send auto: a create on the plugin's own repo passes when scrub finds nothing personal in title and body;
+# another repo, a hit in the body or title, a merge, or the default (ask) still asks.
+fbrepo=$("$here/../skills/orchestrating-sessions/feedback" repo)
+printf 'A relay from a desktop session is rejected.\n' > "$tmp/fb-clean.txt"; printf 'seen at %s/x\n' "$home" > "$tmp/fb-hit.txt"
+echo '{"feedback":{"send":"auto"}}' > "$root/.claude/coordination.local.json"
+check "gh pr create -R $fbrepo --title 'Fix relay' --body-file $tmp/fb-clean.txt" pass "feedback.send auto, clean PR"
+check "gh issue create -R $fbrepo --title 'Relay bug' --body-file $tmp/fb-clean.txt" pass "feedback.send auto, clean issue"
+check "gh pr create -R acme/app --title 'Fix relay' --body-file $tmp/fb-clean.txt" deny "feedback.send auto, another repo"
+check "gh pr create -R $fbrepo --title 'Fix relay' --body-file $tmp/fb-hit.txt" deny "feedback.send auto, scrub hit in the body"
+check "gh pr create -R $fbrepo --title 'Fix $home/x' --body-file $tmp/fb-clean.txt" deny "feedback.send auto, scrub hit in the title"
+check "gh pr merge 5 -R $fbrepo" deny "feedback.send auto never covers a merge"
+echo '{"feedback":{"send":"ask"}}' > "$root/.claude/coordination.local.json"
+check "gh pr create -R $fbrepo --title 'Fix relay' --body-file $tmp/fb-clean.txt" deny "feedback.send ask"
 echo '{}' > "$root/.claude/coordination.local.json"
 check "gh api -X PUT repos/acme/app/pulls/12/merge" deny "gh api write method"
 check "gh api repos/acme/app/issues/12/comments -f body=hi" deny "gh api fields"

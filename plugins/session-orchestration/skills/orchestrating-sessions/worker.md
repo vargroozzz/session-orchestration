@@ -142,7 +142,7 @@ EOF
 ## Posting and merging
 
 The commands in the approval hook's list (`hooks/approved-action.sh`'s header: PR and Jira comment posts, reviews and
-PR merges, `gh pr|issue create` unless `approvals.pr_create` lets a PR through, Teams and mail sends; a mail send from `--body-file`, a forward from `--comment-file`, no attachments) are
+PR merges, `gh pr|issue create` unless `approvals.pr_create` lets a PR through or `feedback.send` lets plugin feedback through, Teams and mail sends; a mail send from `--body-file`, a forward from `--comment-file`, no attachments) are
 hook-gated: they run only on a relayed approval naming exactly that action, which the hook verifies itself, one run
 per relay (a run failed: check whether it landed before asking again). Post from `--body-file <absolute path>`, as the
 only CLI call in its command, and don't edit the file after asking: the approval names its sha256. Any send (a

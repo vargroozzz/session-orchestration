@@ -4,7 +4,8 @@
 # (bitbucketdc-cli or forgejo-cli pr merge) and their GitHub twins (gh pr merge|comment|review, gh issue comment), and
 # gh pr|issue create (its Action: "create pr|issue on OWNER/REPO from BODYFILE (sha256 SHA) <its other flags, word for
 # word>", --title required, --fill/--template/--editor/--web denied; gh pr create passes when approvals.pr_create is
-# true), run only on a relayed approval that names it: a coordinator's "APPROVAL relayed from the user" block, received by this session, whose quote
+# true, and gh pr|issue create on the plugin's own repo when feedback.send is auto and feedback scrub finds nothing in
+# its flags and body file), run only on a relayed approval that names it: a coordinator's "APPROVAL relayed from the user" block, received by this session, whose quote
 # verify-approval.sh verifies and whose Action line names the target (REPO#ID for a PR, the issue key for Jira),
 # plus the body file's sha256 for a post (and, for a gh review, its kind), or "merge"/"approve" (and no sha256) for a
 # merge or a bodiless approval. A forgejo-cli REPO is its --repo OWNER/REPO. A gh REPO is OWNER/REPO (HOST/OWNER/REPO off github.com), from -R/--repo or the PR's
@@ -655,6 +656,16 @@ else
   [ -n "$bodyfile" ] && [ "$bodyfile" != - ] || decide deny "Blocked: post the comment with $bf, so the approval can name the file's sha256."
   case "$bodyfile" in /*) ;; *) decide deny "Blocked: give the body file as an absolute path: $bf." ;; esac
   [ -f "$bodyfile" ] || decide deny "Blocked: no such body file: $bodyfile"
+  # feedback.send auto: the person's standing yes for plugin feedback: a create on the plugin's own repo passes once
+  # feedback scrub finds nothing personal in its flags (title) and body (the apply session scrubs the change itself).
+  if [ "$kind" = create ] && [ "$host" = gh ] &&
+     [ "$(cd "$cwd" 2>/dev/null && . "$here/../lib.sh" >/dev/null 2>&1 && config feedback.send 2>/dev/null)" = auto ]; then
+    fb="$here/../skills/orchestrating-sessions/feedback"
+    if [ -n "$repo" ] && [ "$(norm "$repo")" = "$("$fb" repo 2>/dev/null)" ]; then
+      ft=$(mktemp) && printf '%s\n' "${crx[*]:-}" > "$ft" && "$fb" scrub "$ft" "$bodyfile" >/dev/null 2>&1; fr=$?
+      rm -f "$ft"; [ "$fr" != 0 ] || pass
+    fi
+  fi
   sha=$(shasum -a 256 "$bodyfile" | cut -d' ' -f1); [ "${#sha}" = 64 ] || exit 1
   if [ "$kind" = review ]; then action="post $mode review $bodyfile on $what (sha256 $sha)"
   elif [ "$kind" = send ]; then action="$mv $bodyfile to $what (sha256 $sha)"
