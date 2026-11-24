@@ -1197,6 +1197,8 @@ async function paneActionFor($: EngineInterface, command: string) {
 // One sweep at a time: a Refresh press or a tick during one joins it.
 let inFlight: Promise<void> | undefined
 let lastGood: Board | undefined
+let lastGoodMs = 0
+let retried = false // this run of failed sweeps has had its quick retry
 // Section slugs a sweep's config read leaves alone: pressed since the read began (its write may land after it), or
 // one whose write failed (kept for this pane only).
 let secPresses = 0
@@ -1220,12 +1222,18 @@ function refresh($: EngineInterface) {
     // A name only: a failed run's `failed: …` text means none.
     await update($, terminal, () => /^[A-Za-z0-9_-]+$/.test(term) ? term : 'plain')
     const agents = await runStatus($, ['--agents']) // what the sweep just saw
-    const at = new Date(await $.clock.now()).toTimeString().slice(0, 5)
-    // A failed sweep (a timeout, say) keeps the last good rows under its failure line, not the line alone.
+    const now = await $.clock.now()
+    const at = new Date(now).toTimeString().slice(0, 5)
+    // A failed sweep (a timeout, say) keeps the last good rows under its failure line, with their age, not the line
+    // alone. The first failure of a run of them retries in a minute, not at the next tick: an aborted sweep keeps the
+    // transcripts it scanned (session-status's scan cache), so the retry has less to do.
     const fresh: Board = { status, pending, urls, agents, at }
-    if (!status.startsWith('failed: ')) lastGood = fresh
+    const failed = status.startsWith('failed: ')
+    if (!failed) { lastGood = fresh; lastGoodMs = now; retried = false }
+    const retry = failed && !retried
+    if (retry) { retried = true; $.clock.after(60_000, () => void refresh($)) }
     await update($, board, (): Board => lastGood === fresh || !lastGood ? fresh
-      : { ...fresh, status: `${status} (sweep at ${at}; the rows below are from ${lastGood.at})\n${lastGood.status}` })
+      : { ...fresh, status: `${status} (sweep at ${at}; the rows below are from ${lastGood.at}, ${ago(now - lastGoodMs)}${retry ? '; trying again in a minute' : ''})\n${lastGood.status}` })
     await loadHanded($).catch(() => undefined) // again, now with the sessions this sweep saw
     await syncStatus($)
   })().finally(() => {

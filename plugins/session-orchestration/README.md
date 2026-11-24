@@ -154,7 +154,10 @@ Installing the plugin adds these to every Claude Code session, in every project:
   session), from the coordinator or any of its subagents, for anything but the coordinator's successor: tasks start
   with `claude --bg`, unless config `start.sidebar` is `true`. In a task session it refuses every `start_session` that
   would start one (a card you start yourself goes through) and every `hand_off_to_session`: a task that needs another
-  session says so in its report.
+  session says so in its report. In every session it guards the person config files (`.claude/coordination.local.json`,
+  `~/.config/session-orchestration/config.json`), which hold your approvals: an edit of either, or a Bash command that
+  writes one, asks you in a session you attend and is refused in a background one, so no session grants itself an
+  approval.
 - **Local history** (`skills/orchestrating-sessions/history-git`, Stop): when a turn ends, commits what changed in the
   project's state folder, replies folder, handoff files and the folders in config `history.dirs`, one commit per repo named after
   the session. A folder's git dir sits outside it, unless the folder (or its parent) is the top of a repo with no

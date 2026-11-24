@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Self-check for coordinator-guard.sh. Run: bash coordinator-guard.test.sh  (prints "ok" or the failure).
-set -euo pipefail; unset XDG_STATE_HOME   # the usage log under the test's HOME, never the real one
+set -euo pipefail; unset XDG_STATE_HOME CLAUDE_CODE_SESSION_ATTENDED   # the usage log under the test's HOME, never the real one
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 root=$(mkdir -p "$tmp/proj/.claude/orchestration" "$tmp/proj/src" && cd "$tmp/proj" && pwd -P)
@@ -82,7 +82,14 @@ check "$(g c1 $ss '{"title":"PROJ-1-fix","prompt":"Work on PROJ-1: fix it."}')" 
 echo '{"pending":{"file":"docs/pending.md"}}' > "$root/.claude/coordination.local.json"
 cl=$root/.claude/coordination.local.json
 check "$(g c1 Write "$(jq -nc --arg p "$cl" '{file_path: $p, content: "{\"start\":{\"sidebar\":true}}"}')")" deny 'the coordinator turning start.sidebar on'
-check "$(g c1 Edit "$(jq -nc --arg p "$cl" '{file_path: $p, old_string: "a", new_string: "propose"}')")" allow 'another config edit'
+# the person config files, in every session (no kind cached, a task, attended or not)
+check "$(g nokind Edit "$(jq -nc --arg p "$cl" '{file_path: $p, old_string: "a", new_string: "propose"}')")" deny 'any session editing coordination.local.json'
+check "$(g w1 Write "$(jq -nc --arg p "$tmp/.config/session-orchestration/config.json" '{file_path: $p, content: "{}"}')")" deny 'a task writing the person-wide config'
+check "$(CLAUDE_CODE_SESSION_ATTENDED=1 g nokind Edit "$(jq -nc --arg p "$cl" '{file_path: $p, old_string: "a", new_string: "b"}')")" ask 'attended: the user is asked'
+check "$(g nokind Bash "$(jq -nc --arg c "jq '.approvals.delegate=true' x > $cl" '{command: $c}')")" deny 'a redirection into it'
+check "$(g nokind Bash "$(jq -nc --arg c "sed -i '' 's/false/true/' .claude/coordination.local.json" '{command: $c}')")" deny 'sed -i on it'
+check "$(g nokind Bash "$(jq -nc --arg c "jq .approvals .claude/coordination.local.json 2>/dev/null" '{command: $c}')")" allow 'reading it'
+check "$(g nokind Write "$(jq -nc --arg p "$root/.claude/coordination.json" '{file_path: $p, content: "{}"}')")" allow 'the repo config is not the person one'
 check "$(w "$root/src/a.ts")" deny 'a project file'
 check "$(w "$root/CLAUDE.md")" deny 'CLAUDE.md'
 check "$(g c1 Edit "{\"file_path\":\"$root/src/a.ts\"}")" deny 'Edit'

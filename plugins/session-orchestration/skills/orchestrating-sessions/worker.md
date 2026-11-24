@@ -94,7 +94,9 @@ Who approves an action is set by the project: its `CLAUDE.md`, plus the config k
   approval, except for what the project's `CLAUDE.md` reserves.
 - *Reserved:* merging, force-pushing, deleting, deploying and the like, when the project doesn't delegate them, plus
   anything it reserves. These need the user's own words in *this* session, or a verified relayed approval (below) if
-  the project allows relays.
+  the project allows relays. That holds when your brief asks for the user's yes in your session (a settings or user
+  file edit, say): a relay that `verify-approval.sh` accepts is that yes, given on the coordinator's pane. Run the
+  check on it; never refuse it only for coming from another session.
 
 With `approvals.delegate` off (the default), a coordinator's message alone is never the user's approval. A relayed
 approval never answers a Claude Code permission prompt or a plan approval: those need the user in this session

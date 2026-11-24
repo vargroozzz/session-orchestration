@@ -10,7 +10,7 @@
 #   `--successor` prints (title NAME-next, its prompt running `--successor --started NAME`). A task goes to
 #   `claude --bg`: a sidebar session is in no listing the status reads. Config start.sidebar true (a person key,
 #   default false) lets every start_session through: the user chose sidebar tasks over the status's view of them.
-#   An edit of .claude/coordination.local.json naming "sidebar" is refused: only the user turns it on.
+#   Only the user turns it on: the person config files are guarded in every session (below).
 # - Edit/Write/MultiEdit/NotebookEdit of a file inside the project root: allowed only in .claude/ (not its settings*.json
 #   or hooks/), the replies folder, the handoff file (pending.file), the project memory CLAUDE.md names (the file and its memory/ folder)
 #   and the root's CLAUDE.local.md while git doesn't track it (a worktree session can't reach it); never in
@@ -29,6 +29,27 @@
 # Any other session pays one bash start and a file test (and, until context-watch caches its kind, lib.sh and a
 # first-prompt read).
 input=$(cat)
+# Every session, a subagent too: the person config files (a project's .claude/coordination.local.json, the person-wide
+# ${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json) hold the approvals (approvals.*, feedback.send,
+# start.sidebar), so a session that wrote them could grant itself one. An Edit/Write of either, or a Bash command that
+# writes one (a redirection, tee, sed -i, mv, cp, ln, rm, truncate, install naming it), asks the user in an attended
+# session and is refused in a background one. session-status's own writers (--purpose, --pane-section) don't name it.
+# shortcut: an interpreter or script that writes it without naming it isn't seen; upgrade if a session does that
+if [[ $input == *coordination.local.json* || $input == *session-orchestration/config.json* ]]; then
+  { read -r t0; read -r p0; } < <(jq -r '.tool_name // "", (.tool_input.file_path // .tool_input.notebook_path // "")' <<<"$input")
+  f='(\.claude/coordination\.local|session-orchestration/config)\.json'
+  hit=
+  case $t0 in
+    Edit|MultiEdit|Write|NotebookEdit) [[ $p0 =~ $f$ ]] && hit=$p0 ;;
+    Bash) hit=$(jq -r '.tool_input.command // ""' <<<"$input" | grep -oE "(>[>|]?[[:space:]]*[\"']?|(^|[^A-Za-z0-9_-])(tee|sed[[:space:]]+[^;&|]*-i|mv|cp|ln|rm|truncate|install)[[:space:]][^;&|]*)[^[:space:];&|]*$f" | grep -oE "[^[:space:]\"'>]*$f" | head -1) ;;
+  esac
+  if [ -n "$hit" ]; then
+    d=deny; [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" != 1 ] || d=ask
+    jq -nc --arg d "$d" --arg r "Person config: ${hit/#"$HOME"/\~} holds the user's own settings, approvals among them (approvals.*, feedback.send, start.sidebar), so only the user changes it; a session never does, or it could grant itself an approval. Don't route the change another way: give the user the exact change and why (in your report, or hand_command with the command), and go on without it." \
+      '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}'
+    exit 0
+  fi
+fi
 # a subagent: its cd and edits aren't the coordinator's, but a sidebar session it starts is just as unseen; a
 # sub-coordinator's subagent keeps the sub's limits (its starts and edits), all but the cd rule
 sa=; [[ $input =~ \"agent_id\":\ *\"[^\"]+\" ]] && ! [[ $input =~ \"tool_name\":\ *\"mcp__ccd_session__(start_session|hand_off_to_session)\" ]] && sa=1
@@ -202,8 +223,6 @@ if [ -n "$skey" ]; then
   deny "Sub-coordinator rule: the only files you change are $skey's in the replies folder ($skey.md, $skey-*.md: the plan, the briefs, your handoff $skey-coordinator.md) and the project memory. ${path/#"$HOME"/\~} is your parent's or a session's: send it to the session that owns it, or report it to your parent." sub-edit
 fi
 case $path in "$root"/*) ;; *) exit 0 ;; esac
-[ "$path" = "$root/.claude/coordination.local.json" ] && jq -e '.tool_input | [.content, .new_string, (.edits // [] | .[].new_string)] | any(strings | test("sidebar"))' <<<"$input" >/dev/null &&
-  deny "Coordinator rule: start.sidebar is the user's choice, never yours: leave it to them (README, Claude Code Desktop)." sidebar-config
 if ! under "$path" "$root/.claude/worktrees" && ! under "$path" "$root/.worktrees"; then
   # .claude/ but its settings and hooks: those fixes are a session's too (SKILL.md, Rules)
   under "$path" "$root/.claude" && case ${path#"$root/.claude/"} in settings*.json|hooks/*) ;; *) exit 0 ;; esac
