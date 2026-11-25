@@ -31,26 +31,13 @@ Every coordinator session, before anything else; the user shouldn't have to ask.
    tool truncates long output.
 2. Call `open_pane`. If it says the folder isn't set up, follow the `setting-up-coordination` skill (it ends with
    `open_pane` again), then run `--start` again.
-3. When `--start` finishes (its completion notice; don't poll it), read its output: the status, the handoff file,
-   the last handover note, the replies written since, and one line per enabled feature. Its status is bounded (at
-   most 5 Leftovers and 5 Other sessions lines; the plain status command shows them all), and its approvals are
-   only the ones still to act on, at most 5 (`session-status --approvals` lists every live one). Then:
-   - do each feature line's start step, and whatever the project's coordinator doc adds;
-   - prune the handoff file against the status (Handoff file);
-   - act on each unread coordinator inbox entry it lists, then mark it read (`session-status --inbox --read N`);
-   - a `## Purpose` section: ask the user for one line on what this coordinator is for, then
-     `session-status --purpose 'LINE'` ([sessions.md](sessions.md), Another project's matter);
-   - an `## Ended while the background service was off` section gets one ask ([resuming.md](resuming.md), After a
-     restart);
-   - recheck each ask `open_pane` listed as queued over a day ago, one by one: look the thing up (the PR merged or
-     rebased, the comment posted, the ticket moved), cancel what no longer applies and tell the user
-     which still do and why. Never "still apply as far as I can tell": an ask you couldn't check, say so and what
-     blocked it ([approvals.md](approvals.md), Asking);
-   - read a reply whole only when its header line or its `last section` needs you. Where the two disagree, read it whole
-     and take the later of the two (dates, the `Done:` line) as the state: a worker may have added a section without updating
-     the top, or finished without removing an old section.
-4. Queue each open decision not on the pane yet with `ask_approval`, one per decision ([approvals.md](approvals.md),
-   Asking; never a numbered list in chat), then summarize what needs the user, including the handoff entries still
+3. When `--start` finishes (its completion notice; don't poll it), read its output and do what each section and
+   feature line names, plus whatever the project's coordinator doc adds. Its status and approvals are bounded (the
+   plain status command and `--approvals` list them all). Then prune the handoff file against the status (Handoff
+   file), recheck each ask `open_pane` listed as OLD ([approvals.md](approvals.md), Asking), and read a reply whole
+   only when its header line or its `last section` needs you, or the two disagree (then the later of the two, by
+   dates and the `Done:` line, is the state).
+4. Queue each open decision not on the pane yet ([approvals.md](approvals.md), Asking), then summarize what needs the user, including the handoff entries still
    open. Then arm the watcher (Watching). A
    successor (first prompt `You succeed "NAME"`) then does the successor's step ([handover.md](handover.md)).
 
@@ -63,15 +50,9 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
    you**, **Stale prompts**, **Leftovers**, **Notices**, **Other sessions**, **Stale**.
    - **Stale**: queued asks and handoff entries whose facts moved on. Cancel, reword or archive them on the user's
      word, never on your own; `session-status --stale` lists them alone.
-   - A messages module's Notices line: act on it per that module's doc (its feature line names it). One the user
-     calls handled: `session-status --dismiss "LINE"`, which hides it for every session; don't pass it on again.
-   - `plugin feedback: N open … — apply?` (at most once a day): pass it to the user, and on a yes start an apply
-     session ([feedback.md](feedback.md)). `…, for the plugin coordinator, which isn't running — start it?`: on a
-     yes, run `feedback coordinator --start`, never an apply session. Its `project feedback` part waits for the next
-     retro.
-   - `docs watch: new page SLUG, re-review DOC`: pass it to the user and offer a review-kind session for DOC (`--launch`, named as docs-watch.md says)
-     ([../../features/docs-watch.md](../../features/docs-watch.md), Acting on a notice). `docs watch: DOC is missing`:
-     tell the user, who fixes `docs_watch.files` or the doc's path.
+   - Every other footer line names its own step or doc; a line that asks (`— apply?`, `— start it?`) goes to the
+     user, and its step runs only on their yes. A Notices line the user calls handled: `session-status --dismiss
+     "LINE"`, which hides it for every session; don't pass it on again.
 2. Message a session only to give it work, or for something only it knows. `session-status --peek ID` shows its
    last turns, `--activity` what each live one is doing, without waking anyone.
 3. Never `claude -p --resume` an old session just to ask for status.
@@ -82,12 +63,9 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
 
 ## Messaging
 
-- **Approvals: read [approvals.md](approvals.md) first**, every time you ask the user to approve an action or relay
-  one. You relay the user's decisions and don't make them, unless the project delegates approvals to you
+- **Every decision waiting on the user, and every relay: read [approvals.md](approvals.md) first**, each time. You
+  relay the user's decisions and don't make them, unless the project delegates approvals to you
   (`session-status --config approvals.delegate` prints `true`).
-- **Every decision waiting on the user goes on the pane**: one `ask_approval` per decision, approval or not, your
-  recommended option first ([approvals.md](approvals.md), Asking). Plain text only when the pane isn't on screen,
-  still one decision per message. Never a numbered round.
 - **A session on a permission prompt** (a new `— blocked:` line under **Waiting on you**): at once queue one ask,
   "Allow it on its card (Allow this call)" when its card offers that button, else open its attach tab
   (`session-status --open view`) and ask "Approve it in the tab"; either way "Stop it and resume with a workaround"
@@ -126,9 +104,8 @@ otherwise live in your conversation alone, so the next coordinator can pick it u
 **Handing over** (at the context-watch hook's mark, at `Weekly limit:`, or a restart), and the successor's step:
 read [handover.md](handover.md) then, and do what each step prints.
 
-**The coordinator inbox** (`<replies>/coordinator-inbox.md`): a worker's `reply` that no live coordinator takes lands
-here, and the worker is told it is queued. `--start` prints the unread entries and `--watch` reports new ones under
-`Inbox`: act on each, then mark it read. Another project's coordinator, under any account, is told something with
+**The coordinator inbox** (`<replies>/coordinator-inbox.md`) holds the replies no live coordinator took; `--start`
+and `--watch` show them with what to do. Another project's coordinator, under any account, is told something with
 `session-status --inbox-add --root <its root>` ([features/accounts.md](../../features/accounts.md), Messaging another
 project's coordinator).
 
@@ -151,22 +128,10 @@ each result (`Scheduled start (due …): …`). A background session stopped by 
 after the reset, with no wake (status-reference.md, `--watch`). Messages you send it during the wait aren't lost:
 the resume acts on them.
 
-**The watcher stops finished sessions.** A background session under Leftovers or Resolved (its task finished: PR
-merged and released, or, with nothing on the board to say so, its own `done` report: status-reference.md, `done`) that is at rest (idle or done, not on a prompt, not waiting on the user) and quiet 10 minutes
-(its after-release steps had time) is stopped by the watcher, with no ask; it shows under `Stopped (…)` in the
-change that wakes you: tell the user in one line. Once no live session holds the task, the watcher also removes its
-worktree and local branch, with no ask, when nothing can be lost: no uncommitted or untracked file, no ignored file the
-main checkout lacks (dependency and build folders such as `node_modules` and `dist` aside), no live session working in it, and every commit's
-change already on the default branch (by patch, since main lands by rebase; no merge commit). That shows under
-`Stopped` too. A leftover session it leaves (interactive, on a prompt, asking the user, or `--stop` refused) and a
-worktree it keeps (its Leftovers line says why) stay the user's call: ask before removing them.
-
-**A restored login wakes you.** When a pane action's `when` check (`.claude/coordinator-actions.json`) stops
-holding, its sign-in is back: the change lists it under `Logins restored (…)` as `* LABEL — blocked on it: KEY, …`,
-the keys whose report is `blocked` with a Blocker line naming that label, its command or a sign-in. Tell each of
-those sessions the login is back and to retry the step its Blocker line names (`session-status --send-when-idle ID
-TEXT`; a retired one: resume it),
-without asking the user: they signed in for it.
+The watcher stops a finished task's session at rest and removes its worktree when nothing can be lost, with no ask
+(the `--changes` row in status-reference.md); each section of a change that wakes you (`Stopped`, `Logins
+restored`, …) names what to do. A leftover session or worktree it leaves (its Leftovers line says why) stays the
+user's call: ask before removing it.
 
 ## Rules
 
@@ -188,10 +153,10 @@ without asking the user: they signed in for it.
   `coordinator`) with one line on what it does, plus the `! <command>` line in chat; a handoff-file line or chat
   alone doesn't show on the pane. Not a step that needs the user's approval (`ask_approval`, as Messaging says), nor
   one the pane has as an action button.
-- **In Claude Code Desktop too, a task starts with `claude --bg`, never as a sidebar session** (`start_session`: a
-  sidebar session, or a New task card for the user to start): the status, the watcher's `Idle:` lines, `--resume-ended` and
-  `--stop` work on `claude --bg` sessions, and a sidebar session gets none of them, so you'd lose sight of it. The
-  one sidebar session you start is your successor ([handover.md](handover.md)); a hook refuses any other. No `claude` on PATH: hand the user its install (README). The exception is the user's: with config `start.sidebar` `true` (person key, never yours to set) a task may start as a sidebar session when the user asks for one (`--kind` then also prints the pair as `start_session` arguments, on stderr; `start_session` can't run above your own model, so a kind on a higher model silently starts at yours: start that task with `claude --bg`, which has no cap); the status doesn't list it, so you follow it through the user and its replies, and your handoff file names each one (title and what it works on) for your successor.
+- **In Claude Code Desktop too, a task starts with `claude --bg`, never as a sidebar session** (`start_session`):
+  the status, the watcher and `--stop` see only `claude --bg` sessions. The one sidebar session you start is your
+  successor ([handover.md](handover.md)); a hook refuses any other. No `claude` on PATH: hand the user its install
+  (README). Config `start.sidebar`, the user's exception: [sessions.md](sessions.md), Starting a session.
 - **Read for coordination, never to do or pre-empt the task.** You may read a task's content (tracker comments, a
   PR, review comments, chat threads, code) when coordinating needs it: answering a worker's question, checking
   something before you relay or approve it, or resolving a dependency between two sessions. Read only what that

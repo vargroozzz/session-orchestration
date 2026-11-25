@@ -1055,7 +1055,7 @@ printf 'ABC-42 · b · blocked\nBlocker: the gh login expired, the user signs in
 printf 'ABC-43 · b · blocked\nBlocker: the PR author, on the catalog index\n' > "$root/replies/ABC-43.md"
 printf 'ABC-44 · blocked-x · coding\nBlocker: gh auth login\n' > "$root/replies/ABC-44.md"
 touch "$tmp/signed-out"; run --changes >/dev/null; [ "$(run --changes)" = "no changes" ] && rm "$tmp/signed-out" &&
-  [ "$(SESSION_STATUS_PEEK=1 run --changes)" = "$(printf 'Logins restored (resume each session blocked on it; SKILL.md, Watching):\n  * Sign in — blocked on it: ABC-42')" ] &&
+  [ "$(SESSION_STATUS_PEEK=1 run --changes)" = "$(printf 'Logins restored (no ask: tell each session blocked on it to retry its Blocker step, session-status --send-when-idle ID TEXT):\n  * Sign in — blocked on it: ABC-42')" ] &&
   [ "$(run --changes | head -2 | tail -1)" = "  * Sign in — blocked on it: ABC-42" ] && [ "$(run --changes)" = "no changes" ] ||
   { echo "login restored failed: $(run --changes)"; exit 1; }
 rm "$root/.claude/coordinator-actions.json" "$root/replies/ABC-4"[234].md; run --changes >/dev/null
@@ -3376,12 +3376,12 @@ printf '# Rules\n\nLast reviewed 2026-11-19 against: prompt-engineering/overview
 echo '{"docs_watch": {"files": ["doc.md", "gone.md"]}}' > "$root/.claude/coordination.local.json"
 [ "$(run --config features.docs_watch)" = true ] || { echo "docs watch: off with a doc"; exit 1; }
 out=$(run | grep 'docs watch' || true)
-[ "$out" = "$(printf '%s\n' '  * docs watch: new page prompt-engineering/prompting-claude-x, re-review doc.md' \
-  '  * docs watch: gone.md is missing, so nothing is checked against it')" ] || { echo "docs watch lines: $out"; exit 1; }
+[ "$out" = "$(printf '%s\n' '  * docs watch: new page prompt-engineering/prompting-claude-x, re-review doc.md (offer the user a review-kind session: docs-watch.md, Acting on a notice)' \
+  '  * docs watch: gone.md is missing, so nothing is checked against it (tell the user: fix docs_watch.files or its path)')" ] || { echo "docs watch lines: $out"; exit 1; }
 run >/dev/null; [ "$(wc -l < "$tmp/curls" | tr -d ' ')" = 2 ] || { echo "docs watch: fetched again within a day"; exit 1; }
 echo '{"docs_watch": {"files": ["doc.md"], "pattern": "^cc/"}}' > "$root/.claude/coordination.local.json"
 out=$(run | grep 'docs watch' || true)
-[ "$out" = '  * docs watch: new page cc/changelog, re-review doc.md' ] || { echo "docs watch: the pattern override: $out"; exit 1; }
+[ "$out" = '  * docs watch: new page cc/changelog, re-review doc.md (offer the user a review-kind session: docs-watch.md, Acting on a notice)' ] || { echo "docs watch: the pattern override: $out"; exit 1; }
 echo '{"features": {"docs_watch": false}, "docs_watch": {"files": ["doc.md"]}}' > "$root/.claude/coordination.local.json"
 [ -z "$(run | grep 'docs watch' || true)" ] || { echo "docs watch: on when turned off"; exit 1; }
 # A one-line list ends on its own line: a slug in the prose after it isn't reviewed.
@@ -3392,7 +3392,7 @@ echo '{"docs_watch": {"files": ["doc.md"]}}' > "$root/.claude/coordination.local
 # prose naming one later isn't on it.
 printf "Skipped, older models' pages:\nprompt-engineering/prompting-claude-x.\nLast reviewed 2026-11-19 against: prompt-engineering/overview.\nUpdate the Last reviewed date against: cc/hooks-guide.\n" > "$root/doc.md"
 out=$(run | grep 'docs watch' || true)
-[ "$out" = '  * docs watch: new page cc/hooks-guide, re-review doc.md' ] || { echo "docs watch: the Skipped list: $out"; exit 1; }
+[ "$out" = '  * docs watch: new page cc/hooks-guide, re-review doc.md (offer the user a review-kind session: docs-watch.md, Acting on a notice)' ] || { echo "docs watch: the Skipped list: $out"; exit 1; }
 # A day on, one site failing keeps the last index (and is tried once that day, not every sweep).
 cp "$tmp/.cache/session-status/docs-index.txt" "$tmp/idx.before"; touch -t 202001010000 "$tmp/.cache/session-status/docs-index.tried"
 sed -i.bak 's/^  \*) printf/  *) exit 22; printf/' "$tmp/bin/curl"; : > "$tmp/curls"; run >/dev/null; run >/dev/null

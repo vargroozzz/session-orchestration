@@ -51,13 +51,9 @@ Sessions append to it; you prune it.
   and coordinator, is tagged `[team]` (`- <date> <TASK>: [team] …`); in doubt, it's personal. Sessions read the repo's
   `.claude/coordination/memory.md` (and its `memory/<topic>.md`, P's topic names) before yours ([worker.md](worker.md),
   Project memory). `[team]` lines never go into it directly: when you prune, run `session-status --init
-  --team-memory` (the gather). It drops from your memory the `[team]` lines origin's team memory has already, then
-  commits the rest verbatim to the same topic (`.claude/coordination/memory/<topic>.md`, a flat memory's to
-  `misc.md`, the index row added), deduped and scrubbed, on `coordination/memory-<date>-<time>` in a worktree from
-  origin/<default>, and prints a `Team PR:` line: one pane ask with its diff, as `--shared`'s. Its lines leave your
-  memory on the first gather after the merge; while it's open (`Team PR open:`) no second one opens. A line it
-  keeps (`Kept in your memory`: a home path, an email) stays personal until reworded. `merge=union` on the topic
-  files lets two people's gathers rebase cleanly. Without shared mode they stay in yours.
+  --team-memory` (the gather) and put its `Team PR:` line on the pane as one ask with its diff, as `--shared`'s.
+  What it commits and when the lines leave your memory: setting-up-coordination's Shared mode. Without shared mode
+  they stay in yours.
 - **Graduation** moves an entry into the project doc that owns its situation once it has proved itself: old enough
   and still true, or cited by several sessions. The index states the project's thresholds and who runs it (e.g. the
   weekly retro proposes, a followups session applies). It edits a doc, so it's a session's job, not yours: the

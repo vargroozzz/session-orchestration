@@ -5,10 +5,8 @@ or acts on a `PR events` section; [SKILL.md](SKILL.md) has the rest.
 
 ## Which sessions
 
-`claude agents --json` lists running sessions (interactive and background): `name` (what `SendMessage` takes),
-`sessionId`, `cwd`, `startedAt`, and `status` (idle/busy) or, for background sessions, `state`. **Coordinate only
-sessions whose `cwd` is inside the current project.** Filter the JSON by `cwd`: `ListAgents` gives the `name [ref]`
-you message but no `cwd`, and it lists the user's other projects too.
+**Coordinate only sessions whose `cwd` is inside the current project**: the status command lists exactly those;
+`ListAgents` lists the user's other projects too.
 
 ## Subprojects
 
@@ -78,11 +76,8 @@ to a session whose first prompt or `Session task:` names the key.
 - **A name that doesn't fit the ticket is a stop sign** (a retro name on a product ticket): recheck with `--owner`,
   don't explain it away.
 
-**Blocked isn't done.** A background session that has finished its turn sits in `state: blocked` on older engines;
-agent view (2.1.330 on) says `state: done` while its process is alive (`pid` set), and `done` with no `pid` once it
-ended. session-status lists a live `done` as blocked, so there blocked means idle *or* waiting and done means retired.
-`status` tells them apart: `idle` (turn over), `waiting` (a permission prompt or question; `waitingFor` names it on
-newer engines), `busy` (mid-turn); `--activity` prints it. Read the session's last turn before saying what it waits on.
+**Blocked isn't done.** In the status, blocked means idle *or* waiting and done means retired ([status-reference.md](status-reference.md#footers-in-detail),
+Other sessions); `--activity` tells idle from waiting. Read the session's last turn before saying what it waits on.
 
 ## Sub-coordinators
 
@@ -120,7 +115,11 @@ starts the session and prints `started "NAME" (ID8) · KIND M/E`. Exit 3 or 2: n
 another task (named `<KEY>-<more>`) takes its own first prompt (Owners) by `--brief-file`, below; a coordinator
 start isn't a launch ([handover.md](handover.md)); a review that owns its own task (a docs audit) launches with a name
 that has no task key or is one whole. In Desktop with
-`start.sidebar` on it starts nothing and prints the `start_session` call to make instead. A started session
+`start.sidebar` on (a person key the user sets, never you) it starts nothing and prints the `start_session` call to
+make instead, for a task the user asks to run as a sidebar session. `start_session` can't run above your own model,
+so a kind on a higher model silently starts at yours: start that task with `claude --bg`, which has no cap. The status
+doesn't list a sidebar session: follow it through the user and its replies, and name each one (title and what it
+works on) in your handoff file for your successor. A started session
 needs no "started" line in your handoff file: the status lists it and `--owner` gives its first prompt.
 
 **Later, not now**: add `--at 'HH:MM'` (today, tomorrow when that is past), `--at 'YYYY-MM-DD HH:MM'` or

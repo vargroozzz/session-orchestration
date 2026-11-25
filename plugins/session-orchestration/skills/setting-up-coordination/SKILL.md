@@ -174,6 +174,13 @@ coordinator's prune PR); `review-brief.md` (how the team reviews, read before ea
 anything in `coordination.local.json` (delegation, terminal, accounts, `trusted`, `team`), your adapter, your memory
 and replies.
 
+Team memory's gather (`session-status --init --team-memory`, run at the coordinator's prune) drops from its memory
+the `[team]` lines origin's team memory has already, then commits the rest verbatim to the same topic
+(`.claude/coordination/memory/<topic>.md`, a flat memory's to `misc.md`, the index row added), deduped and scrubbed,
+on `coordination/memory-<date>-<time>` in a worktree from origin/<default>, and prints a `Team PR:` line. Its lines
+leave the coordinator's memory on the first gather after the merge; while it's open (`Team PR open:`) no second one
+opens. A line it keeps (`Kept in your memory`: a home path, an email) stays personal until reworded.
+
 A folder that isn't a repo itself (a workspace of repos) uses the `team` person key: the path, relative to the
 folder, of the repo holding `.claude/coordination/`. Setup finds it one level down and proposes it; with several,
 say `team=<folder>`. The team's `coordination.json` then supplies the repo keys, and its committed code is offered

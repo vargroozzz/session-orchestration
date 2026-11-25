@@ -4,3 +4,9 @@
 -	\{0,79\}
 # The build-chunk multiplier: plans.md, the sizing doc (docs review A23, B29).
 plugins/session-orchestration/skills/orchestrating-sessions/plans.md	1\.35
+# The ask rules: approvals.md, Asking (structure audit 3.3).
+plugins/session-orchestration/skills/orchestrating-sessions/approvals.md	(?i)never a numbered
+plugins/session-orchestration/skills/orchestrating-sessions/approvals.md	recommended (option|answer) first
+# The relay grammar for landings and its retries: worker.md, Posting and merging (structure audit 3.3).
+plugins/session-orchestration/skills/orchestrating-sessions/worker.md	within 24h of that
+plugins/session-orchestration/skills/orchestrating-sessions/worker.md	Base branch was modified

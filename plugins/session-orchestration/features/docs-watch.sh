@@ -23,7 +23,7 @@ fi
 [ -s "$idx" ] || exit 0
 for doc in "$@"; do
   f=$doc; [[ $f == '~'/* ]] && f=$HOME/${f#'~/'}
-  [ -f "$f" ] || { echo "docs watch: $doc is missing, so nothing is checked against it"; continue; }
+  [ -f "$f" ] || { echo "docs watch: $doc is missing, so nothing is checked against it (tell the user: fix docs_watch.files or its path)"; continue; }
   # Each list runs from its "Last reviewed … against:" or "Skipped …:" line to the first line ending in a period,
   # that line too; each is read once, so prose naming either later adds nothing.
   grep -E -- "$pattern" "$idx" | comm -23 - <(tr -d '\r' < "$f" |
@@ -31,6 +31,6 @@ for doc in "$@"; do
            !s && /^Skipped[^:]*:/ { s = on = 1; sub(/^[^:]*:/, "") }
            on { print; if (/\.$/) on = 0 }' |
       tr ', `' '\n\n\n' | sed 's/\.$//' | grep -E '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$' | sort -u) |
-    D=$doc awk '{ print "docs watch: new page " $0 ", re-review " ENVIRON["D"] }'
+    D=$doc awk '{ print "docs watch: new page " $0 ", re-review " ENVIRON["D"] " (offer the user a review-kind session: docs-watch.md, Acting on a notice)" }'
 done
 exit 0

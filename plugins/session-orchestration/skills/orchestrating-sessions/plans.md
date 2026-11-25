@@ -14,9 +14,8 @@ Sub-coordinators). Under a sub, the sub does everything below and you only start
 
 1. **Split.** One chunk per step with a done-when, an est and a clean stop point (everything committed, nothing running).
    The est is growth in context, kept within `handoff.at.chunk` − ~60K; a chunk with more than 3 separate pieces is split.
-   Size classes: S ≤ 22K, M ≤ 43K, L ≤ 65K. `--check` flags an est past that budget, a `build` one after ×1.35 (build
-   chunks grew 1.35× their est, n=8, a median that under-sizes the ~2.5× ones): a chunk past 2× its est at a handoff
-   counts as a failure for sessions.md's "same failure twice" rule (step 5).
+   Size classes: S ≤ 22K, M ≤ 43K, L ≤ 65K. `--check` flags an est past that budget, a `build` one after ×1.35:
+   a chunk past 2× its est at a handoff counts as a failure for sessions.md's "same failure twice" rule (step 5).
 2. **Write the plan** as a table under `## Plan` in `<replies>/PROJ-123.md`, and run `session-status --plan FILE --check`.
    Write one brief per chunk, `<replies>/PROJ-123-cN.md`, from `--plan FILE --brief N`, plus a shared
    `PROJ-123-chunk-rules.md` (paths, setup, interface, checks, landing by fast-forward). Keep plans in the replies folder.

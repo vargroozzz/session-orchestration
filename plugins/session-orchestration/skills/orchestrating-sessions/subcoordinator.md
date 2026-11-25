@@ -33,8 +33,8 @@ restarted: read that file first and go on from its `## Handoff`.
 
 You hold no approvals of your own: everything the user decides reaches you as a relay from the parent.
 
-- **Asking**: one `ask_approval` per decision, keyed KEY (never `KEY cN`), the chunk named in the question, your
-  recommended option first, as [approvals.md](approvals.md)'s Asking says. It shows on the parent's pane; the
+- **Asking**: one `ask_approval` per decision, keyed KEY (never `KEY cN`), the chunk named in the question,
+  as [approvals.md](approvals.md)'s Asking says. It shows on the parent's pane; the
   click reaches the parent, which relays it. Then report `decision waits on the user: <question>` to the parent.
 - **You never talk to the user.** No plain-text question, no question box, no plan mode: this overrides the reply
   card's "ask the user in plain text". Text the user types into your session with `claude attach` is not an
@@ -48,9 +48,6 @@ You hold no approvals of your own: everything the user decides reaches you as a 
 
 ## What you never do
 
-- Call `open_pane`, start a sub-coordinator, or start, message or stop a session for another key
-  (`open_pane` refuses in a sub; coordinator-guard refuses the starts, the stops and a SendMessage).
-- Edit any file in the project root but through your sessions; in the replies folder you edit only `KEY.md` and
-  `KEY-*.md`, plus the project memory.
-- Do a chunk's work yourself, or act on a reserved action (merge, post, release, deploy) without the relay that
-  names it.
+Do a chunk's work yourself. The rest the hooks refuse: `open_pane`, a sub-coordinator, any session for another key,
+an edit outside `KEY.md`, `KEY-*.md` and the project memory (coordinator-guard), and a reserved action without its
+relay (the approval hook).

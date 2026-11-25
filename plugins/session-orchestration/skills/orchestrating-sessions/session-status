@@ -1933,7 +1933,7 @@ if [ "${1:-}" = --changes ]; then
   fi
   # The coordinator inbox's unread headings (a message no live coordinator took): one appearing is news.
   u=$(inbox_unread | grep '^## ' | cut -c4-)
-  [ -z "$u" ] || { new+=$'\nInbox (session-status --inbox):'; while IFS= read -r l; do new+=$'\n  * '"$l"; done <<<"$u"; }
+  [ -z "$u" ] || { new+=$'\nInbox (act on each, then mark it read: session-status --inbox --read N):'; while IFS= read -r l; do new+=$'\n  * '"$l"; done <<<"$u"; }
   # The plugin coordinator's (features/plugin-coordinator.md): each open plugin case is a line, so a new one is news;
   # by path, since list's order moves a case another session saw again.
   if [ "$(plugin_root)" = "$ROOT" ]; then
@@ -2037,7 +2037,7 @@ if [ "${1:-}" = --changes ]; then
     fi
     [ -n "${SESSION_STATUS_PEEK:-}" ] && [ -f "$last.when" ] || printf '%s\n' "$held" > "$last.when"
   fi
-  [ -z "$restored" ] || ev+=${ev:+$'\n'}$'Logins restored (resume each session blocked on it; SKILL.md, Watching):\n'${restored%$'\n'}
+  [ -z "$restored" ] || ev+=${ev:+$'\n'}$'Logins restored (no ask: tell each session blocked on it to retry its Blocker step, session-status --send-when-idle ID TEXT):\n'${restored%$'\n'}
   sent=$(awk -F'\t' '$1 == "ok" { print "  * " $2 " (" $3 ")" }' <<<"$fwc")
   # A baseline another session wrote (a predecessor's, hours old) would wake this coordinator on rows and reports it
   # read at its --start: this run only records its own baseline, a peek too, so --watch's next poll diffs against it.
@@ -2085,7 +2085,7 @@ if [ "${1:-}" = --changes ]; then
         /^was:   ".*" \(.*attach [0-9a-f]+\)( — blocked: .*)?$/ { match($0, /attach [0-9a-f]+\)/); id = substr($0, RSTART + 7, RLENGTH - 8)
           if (id in live && live[id] != "done") drop[NR] }
         END {
-          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(session-status --inbox\):|Feedback \(feedback list --plugin\):|Issues \(feedback issues\):|Under .*-coordinator:)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
+          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(act on each, then mark it read: session-status --inbox --read N\):|Feedback \(feedback list --plugin\):|Issues \(feedback issues\):|Under .*-coordinator:)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
           for (i = 1; i <= NR; i++) if (!(i in drop)) print line[i] }'; echo "$ev"; } | grep . || echo "no changes"
   else
     echo "$new"; [ -z "$ev" ] || printf '\n%s\n' "$ev"

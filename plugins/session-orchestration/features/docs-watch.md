@@ -14,7 +14,7 @@ is a slug: a platform page's path after `docs/en/` less its first folder (`promp
 prints one Notices line:
 
 ```
-docs watch: new page prompt-engineering/prompting-claude-opus-6, re-review docs/prompting.md
+docs watch: new page prompt-engineering/prompting-claude-opus-6, re-review docs/prompting.md (offer the user a review-kind session: docs-watch.md, Acting on a notice)
 ```
 
 The fetch is tried once a day whether it works or not; unless both sites answer with pages, the last index stays.
