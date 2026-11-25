@@ -1013,8 +1013,8 @@ if [ "${1:-}" = --link ]; then
 fi
 
 # Coordinator handover (handover.md), with NAME the coordinator's name:
-#   --successor [--account DIR]   the old coordinator starts NAME-next, interactive, in a tab of the configured
-#                                 terminal under DIR (default its own account), first prompt `Act as a coordinator`,
+#   --successor [--account DIR]   the old coordinator starts NAME-next, interactive, in a split of its own tab
+#                                 (split_tty), else a tab, of the configured terminal under DIR (default its own account), first prompt `Act as a coordinator`,
 #                                 on the model and effort the caller runs on (lib.sh last_model), else config
 #                                 plan.models.coordinator;
 #                                 its own tab is titled NAME first (title_tty), so a NAME-next title left from its
@@ -1156,7 +1156,17 @@ if [ "${1:-}" = --successor ]; then
   own=; ho_retitle "$id" "$n" || own=" It may be this session's own tab, left from its start as a successor (its retitle to \"$n\" failed): then retitle that tab \"$n\" by hand instead of closing it."
   # TERMINAL_QUIET: the tab opens behind the app and tab the user is on (each handover pulled them to it); set in the
   # subshell, not as a prefix: a prefix exports it, and a module that spawns the terminal would hand it to the successor
-  out=$(TERMINAL_QUIET=1; open_view --account "$acct" "$n-next" "$ROOT" "$cmd"); rc=$?; q=$(printf %q "$ROOT")
+  # first as a split of this session's own tab (its process's tty, or in the background the tab it was moved out of),
+  # so no tab opens and --await done's close_tty leaves the successor filling it; no such tab (1) or no split (2): a tab
+  # of its own. Any other failure may come after the split started it: no tab then, or two successors race for NAME.
+  t=; if [ "$(ho_field 1 "$id" 7)" != background ]; then t=$(ho_tty "$id") || t=; else t=$(ho_shown_tty "$id") || t=; fi
+  rc=1 sp=; [ -z "$t" ] || { out=$(TERMINAL_QUIET=1; split_tty --account "$acct" "$t" "$ROOT" "$cmd" 2>&1); rc=$?; }
+  case $rc in
+    0) out="a split of this session's tab: $out" ;;
+    1|2) out=$(TERMINAL_QUIET=1; open_view --account "$acct" "$n-next" "$ROOT" "$cmd"); rc=$? ;;
+    *) sp=" The split of this session's tab ($t) may have started it: check that tab first." ;;
+  esac
+  q=$(printf %q "$ROOT")
   # open_view selects an open tab with the title instead: a successor that exited left it, and nothing was started
   [ "$rc" != 0 ] || [ "${out#reused}" = "$out" ] ||
     { echo "a tab titled \"$n-next\" is open already ($out), so nothing started: close it (a successor that exited?), then run this again.$own"; exit 3; }
@@ -1167,7 +1177,7 @@ if [ "${1:-}" = --successor ]; then
     0) echo "started \"$n-next\" under $(tilde "$acct") ($out)."; echo "$next" ;;
     2) echo "nothing opened (terminal $(config terminal)): hand the user this command (hand_command, key coordinator), then go on:"
        echo "  cd $q && $pre$cmd"; [ -z "$desk" ] || echo "$desk"; echo "$next" ;;
-    *) echo "the terminal failed (exit $rc): $out. Not started: hand the user \`cd $q && $pre$cmd\`, or try again"; [ -z "$desk" ] || echo "$desk" ;;
+    *) echo "the terminal failed (exit $rc): $out.${sp:- Not started:}${sp:+ Nothing there:} hand the user \`cd $q && $pre$cmd\`, or try again"; [ -z "$desk" ] || echo "$desk" ;;
   esac
   exit "$rc"
 fi

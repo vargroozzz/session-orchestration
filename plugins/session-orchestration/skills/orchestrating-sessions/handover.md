@@ -14,7 +14,8 @@ haven't acted on yet ([approvals.md](approvals.md#the-relay-block)). An approval
 the question box that a session will still need: ask it again on the pane first. No rules and no files to read: the next
 coordinator's Start reads those, and each restated rule is re-sent on its every wake. Then start your successor:
 
-1. `session-status --successor` (`--account DIR` for the weekly-limit move): it opens a tab running an interactive
+1. `session-status --successor` (`--account DIR` for the weekly-limit move): it opens a split of your own tab (a new
+   tab when the terminal can't, or your tab isn't found) running an interactive
    `claude --model M --effort E [--remote-control] -n NAME-next 'Act as a coordinator. You succeed …'`, on the model and effort you run on
    (else config `plan.models.coordinator` for the account it starts under: `fable/medium` where `fable.accounts` lists it; `--remote-control` with features.remote on, ../../features/remote.md). It refuses while your handover note is missing or older than your start: write it (again, if your Write failed), then run it again. Nothing opened: hand the user the command it prints
    (`hand_command`, key `coordinator`). In Claude Code Desktop it prints a `start_session` call instead, so the
@@ -33,7 +34,7 @@ coordinator's Start reads those, and each restated rule is re-sent on its every 
 Your name is `NAME-next`. In Desktop your first prompt says to run `session-status --successor --started NAME` first:
 it records your id, so you count as `NAME-next` even when the app named you otherwise. Run Start as usual (`open_pane` keeps your name while the old one holds `NAME`), then
 arm `--await name` (Bash, background), your one wait. It wakes you when `NAME` is free and the old coordinator is idle and done forwarding,
-having closed its tab (only its split, when the tab has others; when it runs in the background, the tab it was moved
+having closed its tab (only its split, when the tab has others, as when you opened as a split of its tab; when it runs in the background, the tab it was moved
 out of, or a `claude attach` to it). Then call `name_session` with `NAME`, as its last line says, and tell the user
 what was left open, if anything. In Desktop it closes nothing and says how to finish the old one: check it holds no
 other side session (one it still holds keeps it unarchived, for the user), detach from it, take its pin, archive it.
