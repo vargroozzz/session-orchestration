@@ -2143,9 +2143,9 @@ ACT=; SEND=; COMPACT=; HANDOVER=; PEEK=; WHERE=; ALLP=; YDAY=
 case "${1:-}" in --activity) ACT=1; shift ;; --send-when-idle) SEND=1; shift ;; --compact|--stop) COMPACT=$1; shift ;; --handover) HANDOVER=1; shift ;;
   --peek) PEEK=1; shift ;; --dir|--diff) WHERE=$1; shift ;; --yesterday) YDAY=1; shift ;; esac
 [ -n "$ACT" ] && [ "${1:-}" = --all-projects ] && { ALLP=1; shift; }
-# the sweep's flags are all taken by now (--coordinator, --owner below): a --WORD left is a typo, not a key or an
-# adapter clause
-[ -n "$ACT$SEND$COMPACT$HANDOVER$PEEK$WHERE$YDAY" ] || for a in "$@"; do case $a in --coordinator|--owner) [ "$a" = "$1" ] ;; --*) false ;; esac ||
+# the sweep's flags are all taken by now (--claim [--anyway], --coordinator, --owner below): a --WORD left is a typo,
+# not a key or an adapter clause
+[ -n "$ACT$SEND$COMPACT$HANDOVER$PEEK$WHERE$YDAY" ] || [ "${1:-}" = --claim ] || for a in "$@"; do case $a in --coordinator|--owner) [ "$a" = "$1" ] ;; --*) false ;; esac ||
   { echo "session-status: unknown option $a (session-status --help)" >&2; exit 2; }; done
 if [ -z "$ACT$SEND$COMPACT$HANDOVER$PEEK" ]; then
   repos=$(adapter repos 2>/dev/null) ||
