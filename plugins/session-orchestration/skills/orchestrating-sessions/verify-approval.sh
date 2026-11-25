@@ -129,8 +129,9 @@ matches() { jq -r -n --arg q "$q" --arg key "$key" --argjson ref "$ref" --argjso
 # it was written to within the quote's age window. Each must have been interactive (no bg turn) and gone by NAME
 # (lib.sh chain_transcripts).
 r=
+# The break leaves the chain unread: its next echo hits a closed pipe, which is no error here.
 while IFS= read -r t; do r=$(matches "$t"); [ -z "$r" ] || break
-done < <(chain_transcripts "$f" $(( ($(date +%s) - ref + max_age_h * 3600) / 60 + 1 )))
+done < <(chain_transcripts "$f" $(( ($(date +%s) - ref + max_age_h * 3600) / 60 + 1 )) 2>/dev/null)
 [ -n "$r" ] || reject "no recent message typed by the user, question-box answer or pane click matches the whole quote and names $key in it or in the message it answers"
 echo "$r"
 # A command this session also handed the user for this task (hand_command) is still runnable from the pane: doing the
