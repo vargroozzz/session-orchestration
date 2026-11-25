@@ -1487,19 +1487,51 @@ fetch_quick() {
 # bg session; a KEY session named otherwise reads idle to the parent. Use $TMP/folded's rule once one misfires.
 # shortcut: a nested project's workers do show here (is_root can't tell it from a worktree of a repo with a committed
 # adapter); skip them once a nested root misfires.
+# live_bg TICK: every live bg session under ROOT, a line each: PID ID UPDATED STARTED NAME IDLE DIR (IDLE 1: idle a
+# TICK), so a live sub is known even while it works.
+live_bg() {
+  local dir f
+  while IFS=$'\t' read -r dir _; do
+    [ -d "$dir/sessions" ] || continue
+    # a jq per file: one caught mid-write mustn't hide the rest. No empty field: tabs are IFS whitespace.
+    for f in "$dir"/sessions/*.json; do jq -r --arg root "$ROOT" --argjson tick "$1" --arg dir "$dir" 'select(.kind == "bg"
+        and .pid != null and (.cwd == $root or (.cwd | startswith($root + "/"))))
+      | [.pid, .sessionId, .statusUpdatedAt // 0, .startedAt // 0, .name // "unnamed",
+         (if .status == "idle" and now * 1000 - (.statusUpdatedAt // 0) >= $tick * 1000 then 1 else 0 end), $dir] | @tsv' "$f" 2>/dev/null; done
+  done < <(list_accounts) | while IFS=$'\t' read -r pid l; do kill -0 "$pid" 2>/dev/null && printf '%s\t%s\n' "$pid" "$l"; done
+}
+# limit_reset_at TRANSCRIPT: the resetsAt (epoch s) of Claude Code's 5-hour limit row ("You've hit your 5-hour limit",
+# quotaLimits rejected for five_hour) when that row is the transcript's last message; fails otherwise. Each message sent
+# while the limit holds gets such a row of its own, with the same resetsAt.
+limit_reset_at() {
+  local t; t=$(tail -n 50 "$1" 2>/dev/null) && [[ $t == *'"five_hour"'* ]] || return 1   # most transcripts: no jq
+  jq -Rnr '[inputs | fromjson? | select(.type == "user" or .type == "assistant")] | last // empty | .quotaLimits // empty
+    | select(.status == "rejected" and .rateLimitType == "five_hour") | .resetsAt | numbers' <<<"$t" 2>/dev/null | grep .
+}
+# limit_check: a live background session stopped by the 5-hour limit (its last message the limit row, reset within the
+# last day) gets one resume queued in $ENC.launches for resetsAt + 1 minute: --launch --due sends it (resume_fire).
+# Once per limit hit: $ENC.limit-resets keeps each ID<TAB>RESETSAT queued, so the rows of later messages, and later
+# ticks, queue nothing more. Not the caller: it can't message itself.
+LIMIT_TEXT='The 5-hour limit reset: continue. A message that came while you waited got only the limit row as its answer: it is above, act on it too.'
+limit_check() {
+  local seen pid id name dir t r
+  seen=$(fwd_file limit-resets)
+  while IFS=$'\t' read -r pid id _ _ name _ dir; do
+    [ "$id" != "${CLAUDE_CODE_SESSION_ID:-}" ] || continue
+    t=("$dir"/projects/*/"$id".jsonl); [ -f "${t[0]}" ] || continue
+    r=$(limit_reset_at "${t[0]}") && [ "$r" -gt $(( $(date +%s) - 86400 )) ] || continue
+    ! grep -qxF "$id"$'\t'"$r" "$seen" 2>/dev/null || continue
+    jq -cn --argjson r "$r" --arg id "$id" --arg n "$name" --arg f "${t[0]}" --arg text "$LIMIT_TEXT" \
+      '{due: ($r + 60), name: ("resume:" + $n), kind: "resume", send: $id, session: $n, reset: $r, file: $f, text: $text,
+        label: "after its 5-hour limit resets"}' | locked_append "$(fwd_file launches)"
+    printf '%s\t%s\n' "$id" "$r" | locked_append "$seen"
+  done < <(live_bg 0)
+}
 idle_check() {
   local seen=~/.cache/session-status/$ENC${IDLE_SCOPE:+-$(printf '%s' "$IDLE_SCOPE" | cksum | cut -d' ' -f1)}.idle
   local tick=${SESSION_STATUS_TICK_S:-60} dir pid id upd started name idle t how all subs subre=
   local keep= out=() line
-  # every live bg session under ROOT (idle 1: idle a TICK), so a live sub is known even while it works
-  all=$(while IFS=$'\t' read -r dir _; do
-    [ -d "$dir/sessions" ] || continue
-    # a jq per file: one caught mid-write mustn't hide the rest. No empty field: tabs are IFS whitespace.
-    for f in "$dir"/sessions/*.json; do jq -r --arg root "$ROOT" --argjson tick "$tick" --arg dir "$dir" 'select(.kind == "bg"
-        and .pid != null and (.cwd == $root or (.cwd | startswith($root + "/"))))
-      | [.pid, .sessionId, .statusUpdatedAt // 0, .startedAt // 0, .name // "unnamed",
-         (if .status == "idle" and now * 1000 - (.statusUpdatedAt // 0) >= $tick * 1000 then 1 else 0 end), $dir] | @tsv' "$f" 2>/dev/null; done
-  done < <(list_accounts) | while IFS=$'\t' read -r pid l; do kill -0 "$pid" 2>/dev/null && printf '%s\t%s\n' "$pid" "$l"; done)
+  all=$(live_bg "$tick")
   if [ -z "${IDLE_SCOPE:-}" ] && [ -n "${IDLE_KEYRE:-}" ]; then
     subs=$(cut -f5 <<<"$all" | grep -E "^$IDLE_KEYRE-coordinator\$" | sed 's/-coordinator$//' | paste -sd'|' -)
     [ -z "$subs" ] || subre="^($subs)-"
@@ -1530,9 +1562,10 @@ LINK_POLL_S=${SESSION_STATUS_LINK_POLL_S:-120} link_next=0
 nap() {
   local left=$1 tick=${SESSION_STATUS_TICK_S:-60} s out
   while [ "$left" -gt 0 ]; do s=$((left < tick ? left : tick)); sleep "$s"; left=$((left - s)); idle_check
-    # scheduled starts (--launch --at | --after-reset): due ones start now, and the result is the wake. Only its
-    # stdout: a warning on stderr with nothing due would end the watcher at every tick.
-    if [ -z "${IDLE_SCOPE:-}" ] && [ -s ~/.cache/session-status/"$ENC.launches" ]; then
+    # scheduled starts (--launch --at | --after-reset) and limit resumes (limit_check, queued by --due itself): due ones
+    # start now, and a start's result is the wake. Only its stdout: a warning on stderr with nothing due would end the
+    # watcher at every tick.
+    if [ -z "${IDLE_SCOPE:-}" ]; then
       out=$("$SELF" --launch --due); [ -z "$out" ] || { usage wake wake "$(grep -c . <<<"$out")"; echo "$out"; exit 0; }
     fi
     if [ -z "${IDLE_SCOPE:-}" ] && [ "$(date +%s)" -ge "$link_next" ] && compgen -G "$LINKS/*.json" >/dev/null; then
@@ -1665,6 +1698,7 @@ launch_start() {
 # launch_fire ENTRY: starts a queued entry: its started line, exit 0. Else it goes back marked failed, the reason printed, exit 1.
 launch_fire() {
   local e=$1 n r
+  [ -z "$(jq -r '.send // empty' <<<"$e")" ] || { resume_fire "$e"; return; }
   n=$(jq -r .name <<<"$e")
   # shortcut: under Desktop+start.sidebar a due entry leaves the queue on the start_session line alone (it reaches
   # the watcher's wake, which may not act on it); keep it queued until started if such starts go missing
@@ -1675,13 +1709,33 @@ launch_fire() {
   jq -c --arg w "${r:0:300}" '.failed = $w' <<<"$e" | locked_append "$(fwd_file launches)"
   echo "\"$n\" not started: $r (session-status --launch --now $n tries again, --cancel $n drops it)"; return 1
 }
+# resume_fire ENTRY: a limit resume (limit_check) come due. Skipped, a note on stderr, when the session's last message
+# is no longer that limit row (it was resumed meanwhile). Else sent as the watcher forwards a PR event's nudge:
+# --send-when-idle without waiting; a live session (`send:`, or still flagged busy, as the limit leaves it) through the
+# outbox, which the coordinator pane sends, so nothing wakes the coordinator; a resume or delivery done here is logged
+# as forwarded. Either shows under Forwarded at the next wake, and an outbox entry no pane takes comes back as an event
+# with the text to send. A failure prints a line (the wake) with that text, and isn't queued again.
+resume_fire() {
+  local id n f r text line out rc
+  IFS=$'\037' read -r id n f r text <<<"$(jq -r '[.send, .session, .file, .reset, .text] | map(tostring) | join("\u001f")' <<<"$1")"
+  [ "$(limit_reset_at "$f")" = "$r" ] || { echo "\"$n\" (${id:0:8}): resumed already since its limit row: nothing sent" >&2; return 0; }
+  line="\"$n\" (${id:0:8}) 5-hour limit reset"
+  out=$(SESSION_STATUS_WAIT_S=0 "$SELF" --send-when-idle "$id" "$text" </dev/null 2>/dev/null); rc=$?
+  out=$(tail -1 <<<"$out"); out=${out:-exit $rc}
+  if [ "$rc" = 0 ] && [[ $out != send:* ]]; then printf 'ok\t%s\t%s\n' "$line" "$out" | locked_append "$(fwd_file forwarded)"
+  elif [ "$rc" = 0 ] || [[ $out == *"still busy"* ]]; then
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$id" "$n" "$line" "$text" | locked_append "$(fwd_file outbox)"
+  else echo "Limit resume: $line, not sent: $out. Send it yourself: $text"; return 1; fi
+}
 if [ "${1:-}" = --launch ]; then
   u="usage: session-status --launch NAME --kind KIND[:S|M|L] [--anyway] [--at 'HH:MM'|'YYYY-MM-DD HH:MM' | --after-reset [ACCOUNT]] [--] 'WHAT' 'WHY' 'DONE-WHEN' | --launch --list | --cancel NAME | --now NAME [--anyway]"
   lf=$(fwd_file launches); shift
   case ${1:-} in
     --list) [ $# = 1 ] || { echo "$u" >&2; exit 2; }; [ ! -s "$lf" ] || launch_lines < "$lf"; exit 0 ;;
-    --due) t=$(launch_take '.due <= $t and (.failed | not)' --argjson t "$(date +%s)")
+    --due) limit_check
+      t=$(launch_take '.due <= $t and (.failed | not)' --argjson t "$(date +%s)")
       while read -r e; do [ -n "$e" ] || continue
+        [ -z "$(jq -r '.send // empty' <<<"$e")" ] || { resume_fire "$e" </dev/null; continue; }
         # </dev/null: a command of this start reading stdin would take the entries still to start
         printf 'Scheduled start (due %s): ' "$(epochfmt "$(jq -r .due <<<"$e")" '%m-%d %H:%M')"; launch_fire "$e" </dev/null
       done <<<"$t"; exit 0 ;;

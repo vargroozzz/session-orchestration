@@ -3289,6 +3289,26 @@ out=$(CLAUDE_CODE_SESSION_ID=$(uid l) SESSION_STATUS_TICK_S=1 run --watch --ever
 out=$(CLAUDE_CODE_SESSION_ID=$(uid p) SESSION_STATUS_TICK_S=1 run --watch --every 30 ABC-7) && [ "$out" = 'Idle: ABC-7-c1 (qqqqqqqq): Done.' ] ||
   { echo "idle, the sub's: $out"; exit 1; }
 [ "$(SESSION_STATUS_TICK_S=x run --watch)" = "SESSION_STATUS_TICK_S needs a positive number of seconds" ] || { echo "bad tick accepted"; exit 1; }
+# The 5-hour limit: --launch --due (each unscoped watcher tick) queues one resume for a live bg session whose last
+# message is the limit row, due resetsAt + 1 minute; the limit row of a message that came during the wait, and later
+# ticks, queue nothing more. Come due, a session still on that row goes to the outbox (the pane sends it), waking no
+# one; one resumed meanwhile is skipped.
+e=$tmp/.cache/session-status/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root") lid=$(uid s)
+limit() { printf '{"type":"assistant","quotaLimits":{"status":"rejected","rateLimitType":"five_hour","resetsAt":%s},"message":{"model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your 5-hour limit"}]}}\n{"type":"system","subtype":"turn_duration"}\n' "$1" >> "$proj/$lid.jsonl"; }
+accounts_claude; setacct cfg "$(sess "$lid" stuck busy "$live")"
+sf 19 s stuck bg busy; r=$(( $(date +%s) + 3600 )); limit "$r"
+due() { CLAUDE_CODE_SESSION_ID=$(uid l) run --launch --due 2>/dev/null; }
+out=$(due) && [ -z "$out" ] && [ "$(jq -r '"\(.name) \(.due) \(.send)"' "$e.launches")" = "resume:stuck $(( r + 60 )) $lid" ] &&
+  [[ $(run --launch --list) == "resume:stuck · resume · "*" · after its 5-hour limit resets" ]] || { echo "limit resume not queued: $out $(cat "$e.launches")"; exit 1; }
+turn 3 'a message during the wait' >> "$proj/$lid.jsonl"; limit "$r"
+[ -z "$(due)" ] && [ "$(grep -c . "$e.launches")" = 1 ] || { echo "limit resume queued twice: $(cat "$e.launches")"; exit 1; }
+jq -c '.due = 1000' "$e.launches" > "$e.l" && mv "$e.l" "$e.launches"
+out=$(due) && [ -z "$out" ] && [ ! -s "$e.launches" ] && [ "$(cut -f2,3,4 "$e.outbox")" = "$(printf '%s\tstuck\t"stuck" (ssssssss) 5-hour limit reset' "$lid")" ] &&
+  [[ $(cut -f5 "$e.outbox") == 'The 5-hour limit reset: continue. '* ]] && [ -z "$(due)" ] && [ ! -s "$e.launches" ] || { echo "limit resume not sent: $out $(cat "$e.outbox")"; exit 1; }
+# a new hit (another reset) queues again; resumed before it came due (a reply after the row): nothing sent
+: > "$e.outbox"; limit $(( r + 7200 )); due >/dev/null && [ "$(jq -r .reset "$e.launches")" = $(( r + 7200 )) ] &&
+  done_ 5 >> "$proj/$lid.jsonl" && jq -c '.due = 1000' "$e.launches" > "$e.l" && mv "$e.l" "$e.launches" &&
+  [ -z "$(due)" ] && [ ! -s "$e.launches" ] && [ ! -s "$e.outbox" ] || { echo "a resumed session got the limit resume: $(cat "$e.outbox")"; exit 1; }
 kill "$live"
 fi
 

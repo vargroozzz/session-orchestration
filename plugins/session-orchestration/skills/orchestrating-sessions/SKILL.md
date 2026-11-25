@@ -146,7 +146,9 @@ flips itself, so never wrap it in a loop or filter. Report what changed, then re
 arming if one already runs. Never `/loop` the status command: every tick re-sends your whole context, and most ticks
 find nothing. A `PR events` section in its output: [sessions.md](sessions.md), PR events. It also starts the
 scheduled starts that are due (`session-status --launch … --at`, sessions.md, Starting a session) and wakes you with
-each result (`Scheduled start (due …): …`).
+each result (`Scheduled start (due …): …`). A background session stopped by the 5-hour limit is resumed a minute
+after the reset, with no wake (status-reference.md, `--watch`). Messages you send it during the wait aren't lost:
+the resume acts on them.
 
 **The watcher stops finished sessions.** A background session under Leftovers or Resolved (its task finished: PR
 merged and released, or, with nothing on the board to say so, its own `done` report: status-reference.md, `done`) that is at rest (idle or done, not on a prompt, not waiting on the user) and quiet 10 minutes
