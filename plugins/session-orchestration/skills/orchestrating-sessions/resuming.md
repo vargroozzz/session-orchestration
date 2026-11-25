@@ -101,17 +101,38 @@ it once that turn ends. If the user attaches instead, they exit it themselves.
 ## Permission prompts and trust
 
 A background session can't answer its own permission prompts or approve its own plan. It shows `state: blocked`
-until the user attaches. Waiting on you says what it waits on (`— blocked: Bash \`…\``), so you can name the exact
+until the user answers. Waiting on you says what it waits on (`— blocked: Bash \`…\``), so you can name the exact
 action to the user. On a new `— blocked:` line under **Waiting on you**, at once:
-1. Open its attach tab: `session-status --open view [--account DIR] "<name> attach" <root> -- claude attach <id8>`
-   (`--account DIR` when its attach command starts `CLAUDE_CONFIG_DIR=DIR`, as the pane's Attach in tab builds it).
-   Exit 2: nothing opened; give the user the `claude attach` command instead.
-2. Queue one `ask_approval` naming the session and the exact action, options "Approve it in the tab" and "Stop it
-   and resume with a workaround" ([approvals.md](approvals.md#asking)). On the second, stop it (`session-status
-   --stop <id>`) and resume it with a note to avoid the command that prompted (`claude --bg --resume <id>
-   '<note>'`); that answer is the user's go for the stop. Fix a recurring refusal with an allow rule or setting
-(through a session). If a task will need the user's approval, say so up front. Auto-mode denials go to
+1. If its pane card offers **Allow this call** (`h`, above the call it runs, shown in full), queue one `ask_approval`
+   naming the session and that exact call, options "Allow it on its card (Allow this call)" and "Stop it and resume
+   with a workaround" ([approvals.md](approvals.md#asking)). The user's press is the answer; nothing is relayed. The
+   prompt's hook (`hooks/blocked.sh request`) waits up to 30 minutes for it, then the tab is the only way.
+2. No button (an AskUserQuestion or plan approval, a call over 4000 characters, a subagent's call, a session not run
+   from the CLI (`claude -p`, the SDK, Desktop), or the wait over): open its attach tab, `session-status --open view [--account DIR] "<name> attach" <root> -- claude attach
+   <id8>` (`--account DIR` when its attach command starts `CLAUDE_CONFIG_DIR=DIR`, as the pane's Attach in tab
+   builds it). Exit 2: nothing opened; give the user the `claude attach` command instead. Queue one `ask_approval`
+   naming the session and the exact action, options "Approve it in the tab" and "Stop it and resume with a
+   workaround".
+3. On "Stop it and resume", stop it (`session-status --stop <id>`) and resume it with a note to avoid the command that
+   prompted (`claude --bg --resume <id> '<note>'`); that answer is the user's go for the stop. Fix a recurring
+   refusal with an allow rule or setting (through a session).
+
+If a task will need the user's approval, say so up front. Auto-mode denials go to
 `~/.cache/session-status/denied.jsonl` (time, session, tool, input, reason) for later review.
+
+**How Allow this call works.** The press writes a grant, `~/.cache/session-status/grants/<session_id>.<sha256>`,
+JSON `{"kind":"permission","session":…,"sha256":…,"at":<epoch s>,"tool":…,"call":…}`, where the sha256 is that of
+the tool's name, a newline and its whole input as JSON. The pane copies it from the hook's record, and the grant
+carries the tool and call as the card showed them; the hook takes it only when they are the call it waits on, so a
+record rewritten to show another call gets nothing. The hook waits only in a CLI session's main thread, where the
+dialog shows alongside it. It takes the grant within a second when it names that session and that call and was
+written during this wait and in the last 2 minutes, deletes it and allows the call: one grant, one call. The hook
+stops waiting once the transcript gets a new user entry (the prompt answered in the tab). Only the pane's press
+writes a grant: no tool, flag or prompt does, and `coordinator-guard.sh` refuses, in every session and subagent, a
+Bash command naming both `session-status` and `grants` (so a commit message naming both is refused too) and a file
+tool's path into `session-status/grants`. Its limits: that check matches text, so code that builds the path evades
+it (a model that can run such code can already do what the call does), and any process running as the user could
+write a grant, as with the approval files.
 
 ### Stale prompts
 

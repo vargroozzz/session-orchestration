@@ -388,7 +388,9 @@ file's hunks, up to 40k characters, the rest named), and, with a `terminal` conf
 the user) and **Logs in split** (`l`: `claude logs` beside it); neither on an interactive session. Both run
 `session-status --open view|split …` (Modules, below): when the terminal opens nothing (exit 2) the pane copies the
 command and says why, another failure shows as a toast. What the terminal does is in its doc
-(`terminals/<name>.md`). One Peek or Diff shows at a time; a second press or closing the card hides it. The header's
+(`terminals/<name>.md`). A waiting card whose background session is on a permission prompt its hook still waits on
+leads with **Allow this call** (`h`) under the call it runs, shown in full: the press answers that prompt for that
+one call ([resuming.md](resuming.md#permission-prompts-and-trust)). One Peek or Diff shows at a time; a second press or closing the card hides it. The header's
 **all projects** toggle (`w`) also reads every other project's live sessions, in every account it asks, into an
 **Other projects** section (project folder, what it does, attach with its account prefix, Peek, Diff). The header's **brief** toggle (`y`) swaps the task board for the daily brief
 (`session-status --yesterday --json`, about half a minute with the tracker and the chats; The brief, above): the
@@ -453,7 +455,7 @@ last line it printed, then refreshes the pane. One runs at a time, for up to 5 m
    wakes the watcher (`Logins restored`, the `--changes` row). The file is read again at
    each sweep. The pane's own keys are taken: `r` refresh, `o` `f` `m` the card fixes, `a` attach,
    `u` row refresh, `k` ask, `x` dismiss, `c` copy, `z` compact, `p` peek, `d` diff,
-   `w` all projects, `t` attach in tab, `l` logs in split, `y` daily brief, `b`/`n` earlier/later day, `s` brief or list, `1`–`9`. A bad entry (not JSON, a missing or
+   `w` all projects, `t` attach in tab, `l` logs in split, `y` daily brief, `b`/`n` earlier/later day, `s` brief or list, `h` allow this call, `1`–`9`. A bad entry (not JSON, a missing or
    empty field, a taken or repeated hotkey, a repeated label, an unknown field) shows as a red line
    under Actions and is left out; the rest load.
 2. **`fix:` lines from the status output**: `fix: LABEL → COMMAND` (or `->`) at the start of a line,

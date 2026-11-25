@@ -14,10 +14,12 @@
 // for the daily brief since the last working day (session-status --yesterday --json): what moved, what waits on the
 // user, whom they wait on, what is new, what was worked on, a task's own list one press away; on top the standup,
 // written after the project's template by a small model (standup-summary).
+// A background session blocked on a permission prompt gets Allow this call on its card: the press is the user's
+// answer, a grant hooks/blocked.sh takes for that one call (resuming.md "Permission prompts and trust").
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, Register, RenderElement, RenderNode, SessionRateLimit, ToolCallResult, ToolSpec, UiPressArgument } from 'claude-code'
 
-import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek, SectionState } from '../types'
+import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek, Perm, SectionState } from '../types'
 
 const PANE = 'coordinator'
 // An ask stays until answered or cancelled; past OLD_MS it is drawn as old (check it still applies). Its answer
@@ -50,6 +52,7 @@ const ydSum = atom({ plugin: 'session-orchestration', key: 'ydSum' } as const, n
 const ydList = atom({ plugin: 'session-orchestration', key: 'ydList' } as const, false)
 const handed = atom({ plugin: 'session-orchestration', key: 'handed' } as const, [])
 const handedResult = atom({ plugin: 'session-orchestration', key: 'handedResult' } as const, null)
+const perms = atom({ plugin: 'session-orchestration', key: 'perms' } as const, [])
 const terminal = atom({ plugin: 'session-orchestration', key: 'terminal' } as const, 'plain')
 const inboxWatched = atom({ plugin: 'session-orchestration', key: 'inboxWatched' } as const, null)
 
@@ -290,6 +293,7 @@ export const BUILTIN_KEYS: Record<string, string> = {
   r: 'Refresh', ...Object.fromEntries(FIXES.map(f => [f.hotkey, f.label])), a: 'Attach', u: 'Refresh (row)',
   k: 'Ask', x: 'Dismiss', c: 'Copy command', z: 'Compact', p: 'Peek', d: 'Diff', w: 'All projects', e: 'Archive',
   t: 'Attach in tab', l: 'Logs in split', y: 'Daily brief', b: 'Earlier day', n: 'Later day', s: 'Brief or list',
+  h: 'Allow this call',
 }
 const taken = (key: string) => /^\d$/.test(key) ? 'a 1-9 item key' : BUILTIN_KEYS[key]
 
@@ -1217,6 +1221,7 @@ function refresh($: EngineInterface) {
       // A full sweep waits on the tracker, messages and accounts: ~5 min on a slow network; under the 10-min tick.
       runStatus($, [], { timeoutMs: 420_000 }), runStatus($, ['--pending']), runStatus($, ['--urls']), loadActions($),
       runStatus($, ['--config', 'terminal']), refreshActivity($), secsRead, loadSeen($).then(() => flushSeeds($)).catch(() => undefined),
+      loadPerms($).catch(() => undefined),
     ])
     await update($, actions, () => acts)
     // A name only: a failed run's `failed: …` text means none.
@@ -1252,6 +1257,7 @@ function refreshActivity($: EngineInterface) {
     const text = await runStatus($, ['--activity', ...((await read($, allProjects)) ? ['--all-projects'] : [])])
     await update($, activity, () => text)
     await loadHanded($).catch(() => undefined) // an unreadable folder leaves the list as it was
+    await loadPerms($).catch(() => undefined)
   })().finally(() => {
     activityInFlight = undefined
   })
@@ -1271,6 +1277,28 @@ export const HANDED_TTL = 3 * 86_400_000 // ponytail: a command older than 3 day
 const accountOf = async ($: EngineInterface) => (await $.env.get('CLAUDE_CONFIG_DIR').catch(() => undefined)) ?? ''
 const homePath = async ($: EngineInterface, rel: string) => `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/${rel}`
 const handedDir = ($: EngineInterface) => homePath($, HANDED_DIR)
+// Permission prompts (hooks/blocked.sh): its records, and the grants an Allow this call press writes, the only writer.
+export const BLOCKED_DIR = '.cache/session-status/blocked'
+export const GRANTS_DIR = '.cache/session-status/grants'
+// A blocked record that offers the button: a hash, the end of its wait and the call it shows; else undefined. A call
+// holding a character clean() draws invisibly or rewrites (CR, zero-width, line separators) gets no button.
+export function permOf(sid: string, text: string): Perm | undefined {
+  try {
+    const { tool, call, hash, until } = JSON.parse(text) as Record<string, unknown>
+    return /^[A-Za-z0-9_-]+$/.test(sid) && typeof tool === 'string' && typeof call === 'string' && typeof hash === 'string' &&
+      !/[\r\u061c\u200b-\u200f\u2028\u2029\ufeff]/.test(call) &&
+      /^[0-9a-f]{64}$/.test(hash) && typeof until === 'number' ? { sid, tool, call, hash, until } : undefined
+  } catch { return undefined }
+}
+// The records written in the last 35 minutes (blocked.sh waits up to 30) whose wait hasn't ended.
+async function loadPerms($: EngineInterface) {
+  if (!timer) return // a worker draws no pane
+  const dir = await homePath($, BLOCKED_DIR)
+  const now = await $.clock.now()
+  const files = (await $.fs.exists(dir)) ? (await $.fs.list(dir)).filter(f => f.kind === 'file' && f.name.endsWith('.json') && now - f.mtimeMs < 35 * 60_000) : []
+  const found = await Promise.all(files.map(async f => permOf(f.name.slice(0, -5), String(await $.fs.read(`${dir}/${f.name}`).catch(() => '')))))
+  await update($, perms, () => found.filter((p): p is Perm => !!p && p.until * 1000 > now))
+}
 // context-watch.sh's stamps, ${XDG_CACHE_HOME:-$HOME/.cache}/session-status: an empty XDG_CACHE_HOME is unset there (||).
 const stampDir = async ($: EngineInterface) => `${(await $.env.get('XDG_CACHE_HOME').catch(() => undefined)) ||
   `${(await $.env.get('HOME').catch(() => undefined)) ?? ''}/.cache`}/session-status`
@@ -2137,6 +2165,22 @@ export const register: Register = on => {
     const ydRaw = await read($, ydList)
     const hs = await read($, handed)
     const ranLast = await read($, handedResult)
+    const perms_ = await read($, perms)
+    // Allow this call: the grant blocked.sh request takes (it binds to session and call, as the card showed it). Gone
+    // within ~6 s: taken.
+    const allowCall = (p: Perm, name: string) => async () => {
+      const f = `${await homePath($, GRANTS_DIR)}/${p.sid}.${p.hash}`
+      const grant = { kind: 'permission', session: p.sid, sha256: p.hash, at: Math.floor((await $.clock.now()) / 1000), tool: p.tool, call: p.call }
+      if (!(await $.fs.write(f, JSON.stringify(grant)).then(() => true, () => false))) return $.ui.toast(`Couldn't write the grant for "${name}"; attach instead`)
+      let gone = false
+      for (let i = 0; i < 6 && !gone; i++) {
+        await $.clock.sleep(1000)
+        gone = !(await $.fs.exists(f))
+      }
+      $.ui.toast(gone ? `Allowed: ${p.tool} runs in "${name}"` : `Not taken: "${name}" stopped waiting for the pane (answered, or past its wait); attach instead`)
+      await update($, perms, l => l.filter(x => !(x.sid === p.sid && x.hash === p.hash)))
+      await refreshActivity($)
+    }
     const term = await read($, terminal)
     const myAccount = await accountOf($)
     const actsAll = parseActivity(await read($, activity))
@@ -2469,6 +2513,7 @@ export const register: Register = on => {
         const id = `wait-${w.id}`
         const rest = key ? w.name.replace(new RegExp(`\\s*\\b${key}\\b`, 'i'), '').trim() : w.name
         const wa = acts_.find(a => a.id.startsWith(w.id))
+        const p = perms_.find(x => x.sid.startsWith(w.id) && x.until * 1000 > now && (!wa || wa.status === 'waiting'))
         const wctx = ctxOf(wa)
         // A prompt unanswered for hours (session-status): not counted on you; Stop instead of Compact.
         const unanswered = title === STALE
@@ -2482,8 +2527,9 @@ export const register: Register = on => {
           ...(w.blocked ? [seg(' '), seg(w.blocked, { dimColor: true })] : []),
         ], () => [
           ...(w.blocked ? [detail(accent, '│', <Text wrap="wrap">{w.blocked}</Text>)] : []),
+          ...(p ? [detail(accent, '│', <Text wrap="wrap">{`Allow this call runs exactly: ${p.tool} ${clean(p.call)}`}</Text>)] : []),
           detail(accent, '│', <Text dimColor wrap="truncate-end">{w.command}</Text>),
-          bar(accent, ...sessActs(w.command, w.name, wa, true).all,
+          bar(accent, p && act('h', 'Allow this call', allowCall(p, w.name)), ...sessActs(w.command, w.name, wa, true).all,
             unanswered ? act('s', 'Stop', stopNow(w.id)) : compactAct(wa, w.id),
             ...viewActs(id, w.id, [...(key ? [key] : []), w.id]),
             act('k', 'Ask', ask(`the session "${w.name}" that waits on me`))),
