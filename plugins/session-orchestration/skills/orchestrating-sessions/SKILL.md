@@ -180,6 +180,10 @@ user's call: ask before removing it.
 - **Check a session's wording against the project docs before repeating it** to the user.
 - **A report page a reply names** (an HTML file): on `opened: yes` it is open; on `opened: no`, or no `opened:`
   line, open it yourself. Either way give the user its path.
+- **With `features.answers` on, an answer to the user's question also goes to a file** (not a status summary, not a
+  reply to a session): a new one in the folder `--start`'s Answers line names, `YYYY-MM-DD-<slug>.md`, holding the
+  question in one line, then the answer, then `Evidence: …`, then `Date: YYYY-MM-DD`. An Explain prompt from the pane
+  rewrites the file it names in place.
 
 ## When to read what
 

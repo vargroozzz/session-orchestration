@@ -193,7 +193,7 @@ walk, so a subproject never reads its parent's), merged key by key (the person's
 below reads the project's:
 - `.claude/coordination/coordination.json`, the repo's: `tracker`, `host`, `key_pattern`, `features.review_inbox`;
 - `.claude/coordination.local.json`, the person's: `approvals.*`, `start.*`, `terminal`, `messages` and its module's block
-  (e.g. `msgraph`), `features.accounts`, `features.accounts_weekly_switch`, `features.notify`, `features.remote`, `features.retro` and the `retro` block, `pane.sections`, `features.report_artifacts` and the `report_artifacts` block, `trusted`, `team`, `feedback` (ignored in the repo file: a
+  (e.g. `msgraph`), `features.accounts`, `features.accounts_weekly_switch`, `features.notify`, `features.answers`, `features.remote`, `features.retro` and the `retro` block, `pane.sections`, `features.report_artifacts` and the `report_artifacts` block, `trusted`, `team`, `feedback` (ignored in the repo file: a
   committed file never delegates or trusts for anyone, nor starts a scheduled retro, and the terminal, messages, accounts, notifications and feedback
   are the person's own);
 - below both, `${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json`, the person's for every project:
@@ -227,6 +227,7 @@ Both are excluded from git, the repo file until shared mode commits it. `session
 | `features.accounts_weekly_switch` | `true` \| `false`: with `features.accounts` on, a coordinator past 90% of its account's weekly limit hands over to a coordinator under an account below it (`features/accounts.md`, Weekly limits); off, the weekly use is information only | `false`; person-only; setup doesn't write it |
 | `features.review_inbox` | `true` \| `false`: PR findings go to the review inbox page (`features/review-inbox.md`); Bitbucket or Forgejo, GitHub is a TODO | `false`; setup writes `true` when the project's docs name an inbox URL and the host is Bitbucket or Forgejo |
 | `features.notify` | integer minutes, `0` = off: an ask left unseen on the pane that long shows one local macOS notification with a count only (`features/notify.md`) | `0`; person-only; setup doesn't write it |
+| `features.answers` | `true` \| `false`: the coordinator writes each answer it gives you to the project's answers folder; the pane's Answers section lists the unread ones (Mark as read, Explain) (`features/answers.md`) | `false`; person-only; setup doesn't write it |
 | `features.remote` | `true` \| `false`: coordinators start with Remote Control, so the person's coordinators on their other computers (same claude.ai account) reach them, and `--check` warns about a setting that keeps those out (`features/remote.md`) | `false`; person-only; setup doesn't write it |
 | `features.retro` | `true` \| `false`: scheduled retro runs, and `--check` names `features/retro.md` (what to do with a report, an overdue run). `/retro` by hand works either way | `false`; person-only; setup doesn't write it |
 | `features.docs_watch` | `true` \| `false`: once a day, a Notices line per watched docs page neither of a `docs_watch.files` doc's lists has (`features/docs-watch.md`) | `true` when `docs_watch.files` names a doc, else `false`; person-only; setup doesn't write it |
