@@ -229,6 +229,12 @@
 # The default key pattern also matches UTF-8 or SHA-256; a project with real keys should answer key-pattern.
 set -uo pipefail
 [ "${1:-}" = --init ] && { shift; exec bash "$(dirname "$0")/../setting-up-coordination/session-init" "$@"; }
+# --help [--FLAG]: status-reference.md's Commands rows (those of --FLAG), never a sweep.
+if [ "${1:-}" = --help ] || [ "${1:-}" = -h ]; then
+  grep -F '| `session-status' "$(dirname "$0")/status-reference.md" | grep -E "session-status${2:+ $2([ \`]|\$)}" ||
+    { echo "session-status --help: no command ${2:-}" >&2; exit 2; }
+  exit 0
+fi
 . "$(dirname "$0")/../../lib.sh" || exit 1
 # telemetry=full: a non-zero exit as an error line (lib.sh usage), named by its --flag (none: the board). Each later
 # EXIT trap ends with it too.
@@ -1491,10 +1497,13 @@ waived_links() {
 # worktree remove` deletes too, also in REPO's checkout: a file the same, a folder holding every file of WT's the same, a symlink at a path REPO has too.
 # Build output and caches pass; a .env or notes only WT has don't. An ignored folder named like a dependency, build or
 # cache folder (REGEN_DIRS: node_modules, dist, …) passes unread: an install or build makes it again, and diffing every
-# node_modules of every finished worktree took 20+ minutes per sweep in a node monorepo.
+# node_modules of every finished worktree took 20+ minutes per sweep in a node monorepo. Any other folder found the same
+# is remembered (~/.cache/session-status/same/): the next sweep only stats both sides, and diffs again once anything in
+# either changed since (ctime, which a copy keeping mtimes or a tar extract can't set back).
+# shortcut: a stamp a pair, never pruned; prune them once that folder fills.
 REGEN_DIRS=' node_modules bower_components .pnpm-store dist build .next .nuxt .svelte-kit .turbo .nx .angular .vite .expo .dart_tool .terraform .cache .parcel-cache coverage .nyc_output target __pycache__ .pytest_cache .mypy_cache .ruff_cache .tox .venv venv .gradle '
 keeps_nothing() {
-  local s p b
+  local s p b c f
   s=$(git -C "$1" status --porcelain --ignored --untracked-files=normal 2>/dev/null) || return 1
   s=$(link_free "$1" "$2" <<<"$s")
   [ -z "$(grep -v '^!! ' <<<"$s" | grep .)" ] || return 1
@@ -1504,7 +1513,12 @@ keeps_nothing() {
     [[ $p == */ ]] && { b=${p%/}; [[ $REGEN_DIRS == *" ${b##*/} "* ]] && git -C "$1" check-ignore -q --no-index "$p"; } && continue
     case $p in
       # a file only the main checkout has is fine; WT often sits inside REPO, so name REPO's folder exactly
-      */) [ -d "$2/$p" ] && [ -z "$(diff -rq "$1/$p" "$2/$p" 2>&1 | grep -vF -e "Only in $2/${p%/}: " -e "Only in $2/$p")" ] ;;
+      # the stamp dates from 2s before the diff (a coarse clock's same-tick write is newer); a find that fails (the
+      # stamp removed by a concurrent sweep) is no verdict
+      */) [ -d "$2/$p" ] && { c=~/.cache/session-status/same/$(sha256_of <(printf '%s\n%s' "$1/$p" "$2/$p"))
+        { [ -f "$c" ] && f=$(find "$1/$p" "$2/$p" -cnewer "$c" -print -quit 2>/dev/null) && [ -z "$f" ]; } ||
+        { mkdir -p "${c%/*}" && touch -t "$(epochfmt $(($(date +%s) - 2)) %Y%m%d%H%M.%S)" "$c.$$" && [ -z "$(diff -rq "$1/$p" "$2/$p" 2>&1 | grep -vF -e "Only in $2/${p%/}: " -e "Only in $2/$p")" ] &&
+          mv "$c.$$" "$c" || { rm -f "$c" "$c.$$"; false; }; }; } ;;
       # an ignored symlink (a linked .claude/tasks) is listed without the slash even to a folder; removal drops only the link
       *) if [ -L "$1/$p" ]; then [ -e "$2/$p" ] || [ -L "$2/$p" ]; else cmp -s "$1/$p" "$2/$p" 2>/dev/null; fi ;;
     esac || return 1
@@ -1916,18 +1930,22 @@ if [ "${1:-}" = --changes ]; then
   # A worker under another account with no live socket can't SendMessage this coordinator (features/accounts.md): its
   # report reaches only the replies folder. With accounts on, each <KEY>.md written there since the last run (else in
   # the last day) is a line, so writing one is news once; not a key a session that can message works on (this account's,
-  # or one with a live socket), nor the coordinator's own files (plans, briefs).
+  # or one with a live socket), nor the coordinator's own files (plans, briefs). Given keys (a sub's `--watch KEY`): only
+  # their reports.
   if [ "$(config features.accounts 2>/dev/null)" = true ]; then
     rd=$(replies_path)
     kre=$(key_re "$(adapter_path "$ROOT")")
+    sc=$(for a in "$@"; do grep -xE "$kre" <<<"$a"; done | paste -sd'|' -)
     mine=$(awk -F'\t' '{ print $4 "\t" $2 "\t" $9 }' ~/.cache/session-status/"$ENC".agents 2>/dev/null |
       while IFS=$'\t' read -r p n pid; do [ "$p" != claude ] && ! sock_addr "$pid" >/dev/null || echo "$n"; done)
+    # scoped, the sub itself (KEY-coordinator, -next, -prev-N) works on no KEY report
+    [ -z "$sc" ] || mine=$(grep -vE -- '-coordinator(-next|-prev-[0-9]+)?$' <<<"$mine")
     # .rt: when the last committed run looked; a report older than that was a line then (or not news: its session could message)
     touch "$last.rt.$$"; nw=(-mtime -1); [ ! -f "$last.rt" ] || nw+=(-newer "$last.rt")
     r=(); [ -z "$rd" ] || while IFS= read -r -d '' f; do k=${f##*/}; k=${k%.md}
       # a report kept off a plan or a chunk's brief (--report-file): NAME-report.md, KEY-cN-report.md
       if [[ $k == ?*-report ]]; then k=${k%-report}; [[ ! $k =~ ^(.+)-c[0-9]+$ ]] || k=${BASH_REMATCH[1]}; fi
-      grep -qxE "$kre" <<<"$k" && ! grep -qE "^$k(-|\$)" <<<"$mine" && r+=("$f")
+      grep -qxE "$kre" <<<"$k" && [[ -z $sc || $k =~ ^($sc)$ ]] && ! grep -qE "^$k(-|\$)" <<<"$mine" && r+=("$f")
     done < <(find "$rd" -maxdepth 1 -type f -name '*.md' ! -name '*-archive.md' "${nw[@]}" -print0 2>/dev/null)
     [ ${#r[@]} = 0 ] || new+=$'\nReports:'$(mtime_named "${r[@]}" | sort -rn |
       while read -r m f; do printf '\n  * report written: %s (%s)' "${f##*/}" "$(epochfmt "$m" '%m-%d %H:%M:%S')"; done)
@@ -2164,6 +2182,10 @@ ACT=; SEND=; COMPACT=; HANDOVER=; PEEK=; WHERE=; ALLP=; YDAY=
 case "${1:-}" in --activity) ACT=1; shift ;; --send-when-idle) SEND=1; shift ;; --compact|--stop) COMPACT=$1; shift ;; --handover) HANDOVER=1; shift ;;
   --peek) PEEK=1; shift ;; --dir|--diff) WHERE=$1; shift ;; --yesterday) YDAY=1; shift ;; esac
 [ -n "$ACT" ] && [ "${1:-}" = --all-projects ] && { ALLP=1; shift; }
+# the sweep's flags are all taken by now (--coordinator, --owner below): a --WORD left is a typo, not a key or an
+# adapter clause
+[ -n "$ACT$SEND$COMPACT$HANDOVER$PEEK$WHERE$YDAY" ] || for a in "$@"; do case $a in --coordinator|--owner) [ "$a" = "$1" ] ;; --*) false ;; esac ||
+  { echo "session-status: unknown option $a (session-status --help)" >&2; exit 2; }; done
 if [ -z "$ACT$SEND$COMPACT$HANDOVER$PEEK" ]; then
   repos=$(adapter repos 2>/dev/null) ||
     repos=$(git rev-parse --git-dir >/dev/null 2>&1 && echo . || find . -mindepth 2 -maxdepth 2 -name .git | sed 's#/\.git$##')

@@ -70,7 +70,7 @@ still lists only your account: `session-status --activity` lists every account's
   socket it finds none: its `reply` queues the report in the coordinator inbox (`--watch` reports it under `Inbox`), and it writes the report
   to the replies folder as always (one report, shown both ways: act on it once). `session-status --changes` (so `--watch`)
   lists each `<KEY>.md` (a chunk's `<KEY>-cN-report.md`, a report kept off a plan `<NAME>-report.md`) written there
-  since its last run (else in the last day) under `Reports:`, once (not a key a session of your account works
+  since its last run (else in the last day) under `Reports:`, once (with keys given, as a sub-coordinator's `--watch KEY`, only theirs; not a key a session of your account works
   on: that one messages), so a new one wakes you; read it there whole: where the status report at the top and a
   section below it disagree, the later of the two is the state.
 - **A command handed over under another account** (the pane's "Handed over under X"): it runs under yours, so
