@@ -143,7 +143,7 @@ EOF
 ## Posting and merging
 
 The commands in the approval hook's list (`hooks/approved-action.sh`'s header: PR and Jira comment posts, reviews and
-PR merges, `gh pr|issue create` unless `approvals.pr_create` lets a PR through or `feedback.send` lets plugin feedback through, Teams and mail sends; a mail send from `--body-file`, a forward from `--comment-file`, no attachments) are
+PR merges, `gh pr|issue create` and `forgejo-cli`/`bitbucketdc-cli pr create` unless `approvals.pr_create` lets a PR through or `feedback.send` lets plugin feedback through, Teams and mail sends; a mail send from `--body-file`, a forward from `--comment-file`, no attachments) are
 hook-gated: they run only on a relayed approval naming exactly that action, which the hook verifies itself, one run
 per relay (a run failed: check whether it landed before asking again). Post from `--body-file <absolute path>`, as the
 only CLI call in its command, and don't edit the file after asking: the approval names its sha256. Any send (a
@@ -151,7 +151,9 @@ comment, chat message or mail) is drafted whole before you ask: every message's 
 included (Teams needs one with a file). A word added after the approval isn't approved, and is refused. Denied, the reason
 says how to fix the command, or holds the line to send, `needs your approval: <exact action>`: put that in your
 `blocked` report, with what it says `the relay found` on a line of its own (the coordinator fixes its relay from
-that), and end your turn. Never retry another way.
+that), and end your turn. Never retry another way. To ask first, write that line yourself from the list below: never
+run a gated command to learn its action, nor tell another session to, since where the hook doesn't cover a command,
+that run is the action itself.
 
 The gated commands, edits included, and the action the hook names for each (ask with these words, not your own):
 - A comment post or edit: `gh pr|issue comment` (`--edit-last` too), `bitbucketdc-cli pr comment create|update`,
@@ -174,6 +176,10 @@ The gated commands, edits included, and the action the hook names for each (ask 
   `session-status --land <branch>`, alone (git refuses a plain `push . HEAD:<branch>` there, and `git -C` into that
   checkout isn't yours to run). It is gated as `merge <branch>`, relayed as `merge <branch> (<session name>)`; it
   fast-forwards only, and refuses while that checkout has uncommitted changes.
+- A PR or issue opened: `gh pr|issue create` with `--title` and `--body-file <absolute path>`, `forgejo-cli pr create`
+  with `--title` and `--description-file <absolute path>`: `create pr|issue on OWNER/REPO from FILE (sha256 X) <every
+  other flag, word for word, in the command's order>`, e.g. `create pr on OWNER/REPO from FILE (sha256 X) --from
+  feat/x --title Fix login`. `bitbucketdc-cli pr create` can't be relayed: hand the user the command.
 - `msgraph message send|update`: `send|update teams message FILE to <chat or message id and every option (`--format`
   too, not `--pretty`), word for word> (sha256 X)`; each `--attachments` file (absolute path) is named with its own `(sha256 Y)`. Mail: `send mail`,
   `reply to mail`, `forward mail` the same way, with no attachments.
