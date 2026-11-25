@@ -1307,6 +1307,18 @@ async function writeGrant($: EngineInterface, a: Ask, option: string) {
 const dropGrant = async ($: EngineInterface, f: string | undefined) => {
   if (f) await runBash($, ['-c', 'rm -f "$@"', '_', f]).catch(() => undefined)
 }
+// The newest answer stands: any answer for a key (a No or typed words too) removes the grants earlier answers for it wrote.
+async function voidGrants($: EngineInterface, key: string) {
+  const dir = await homePath($, GRANTS_DIR)
+  const files = (await $.fs.exists(dir).catch(() => false))
+    ? (await $.fs.list(dir).catch(() => [])).filter(f => f.kind === 'file' && /^act-.*\.json$/.test(f.name)) : []
+  const keyOf = (text: string) => { try { return (JSON.parse(text) as { key?: unknown }).key } catch { return undefined } }
+  const ours = (await Promise.all(files.map(async f => {
+    const p = `${dir}/${f.name}`
+    return keyOf(String(await $.fs.read(p).catch(() => ''))) === key ? p : undefined
+  }))).filter((p): p is string => !!p)
+  if (ours.length) await runBash($, ['-c', 'rm -f "$@"', '_', ...ours]).catch(() => undefined)
+}
 // A blocked record that offers the button: a hash, the end of its wait and the call it shows; else undefined. A call
 // holding a character clean() draws invisibly or rewrites (CR, zero-width, line separators) gets no button.
 export function permOf(sid: string, text: string): Perm | undefined {
@@ -2297,6 +2309,7 @@ export const register: Register = on => {
       logPress($, 'Approval answer')
       await syncStatus($)
       // Not delivered (a throw, or a hook's drop): answerable again in its place, unless cancel_approval took it meanwhile.
+      await voidGrants($, a.key)
       const grant = await writeGrant($, a, option)
       const putBack = async () => {
         await dropGrant($, grant)
@@ -2351,6 +2364,7 @@ export const register: Register = on => {
       await syncStatus($)
       const sent: Ask[] = [], failed: string[] = []
       for (const [a, y] of claimed) {
+        await voidGrants($, a.key)
         const grant = await writeGrant($, a, y)
         const r = await $.prompt.submit({ text: answerText(a, y), asUser: true })
           .catch((e: unknown) => ({ drop: e instanceof Error ? e.message : String(e) }))
