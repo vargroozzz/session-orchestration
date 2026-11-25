@@ -1562,7 +1562,7 @@ a{color:var(--acc)}p{margin:8px 0}
 def md2html(src, dst):
     """ponytail: covers only the Markdown subset the reports use (headings, lists, quotes, tables, inline);
     swap for a real converter if they grow."""
-    lines_ = open(src).read().split("\n")
+    lines_ = open(src, encoding="utf-8").read().split("\n")
     out, i, title = [], 0, "Report"
     while i < len(lines_):
         l = lines_[i]
@@ -1634,7 +1634,8 @@ def md2html(src, dst):
         while i < len(lines_) and lines_[i].strip() and not re.match(r"(#{1,4} |\||\s*- |>|\s*```|\d+\. )", lines_[i]):
             p.append(lines_[i].strip()); i += 1
         out.append("<p>" + inline(" ".join(p)) + "</p>")
-    open(dst, "w").write(f"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+    # the generator mark: reply's done report refuses a page without it (a pandoc page lost dark mode)
+    open(dst, "w", encoding="utf-8").write(f"<!doctype html><html lang=en><head><meta charset=utf-8><meta name=generator content=retro.py><meta name=viewport content='width=device-width,initial-scale=1'>"
                          f"<title>{html.escape(title)}</title><style>{CSS}</style></head><body><main>{''.join(out)}</main></body></html>")
 
 

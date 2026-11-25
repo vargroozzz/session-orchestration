@@ -25,7 +25,7 @@ the judgement: which sources are reliable, and what of it applies to this projec
 
 - Replies folder: the one the project's `CLAUDE.md` names (its "Replies folder" line); none named: stop and say so.
   Below, `<R>` is that folder, and `<KEY>` the session's name (by hand, with no name: `research-<YYYY-MM-DD>-<2-4 word slug of the question>`).
-- The report: `<R>/<KEY>.md`, then `python3 -I <S>/../retro/retro.py html <R>/<KEY>.md <R>/<KEY>.html`, `<S>` being this skill's folder (an absolute path).
+- The report: `<R>/<KEY>.md`, then `python3 -I <S>/../retro/retro.py html <R>/<KEY>.md <R>/<KEY>.html`, `<S>` being this skill's folder (an absolute path): the one renderer (worker.md, A report for the user to read).
   When `session-status --config features.report_artifacts` lists `research`, publish it as a private page by
   [report-artifacts.md](../../features/report-artifacts.md) (check, publish, `reply`'s `artifact`) and write home paths as `~/…`.
 - The other-tools list: `<P>/research/competitors.tsv`, where `<P>` is the plugin repo's replies folder (the

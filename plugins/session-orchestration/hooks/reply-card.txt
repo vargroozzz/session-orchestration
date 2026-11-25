@@ -14,7 +14,8 @@ Coordinated session (session-orchestration): messages from other Claude sessions
 - A report you send unasked, only when you're done, blocked, a decision waits on the user or a
   handoff ready (never a progress update): reply without `to` (it tries this project's live
   coordinators, newest first). None live: it is queued in the coordinator inbox; don't resend. The report that says done passes reply's
-  done (pr with key, pushed, or report): it's sent only once that holds (worker.md's Done).
+  done (pr with key, pushed, or report): it's sent only once that holds (worker.md's Done). A report's
+  .html: only `python3 -I {dir}/../retro/retro.py html IN.md OUT.html` (never pandoc), else done refuses it.
 - Keep working until done or blocked: don't end a turn to announce the next step or offer to go on;
   waiting on CI or a watcher, end it with no report. Ask the user in plain text, never with the
   question box or plan mode.

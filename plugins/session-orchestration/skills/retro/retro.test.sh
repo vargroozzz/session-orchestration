@@ -269,7 +269,8 @@ grep -qE $'^all\t[0-9]+\t' <<<"$out" && grep -qE $'^since 2026-10-12T10:30\t3\t8
 
 printf '# T\n\n| a | b |\n|---|---|\n| `x` | **y** |\n\n- one\n  - two\n\n1. first\n   more\n2. second\n\n```\na < b\n  c\n```\n' > "$tmp/r.md"
 retro html "$tmp/r.md" "$tmp/r.html"
-grep -q '<title>T</title>' "$tmp/r.html" && grep -q '<td><code>x</code></td><td><strong>y</strong></td>' "$tmp/r.html" \
+grep -q '<title>T</title>' "$tmp/r.html" && grep -q '<meta name=generator content=retro.py>' "$tmp/r.html" \
+  && grep -q '<td><code>x</code></td><td><strong>y</strong></td>' "$tmp/r.html" \
   && grep -q '<ul><li>one<ul><li>two</li></ul></li></ul>' "$tmp/r.html" \
   && grep -q '<ol><li>first more</li><li>second</li></ol>' "$tmp/r.html" \
   && grep -q '<pre><code>a &lt; b' "$tmp/r.html" || fail "html" "$(cat "$tmp/r.html")"
