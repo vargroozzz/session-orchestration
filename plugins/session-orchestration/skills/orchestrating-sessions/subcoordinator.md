@@ -48,6 +48,10 @@ You hold no approvals of your own: everything the user decides reaches you as a 
 
 ## What you never do
 
-Do a chunk's work yourself. The rest the hooks refuse: `open_pane`, a sub-coordinator, any session for another key,
-an edit outside `KEY.md`, `KEY-*.md` and the project memory (coordinator-guard), and a reserved action without its
-relay (the approval hook).
+- Do a chunk's work yourself, or edit any file in the project root but through your sessions (Bash included); in
+  the replies folder you edit only `KEY.md`, `KEY-*.md` and the project memory.
+- Act on a reserved action (merge, post, release, deploy) without the relay that names it.
+- Call `open_pane`, start a sub-coordinator, or start, message or stop a session for another key.
+
+Coordinator-guard refuses the starts, stops and messages and a tool edit outside those files, and the approval hook
+an unrelayed post or merge; the rest (a Bash edit, a release, a deploy) only you hold to.

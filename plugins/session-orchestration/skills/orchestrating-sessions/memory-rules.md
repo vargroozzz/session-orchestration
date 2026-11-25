@@ -52,7 +52,8 @@ Sessions append to it; you prune it.
   `.claude/coordination/memory.md` (and its `memory/<topic>.md`, P's topic names) before yours ([worker.md](worker.md),
   Project memory). `[team]` lines never go into it directly: when you prune, run `session-status --init
   --team-memory` (the gather) and put its `Team PR:` line on the pane as one ask with its diff, as `--shared`'s.
-  What it commits and when the lines leave your memory: setting-up-coordination's Shared mode. Without shared mode
+  `[team]` lines leave your memory on the first gather after that PR merges: don't delete them by hand. What it
+  commits: [setting-up-coordination's Shared mode](../setting-up-coordination/SKILL.md#shared-mode). Without shared mode
   they stay in yours.
 - **Graduation** moves an entry into the project doc that owns its situation once it has proved itself: old enough
   and still true, or cited by several sessions. The index states the project's thresholds and who runs it (e.g. the
