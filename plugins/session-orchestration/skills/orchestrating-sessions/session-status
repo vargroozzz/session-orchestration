@@ -1366,7 +1366,7 @@ if [ "${1:-}" = --start ]; then
     done)
   [ ! -e "$TMP/ask.failed" ] || ended="  (couldn't list an account's sessions: ended ones there are unknown; run --start again)${ended:+$'\n'$ended}"
   [ -z "$ended" ] || printf '\n## Ended while the background service was off (or failed), task still open\n%s\n' "$ended"
-  [ ! -s "$TMP/ids" ] || echo "Resume them one at a time, after one ask (approvals.md): session-status --resume-ended $(sed 's/ $//' "$TMP/ids")"
+  [ ! -s "$TMP/ids" ] || echo "One ask for them all, key resume-after-restart (resuming.md, After a restart); on its yes: session-status --resume-ended $(sed 's/ $//' "$TMP/ids")"
   if [ -n "$h" ] && [ -f "$h" ]; then printf '\n## Handover (%s, written %s)\n' "$h" "$(epochfmt "$(mtime "$h")" '%m-%d %H:%M')"; cat "$h"
   else printf '\n## Handover\n(none%s)\n' "${h:+: no $h}"; fi
   # Only the live answers that still need an action (--approvals lists them all), each rule on data at hand: not
