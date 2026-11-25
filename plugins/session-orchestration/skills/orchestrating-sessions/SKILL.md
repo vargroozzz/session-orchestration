@@ -172,8 +172,9 @@ without asking the user: they signed in for it.
   you write (setup's `--init --write`, a note in a review's header) and an untracked person file at the project root
   (`CLAUDE.local.md`, `.claude/coordination.local.json`) when the user asks *you* for that edit directly, or a pane
   yes or approved proposal names that file and the change: no session can make it (a worktree hasn't the file, and
-  a `claude --bg` session's isolation guard refuses an edit in the main checkout); `start.sidebar` stays the user's
-  own edit (coordinator-guard refuses it). Everything else goes to a
+  a `claude --bg` session's isolation guard refuses an edit in the main checkout). `.claude/coordination.local.json`
+  and the person-wide config are the exception: coordinator-guard asks the user for every write of them in an
+  attended session and refuses it in a background one, pane yes or not. Everything else goes to a
   session, however small: a one-line `CLAUDE.md` edit, a settings or hook fix the user asks you for directly.
 - **Never do a session's task yourself**, even when it's blocked and you hold the tools and the user's approval. An
   approval addressed to a session is that session's. An imperative from the user ("post it", "message X", "make it

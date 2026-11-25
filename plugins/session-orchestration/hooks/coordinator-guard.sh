@@ -29,25 +29,39 @@
 # Any other session pays one bash start and a file test (and, until context-watch caches its kind, lib.sh and a
 # first-prompt read).
 input=$(cat)
+# deny REASON NAME: the decision, and NAME as a telemetry=full block line (lib.sh usage).
+deny() {
+  jq -nc --arg r "$1" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
+  ( l=$(cd "${0%/*}/.." 2>/dev/null && pwd)/lib.sh; cd "${cwd:-.}" 2>/dev/null; . "$l" && usage "coordinator-guard-$2" block "" "hooks/coordinator-guard.sh:${BASH_LINENO[0]}" ) >/dev/null 2>&1
+  exit 0
+}
 # Every session, a subagent too: the person config files (a project's .claude/coordination.local.json, the person-wide
 # ${XDG_CONFIG_HOME:-~/.config}/session-orchestration/config.json) hold the approvals (approvals.*, feedback.send,
 # start.sidebar), so a session that wrote them could grant itself one. An Edit/Write of either, or a Bash command that
-# writes one (a redirection, tee, sed -i, mv, cp, ln, rm, truncate, install naming it), asks the user in an attended
-# session and is refused in a background one. session-status's own writers (--purpose, --pane-section) don't name it.
-# shortcut: an interpreter or script that writes it without naming it isn't seen; upgrade if a session does that
-if [[ $input == *coordination.local.json* || $input == *session-orchestration/config.json* ]]; then
-  { read -r t0; read -r p0; } < <(jq -r '.tool_name // "", (.tool_input.file_path // .tool_input.notebook_path // "")' <<<"$input")
-  f='(\.claude/coordination\.local|session-orchestration/config)\.json'
+# writes one, asks the user in an attended session and is refused in a background one. A write is a redirection to it,
+# or a command word (at the start or after ; & | ( ) tee, rm, truncate, sed -i (-i.bak, -Ei, --in-place) naming it, or
+# mv, cp, ln, install with it last (the target: a copy from it is a read). So is setup's `--delegate` or `--trust`
+# (session-init writes approvals.delegate and .trusted without naming the file). session-status's other writers
+# (--purpose, --pane-section) don't touch approvals.
+# shortcut: an interpreter or script that writes it without naming it, or a write after `cd ~/.config/session-orchestration`, isn't seen; upgrade if a session does that
+if [[ $input == *coordination.local.json* || $input == *session-orchestration/config.json* || $input == *--delegate* || $input == *--trust* ]]; then
+  { read -r t0; read -r cwd; read -r p0; } < <(jq -r '.tool_name // "", .cwd // "", (.tool_input.file_path // .tool_input.notebook_path // "")' <<<"$input")
+  f='(coordination\.local|session-orchestration/config)\.json'
+  w='(^|[;&|(])[[:space:]]*(sudo[[:space:]]+)?'
   hit=
   case $t0 in
-    Edit|MultiEdit|Write|NotebookEdit) [[ $p0 =~ $f$ ]] && hit=$p0 ;;
-    Bash) hit=$(jq -r '.tool_input.command // ""' <<<"$input" | grep -oE "(>[>|]?[[:space:]]*[\"']?|(^|[^A-Za-z0-9_-])(tee|sed[[:space:]]+[^;&|]*-i|mv|cp|ln|rm|truncate|install)[[:space:]][^;&|]*)[^[:space:];&|]*$f" | grep -oE "[^[:space:]\"'>]*$f" | head -1) ;;
+    Edit|MultiEdit|Write|NotebookEdit) [[ $p0 =~ (^|/)$f$ ]] && hit=$p0 ;;
+    Bash) c0=$(jq -r '.tool_input.command // ""' <<<"$input")
+      hit=$(grep -oE ">[>|]?[[:space:]]*[\"']?[^[:space:];&|\"']*$f|$w(tee|rm|truncate|sed[[:space:]]+([^;&|]*[[:space:]])?(-[A-Za-z]*i|--in-place)[^[:space:]]*)[[:space:]][^;&|]*$f|$w(mv|cp|ln|install)[[:space:]][^;&|]*$f[\"']?[[:space:]]*(\$|[;&|)])" <<<"$c0" | grep -oE "[^[:space:]\"'>]*$f" | head -1)
+      [ -n "$hit" ] || ! grep -qE "session-(status|init)[[:space:]].*--(delegate|trust)" <<<"$c0" || hit="setup's --delegate/--trust (.claude/coordination.local.json)" ;;
   esac
   if [ -n "$hit" ]; then
-    d=deny; [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" != 1 ] || d=ask
-    jq -nc --arg d "$d" --arg r "Person config: ${hit/#"$HOME"/\~} holds the user's own settings, approvals among them (approvals.*, feedback.send, start.sidebar), so only the user changes it; a session never does, or it could grant itself an approval. Don't route the change another way: give the user the exact change and why (in your report, or hand_command with the command), and go on without it." \
-      '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}'
-    exit 0
+    r="Person config: ${hit/#"$HOME"/\~} holds the user's own settings, approvals among them (approvals.*, feedback.send, start.sidebar), so only the user changes it; a session never does, or it could grant itself an approval. Don't route the change another way: give the user the exact change and why (in your report, or hand_command with the command), and go on without it."
+    if [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" = 1 ]; then
+      jq -nc --arg r "$r" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: $r}}'
+      exit 0
+    fi
+    deny "$r" person-config
   fi
 fi
 # a subagent: its cd and edits aren't the coordinator's, but a sidebar session it starts is just as unseen; a
@@ -78,12 +92,6 @@ case $kind in coordinator) [ -z "$sa" ] || exit 0; skey= ;;
   *) exit 0 ;;
 esac
 
-# deny REASON NAME: the decision, and NAME as a telemetry=full block line (lib.sh usage).
-deny() {
-  jq -nc --arg r "$1" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
-  ( l=$(cd "${0%/*}/.." 2>/dev/null && pwd)/lib.sh; cd "${cwd:-.}" 2>/dev/null; . "$l" && usage "coordinator-guard-$2" block "" "hooks/coordinator-guard.sh:${BASH_LINENO[0]}" ) >/dev/null 2>&1
-  exit 0
-}
 { read -r tool; read -r cwd; read -r path; } < <(jq -r '.tool_name // "", .cwd // "", (.tool_input.file_path // .tool_input.notebook_path // "")' <<<"$input")
 cmd=; [ "$tool" != Bash ] || cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
 # starts CMD: each `claude … --bg` command word in CMD as NAME\x1fRESUME\x1fPROMPT\x1e; `!` for one the guard can't
