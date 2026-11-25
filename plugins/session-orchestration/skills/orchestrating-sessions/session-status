@@ -171,7 +171,8 @@
 #                       status sweep's Sent footer lists the unread ones
 #        session-status --report-file SESSION_ID [KEY] < REPORT   the reply tool's report: the top of
 #                       <replies>/<KEY>.md (no KEY: that session's name), its `## Handoff` kept; a chunk's goes to
-#                       <KEY>-cN-report.md, and one over a plan without a plan heading to <KEY>-report.md
+#                       <KEY>-cN-report.md, and one over a plan without a plan heading to <KEY>-report.md; a
+#                       `# ` section it drops (a deliverable) moves to <KEY>-archive.md
 #        session-status --report-publish FILE --kind KIND [--allow-markers]   may this session publish the report FILE
 #                       as a private claude.ai page: `publish: yes` or `publish: no (why)`, exit 1
 #                       (features/report-artifacts.md)
@@ -641,7 +642,7 @@ fi
 # session, else its name less a -prev-K; a sub-coordinator's (`Coordinate KEY`), always KEY-coordinator. It replaces what precedes the first `## Handoff` and keeps that section on,
 # so a report never drops the handoff; a report with its own `## Handoff` replaces it. A chunk files under KEY-cN-report;
 # a report without a plan heading over a file whose top has one (`## Plan`, `## Build plan`) goes to NAME-report.md.
-# A file with a `# Title` line (a design written to KEY.md) keeps it and what follows (up to a new report's own `## Handoff`; none when the report has a `# ` line). Exit 3: no replies folder.
+# A file with a `# Title` line (a design written to KEY.md) keeps it and what follows (up to a new report's own `## Handoff`; none when the report has a `# ` line). A `# ` section the write drops is first appended, with the whole old file, to NAME-archive.md. Exit 3: no replies folder.
 if [ "${1:-}" = --report-file ]; then
   rd=$(replies_path); [ -n "$rd" ] || { echo "$ROOT/CLAUDE.md names no replies folder" >&2; exit 3; }
   body=$(cat); [ -n "${body//[[:space:]]/}" ] && [ -n "${2:-}" ] || { echo "usage: session-status --report-file SESSION_ID < REPORT" >&2; exit 2; }
@@ -663,11 +664,13 @@ if [ "${1:-}" = --report-file ]; then
   # a plan (a `## Plan` or `## Build plan` above its handoff) is never replaced by a report that has none: NAME-report.md
   if [ -f "$f" ] && ! grep -qE '^## (Build )?[Pp]lan([[:space:]]|$)' <<<"$body" &&
     awk '/^## Handoff/ { exit } /^## (Build )?[Pp]lan([[:space:]]|$)/ { p = 1; exit } END { exit !p }' "$f"; then n=$n-report; f=$rd/$n.md; fi
-  {
-    printf '%s\n' "$body"
-    # kept: from the first `# Title` (a deliverable written to KEY.md, e.g. a design), else from `## Handoff` unless the report has its own
-    if [ -f "$f" ]; then awk -v h="$(grep -c '^## Handoff' <<<"$body")" -v t="$(grep -c '^# ' <<<"$body")" '/^## Handoff/ && h { on = 0; done = 1 } !done && ((!t && /^# /) || (!h && /^## Handoff/)) { on = 1 } on' "$f" | sed '1s/^/\n/'; fi
-  } > "$f.$$" && mv "$f.$$" "$f" && echo "$f" || { rm -f "$f.$$"; echo "couldn't write $f" >&2; exit 1; }
+  # kept: from the first `# Title` (a deliverable written to KEY.md, e.g. a design), else from `## Handoff` unless the report has its own
+  kept=; [ ! -f "$f" ] || kept=$(awk -v h="$(grep -c '^## Handoff' <<<"$body")" -v t="$(grep -c '^# ' <<<"$body")" '/^## Handoff/ && h { on = 0; done = 1 } !done && ((!t && /^# /) || (!h && /^## Handoff/)) { on = 1 } on' "$f")
+  # a `# ` section the write would drop (a deliverable, or an older report's own title) moves to NAME-archive.md first
+  if [ -f "$f" ] && [ "$(grep -c '^# ' "$f")" -gt "$(grep -c '^# ' <<<"$kept")" ]; then
+    { printf '\n<!-- replaced by a report, %s -->\n' "$(date -u +%Y-%m-%dT%H:%MZ)"; cat "$f"; } >> "$rd/$n-archive.md" || { echo "couldn't archive $f" >&2; exit 1; }
+  fi
+  { printf '%s\n' "$body"; [ -z "$kept" ] || printf '\n%s\n' "$kept"; } > "$f.$$" && mv "$f.$$" "$f" && echo "$f" || { rm -f "$f.$$"; echo "couldn't write $f" >&2; exit 1; }
   exit
 fi
 if [ "${1:-}" = --inbox ] && [ "${2:-}" = --sent ]; then

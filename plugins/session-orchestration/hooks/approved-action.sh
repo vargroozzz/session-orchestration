@@ -65,6 +65,7 @@ set -uo pipefail
 export LC_ALL=C
 here=$(cd "$(dirname "$0")" && pwd)
 pass() { done=1; exit 0; }
+hit= apply= prc=
 # fault NAME KIND [N [AT]]: lib.sh usage, a telemetry=full fault line (never fails, prints nothing).
 fault() { ( l=${here:-${0%/*}}/../lib.sh; cd "${cwd:-.}" 2>/dev/null; . "$l" && usage "$@" ) >/dev/null 2>&1; }
 decide() {
@@ -74,7 +75,7 @@ decide() {
 }
 attended() { local d=deny; if [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" = 1 ]; then d=ask; fi; decide "$d" "$1"; }
 ask_for() {
-  attended "Blocked: $1 needs the user's approval, relayed by the coordinator and naming exactly this. Don't retry it, and don't route it another way. Send the coordinator your blocked status report with the line: needs your approval: $2. Then end your turn. When the relay arrives (Action naming $3), run the same command again; this hook verifies it."
+  attended "Blocked: ${hit:+$hit }$1 needs the user's approval, relayed by the coordinator and naming exactly this. Don't retry it, and don't route it another way. Send the coordinator your blocked status report with the line: needs your approval: $2. Then end your turn. When the relay arrives (Action naming $3), run the same command again; this hook verifies it."
 }
 # first_prompt TRANSCRIPT: its first prompt as lib.sh first_prompt reads it (not sourced here), and only when it isn't a
 # peer's message.
@@ -589,7 +590,7 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     'pr comment'|'issue comment') k=prpost ;;
     'pr review') k=review ;;
     # create's flags aren't the others' (-a assignee, -r reviewer, -f fill, -B base): its words are read again.
-    'pr create'|'issue create') k=create crk=${pos[0]} crx=() r= bf= bd= hp= crt= cro= crh=
+    'pr create'|'issue create') k=create crk=${pos[0]} crx=() r= bf= bd= hp= crt= cro=
       set -- ${args[@]+"${args[@]}"}
       while [ $# -gt 0 ]; do
         case "$1" in --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}" ;; esac
@@ -601,7 +602,7 @@ while [ "$i" -lt "${#toks[@]}" ]; do
           # They fill in text (commits, a template, an editor, the browser) the approval can't name.
           -f|--fill|--fill-first|--fill-verbose|-e|--editor|-w|--web|-T|--template|--recover) crf=$1; [ "$1" = -T ] || [ "$1" = --template ] || [ "$1" = --recover ] && shift ;;
           -t|--title) crt=1; crx+=("$1 ${2:-}"); shift ;;
-          -H|--head) v=${2:-}; crh+=" ${v#*:}"; crx+=("$1 $v"); shift ;;
+          -H|--head) crx+=("$1 ${2:-}"); shift ;;
           -B|--base|-l|--label) crx+=("$1 ${2:-}"); shift ;;
           # cro: the flags feedback.send auto refuses (glued -F/path included: gh reads it as the body file)
           -a|--assignee|-r|--reviewer|-m|--milestone|-p|--project) cro+=" $1"; crx+=("$1 ${2:-}"); shift ;;
@@ -644,8 +645,14 @@ fi
   decide deny "Blocked: a PR/issue comment post, review, merge or Teams/mail send must be the only bitbucketdc-cli/forgejo-cli/jiradc-cli/msgraph/gh call in its command (a gh one may share it with plain read-only gh calls: gh pr view|checks, gh run view|watch). $alone"
 [ -z "$help" ] || pass
 if [ "$kind" = create ]; then
+  # An apply session (first prompt from feedback brief): its create on the plugin's repo is scrubbed below first.
+  # (-R as given, a URL or HOST/ form too, any case as GitHub's: a wider match only scrubs more)
+  fb="$here/../skills/orchestrating-sessions/feedback" fbr=$("$here/../skills/orchestrating-sessions/feedback" repo 2>/dev/null | tr A-Z a-z)
+  apply=; [ -n "$fbr" ] && [ -f "$tp" ] && grep -qE '^Work on [^ :]+: Apply plugin feedback: ' <<<"$(first_prompt "$tp" | head -n 1)" &&
+    [[ -z $repo || $(tr A-Z a-z <<<"$repo") == *"$fbr"* ]] && apply=1
   # approvals.pr_create: the session opens its own task's PR without an ask (an issue still asks).
-  [ "$crk" != pr ] || [ "$(cd "$cwd" 2>/dev/null && . "$here/../lib.sh" >/dev/null 2>&1 && config approvals.pr_create 2>/dev/null)" != true ] || pass
+  prc=; [ "$crk" != pr ] || [ "$(cd "$cwd" 2>/dev/null && . "$here/../lib.sh" >/dev/null 2>&1 && config approvals.pr_create 2>/dev/null)" != true ] || prc=1
+  [ -z "$prc" ] || [ -n "$apply" ] || pass
   [ -z "$crf" ] || attended "Blocked: gh $crk create $crf fills in text the approval can't name. Give --title and --body-file <absolute path>, or hand the user the command with hand_command."
   [ -n "$crt" ] || decide deny "Blocked: give gh $crk create its --title, so the approval can name it."
   # the action names the text as written: a variable or $(…) there could hold anything when it runs
@@ -700,25 +707,31 @@ else
   [ -n "$bodyfile" ] && [ "$bodyfile" != - ] || decide deny "Blocked: post the comment with $bf, so the approval can name the file's sha256."
   case "$bodyfile" in /*) ;; *) decide deny "Blocked: give the body file as an absolute path: $bf." ;; esac
   [ -f "$bodyfile" ] || decide deny "Blocked: no such body file: $bodyfile"
-  # feedback.send auto: the person's standing yes for plugin feedback. An apply session's create on the plugin's own
-  # repo (its first prompt from feedback brief) passes once feedback scrub finds nothing personal in its flags and body.
+  # An apply session's create on the plugin's own repo, under feedback.send auto (the person's standing yes for plugin
+  # feedback) or approvals.pr_create, passes once feedback scrub finds nothing personal in its flags and body. A hit
+  # goes the relay way with the scrub's lines, so the user can still pass a false positive.
   # Cheapest test first: feedback repo and config each source lib.sh, and the scrub is slow (up to a minute on a busy
   # machine: hooks.json gives this hook 180 s).
-  fb="$here/../skills/orchestrating-sessions/feedback"
-  if [ "$kind" = create ] && [ "$host" = gh ] && [ -f "$tp" ] &&
-     grep -qE '^Work on [^ :]+: Apply plugin feedback: ' <<<"$(first_prompt "$tp")" &&
-     [ "$repo" = "$("$fb" repo 2>/dev/null)" ] &&
-     [ "$(cd "$cwd" 2>/dev/null && . "$here/../lib.sh" >/dev/null 2>&1 && config feedback.send 2>/dev/null)" = auto ]; then
-    [ -z "$cro" ] || decide deny "Blocked: under feedback.send auto, gh $crk create takes only -R, -t/--title, -F/--body-file <absolute path> (space-separated), -l/--label, -B/--base, -H/--head and -d/--draft; not:$cro. Drop it and run it again."
-    # The scrubbed flags: all but -H, whose fork owner is public and a local remote's owner; its branch is scrubbed.
-    ft=$(mktemp) || exit 1
-    for x in ${crx[@]+"${crx[@]}"}; do case $x in '-H '*|'--head '*) ;; *) printf '%s\n' "$x" ;; esac; done > "$ft"
-    [ -z "$crh" ] || printf -- '-H%s\n' "$crh" >> "$ft"
-    out=$("$fb" scrub "$ft" "$bodyfile" 2>&1); fr=$?; rm -f "$ft"
-    [ "$fr" != 0 ] || pass
-    decide deny "Blocked: feedback scrub found something personal in this gh $crk create (the flags or $bodyfile). Reword it and run it again; never send it with a hit:
-${out//"$ft"/the flags}"
+  if [ "$kind" = create ] && [ -n "$apply" ] && [ "$host" = gh ] && [ "$(tr A-Z a-z <<<"$repo")" = "$fbr" ]; then
+    auto=; [ "$(cd "$cwd" 2>/dev/null && . "$here/../lib.sh" >/dev/null 2>&1 && config feedback.send 2>/dev/null)" != auto ] || auto=1
+    if [ -n "$auto$prc" ]; then
+      # (a glued -F/path among them: gh reads it as the body file, which the scrub below wouldn't see)
+      [ -z "$cro" ] || decide deny "Blocked: under feedback.send auto (or approvals.pr_create in an apply session), gh $crk create takes only -R, -t/--title, -F/--body-file <absolute path> (space-separated), -l/--label, -B/--base, -H/--head and -d/--draft; not:$cro. Drop it and run it again."
+      # The scrubbed flags: all, but -H only its branch, and not when it is the session's own (its name, which matches
+      # key_pattern): its fork owner is public, and git push publishes that branch anyway.
+      own=$(git -C "$cwd" branch --show-current 2>/dev/null)
+      ft=$(mktemp) || exit 1
+      for x in ${crx[@]+"${crx[@]}"}; do case $x in
+        '-H '*|'--head '*) x=${x#* }; x=${x#*:}; [ "$x" = "$own" ] || printf -- '-H %s\n' "$x" ;;
+        *) printf '%s\n' "$x" ;; esac; done > "$ft"
+      out=$("$fb" scrub "$ft" "$bodyfile" 2>&1); fr=$?; rm -f "$ft"
+      [ "$fr" != 0 ] || pass
+      hit="feedback scrub found something personal in this gh $crk create (the flags or $bodyfile):
+${out//"$ft"/the flags}
+Reword it and run it again. Only if every line is a false positive (a commit SHA, a test key in quoted code), ask:"
+    fi
   fi
+  [ "$kind" != create ] || [ -z "$prc" ] || [ -n "$hit" ] || pass
   sha=$(shasum -a 256 "$bodyfile" | cut -d' ' -f1); [ "${#sha}" = 64 ] || exit 1
   if [ "$kind" = review ]; then action="post $mode review $bodyfile on $what (sha256 $sha)"
   elif [ "$kind" = send ]; then action="$mv $bodyfile to $what (sha256 $sha)"
