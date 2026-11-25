@@ -75,9 +75,10 @@ you get a prompt with the outcome:
 - Send it to the session that handed it over, one line. A failure or refusal stays in the box with what happened,
   for another try or Copy (a failure's last few lines, stderr's included). A command that failed from Run but whose
   output doesn't say why: ask the user to run it with `!`, which runs in their own shell, before retrying Run.
-- A plain `session-status --relay` you handed yourself: its outcome ends with the relay block, whole. Send that block
-  as is to the session it is for, once its Quote approves its Action, not the outcome's one line. When you ran it
-  yourself after a refused Run (below), the block is in your own Bash output: send it the same way.
+- A plain `session-status --relay` you handed yourself: its outcome ends with the relay block (or the go note of a
+  granting Yes, [approvals.md](approvals.md#grants)), whole. Send that block as is to the session it is for, once its
+  Quote approves its Action, not the outcome's one line. When you ran it yourself after a refused Run (below), the
+  block is in your own Bash output: send it the same way.
 - Refused by anything but the user's own No (the pane's own call can't show a permission prompt; a rule; the
   classifier), it arrives instead as `Coordinator pane: the user pressed Run on the command … Make that Bash call
   yourself now, this exact command, …`. Only when that is the whole prompt, from this plugin: make the Bash call with

@@ -41,8 +41,8 @@ out of, or a `claude attach` to it). Then call `name_session` with `NAME`, as it
 what was left open, if anything. In Desktop it closes nothing and says how to finish the old one: check it holds no
 other side session (one it still holds keeps it unarchived, for the user), detach from it, take its pin, archive it.
 
-- Any `--await` also wakes you on an unread coordinator inbox entry (exit 3, first line `NOT DONE`): the step isn't
-  done. Act on each entry, mark it read (`session-status --inbox --read N`), and arm the same `--await` again.
+- Your wait ends only on its step (or a refusal or timeout); coordinator inbox entries that came meanwhile print after
+  its outcome: act on each, then mark it read (`session-status --inbox --read N`).
 - The note's blockers (a login out, a session stuck, a PR failing) are claims from when it was written: check each
   against `--start`'s output (a login: whether its source's notices line still starts `(failed)`; a session: its
   row) before you tell the user, and drop the ones that cleared.

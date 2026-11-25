@@ -194,9 +194,11 @@
 #                       --read moves one to its archive/ (the pane's Mark as read)
 #        session-status --approvals   the live approval answers clicked in this coordinator's pane (and its
 #                       predecessors'), with the hours left and the relays sent of each
-#        session-status --relay KEY [ACTION]   the approval block for KEY's newest live pane answer, verified as the
-#                       worker will verify it, to send as is once its Quote approves ACTION (none: the Action the
-#                       ask set, ending its answer; exit 1 with why when there's none, it is a No or the check fails)
+#        session-status --relay KEY [ACTION [--quote -]]   the approval block for KEY's newest live pane answer,
+#                       verified as the worker will verify it, to send as is once its Quote approves ACTION (none: the
+#                       Action the ask set, ending its answer; exit 1 with why when there's none, it is a No or the
+#                       check fails); a Yes that granted its action: the go note instead; --quote -: the user's own
+#                       words on stdin instead of a pane answer
 #        session-status --kind KIND[:S|M|L] [NAME [--anyway]]   `--model M --effort E` from plan.models.KIND for a task
 #                       start (a size moves the effort a step), logged as a usage start line (NAME, the -n session name,
 #                       hashed); ` --advisor A` too where config plan.advisor.KIND is set and pairs with the model. A

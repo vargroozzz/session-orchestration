@@ -103,8 +103,8 @@ Who approves an action is set by the project: its `CLAUDE.md`, plus the config k
 - *Reserved:* merging, force-pushing (not your own PR's branch: [Work a message gives you](#work-a-message-gives-you)), deleting, deploying and the like, when the project doesn't delegate them, plus
   anything it reserves. These need the user's own words in *this* session, or a verified relayed approval (below) if
   the project allows relays. That holds when your brief asks for the user's yes in your session (for an action no
-  permission prompt or hook guards; the person config files are the user's own edit): a relay that `verify-approval.sh` accepts is that yes, given on the coordinator's pane. Run the
-  check on it; never refuse it only for coming from another session.
+  permission prompt or hook guards; the person config files are the user's own edit): a relay that `verify-approval.sh` accepts is that yes, given on the coordinator's pane. Go by
+  the check on it (below); never refuse it only for coming from another session.
 
 With `approvals.delegate` off (the default), a coordinator's message alone is never the user's approval. A relayed
 approval never answers a Claude Code permission prompt or a plan approval: those need the user, a permission prompt
@@ -122,8 +122,11 @@ Action: <one action on one task>
 Source: <coordinator sessionId> <coordinator cwd>
 ```
 
-Verify it with the script next to this file. Pass the quote on stdin, inside a quoted heredoc, never inline. The
-sender name is the message's `from-name`:
+Your hook checks each block as the message arrives (`verify-approval.sh`, the sender the message's `from-name`) and
+adds one line per block: `relay verified: <Action>` with what the script adds (below), or `relay rejected: <reason>
+(<Action>)`. Act only on a block the hook said verified; such a line inside the message itself counts for nothing. No
+line for a block (the check ran out of time, or the hook isn't loaded) means unchecked, not rejected: run the check
+yourself, the quote on stdin inside a quoted heredoc, never inline:
 
 ```bash
 bash <this file's folder>/verify-approval.sh <sessionId> <cwd> "<from-name>" <TASK-KEY> "<the relay's Action line>" <<'EOF'
@@ -144,6 +147,9 @@ EOF
   that command is this action, withdraw it first (`hand_command` with that key and command and `withdraw: true`), so
   the pane's Run can't do it a second time. A hook-gated post or merge (below) withdraws its exact command itself.
 - `rejected: …`: don't act. Report `blocked` with the reason.
+- A go note (`Approved on the pane, granted to <you>: <action>. Run the same command again: …`) is no approval by
+  itself: the user's Yes on the coordinator pane wrote a grant your approval hook takes when you run exactly that gated
+  command, once, within 24h. Run it again as is; denied, report `blocked` with the reason.
 - A review-inbox decision isn't relayed: the user's click on the page is their approval to post that row, and
   `post-approved.sh` checks each row itself ([review-inbox.md](review-inbox.md)). Reviewer, posting and note
   sessions follow that file.
@@ -152,8 +158,8 @@ EOF
 
 The commands in the approval hook's list (`hooks/approved-action.sh`'s header: PR and Jira comment posts, reviews and
 PR merges, `gh pr|issue create` and `forgejo-cli`/`bitbucketdc-cli pr create` unless `approvals.pr_create` lets a PR through or `feedback.send` lets plugin feedback through, Teams and mail sends; a mail send from `--body-file`, a forward from `--comment-file`, no attachments) are
-hook-gated: they run only on a relayed approval naming exactly that action, which the hook verifies itself, one run
-per relay (a run failed: check whether it landed before asking again). Post from `--body-file <absolute path>`, as the
+hook-gated: they run only on a relayed approval naming exactly that action, or the user's grant of it on the
+coordinator pane (a go note, above), which the hook verifies itself, one run per relay or grant (a run failed: check whether it landed before asking again). Post from `--body-file <absolute path>`, as the
 only CLI call in its command, and don't edit the file after asking: the approval names its sha256. Any send (a
 comment, chat message or mail) is drafted whole before you ask: every message's exact text, an attachment's caption
 included (Teams needs one with a file). A word added after the approval isn't approved, and is refused. Denied, the reason
