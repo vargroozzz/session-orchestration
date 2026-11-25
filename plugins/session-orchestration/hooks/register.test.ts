@@ -535,8 +535,11 @@ test('the Answers section lists the folder\'s files; Mark as read archives one, 
   on('fs.list', async () => ({ value: [
     { name: '2026-11-25-why.md', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false },
     { name: 'archive', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false },
+    { name: '.draft.md', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false },
+    { name: 'gone.md', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false }, // its read fails: left out
   ] }))
   on('fs.read', async (_, e) => {
+    if (e.path === '/h/answers/.draft.md') return { value: 'Draft?\nreadable, but a dotfile' }
     if (e.path !== '/h/answers/2026-11-25-why.md') throw new Error('ENOENT')
     return { value: 'Why is the build slow?\nThe cache is cold.\nEvidence: CI log\nDate: 2026-11-25' }
   })
@@ -549,6 +552,8 @@ test('the Answers section lists the folder\'s files; Mark as read archives one, 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
   await ui.press({ key: 'refresh' })
   expect((await ui.find({ type: 'Button', key: 'answer-2026-11-25-why.md' }))?.text).toBe('Why is the build slow?')
+  expect(await ui.find({ type: 'Button', key: 'answer-.draft.md' })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', key: 'answer-gone.md' })).toBeUndefined()
   await ui.press({ key: 'answer-2026-11-25-why.md' })
   expect((await ui.find({ type: 'Markdown', key: 'answermd-2026-11-25-why.md' }))?.props.text).toBe('The cache is cold.\nEvidence: CI log\nDate: 2026-11-25')
   await ui.press({ key: 'act-k' })
