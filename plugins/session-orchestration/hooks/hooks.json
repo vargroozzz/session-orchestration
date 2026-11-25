@@ -43,7 +43,7 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/blocked.sh\" request",
-            "timeout": 10
+            "timeout": 1830
           }
         ]
       }

@@ -6,7 +6,7 @@ says `needs your approval: …`; and on an `Approval pane answer for …` prompt
 
 When the project delegates approvals to you (`session-status --config approvals.delegate` prints `true`), decide and
 give the go yourself, and ask the user only for what its `CLAUDE.md` reserves. A relayed approval never answers a Claude Code permission prompt or a plan
-approval: those need the user in that session (`claude attach <id>`).
+approval: those need the user, on its pane card (Allow this call) or in that session (`claude attach <id>`).
 
 ## The relay block
 

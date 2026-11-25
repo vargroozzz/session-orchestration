@@ -1,7 +1,7 @@
 import type { On, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HIDDEN_BY_MARKDOWN, answerText, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, USAGE_SECTIONS, usageName, GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, SENT, REPORT_PAGES, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf, sectionSlug, sectionState, parseSections, nativePath } from './register'
+import { HIDDEN_BY_MARKDOWN, answerText, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, USAGE_SECTIONS, usageName, GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, SENT, REPORT_PAGES, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf, sectionSlug, sectionState, parseSections, nativePath, permOf } from './register'
 
 test('status rows parse whatever the columns hold', async () => {
   const pad = (k: string, st: string) => `${k.padEnd(9)} ${st.padEnd(14)} `
@@ -464,6 +464,50 @@ test('a selected task shows its details and actions: attach, links, refresh, ask
   expect((await ui.find({ type: 'Button', key: 'task-PROJ-4157:lead' }))?.text).toBe(' '.repeat(15)) // other rows stay
   await ui.press({ key: 'task-PROJ-4679' }) // pressed again: deselected
   expect(await ui.find({ type: 'Button', key: 'act-u' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a waiting session\'s card offers Allow this call while blocked.sh waits; the press writes the grant for that call', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  sweep(on)
+  mock.env(on, { HOME: '/h' })
+  const blocked = '/h/.cache/session-status/blocked'
+  const hash = 'a1'.repeat(32)
+  const rec = { tool: 'Bash', call: 'touch x', hash, until: 900 } // its wait ended at 900 s, before now
+  const grant = `/h/.cache/session-status/grants/61c8fb76-aaaa.${hash}`
+  on('fs.exists', async (_, e) => ({ value: e.path === blocked })) // the grant: gone, taken by the hook
+  on('fs.list', async () => ({ value: [{ name: '61c8fb76-aaaa.json', kind: 'file' as const, size: 1, mtimeMs: 990_000, isLink: false }] }))
+  on('fs.read', async (_, e) => {
+    if (e.path !== `${blocked}/61c8fb76-aaaa.json`) throw new Error('ENOENT')
+    return { value: JSON.stringify(rec) }
+  })
+  const wrote: { path: string; text: string }[] = []
+  on('fs.write', async (_, e) => {
+    wrote.push({ path: e.path, text: e.text })
+    return { value: undefined }
+  })
+  const toasts: string[] = []
+  on('ui.toast', async (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'wait-61c8fb76' })
+  expect(await ui.find({ type: 'Button', key: 'act-a' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'act-h' })).toBeUndefined() // past its wait: the tab only
+  rec.until = 2000
+  await ui.press({ key: 'refresh' })
+  expect((await ui.find({ type: 'Button', key: 'act-h' }))?.text).toMatch(/Allow this call/)
+  expect(await ui.find({ type: 'Text', text: 'Allow this call runs exactly: Bash touch x' })).toBeDefined()
+  const pressed = ui.press({ key: 'act-h' })
+  for (let i = 0; i < 200 && !wrote.some(w => w.path === grant); i++) await clock.settle()
+  expect(JSON.parse(wrote.find(w => w.path === grant)?.text ?? '{}')).toEqual({ kind: 'permission', session: '61c8fb76-aaaa', sha256: hash, at: 1000, tool: 'Bash', call: 'touch x' })
+  await clock.advance(1000)
+  await pressed
+  expect(toasts).toEqual(['Allowed: Bash runs in "pr review proj-4679"'])
+  expect(permOf('61c8fb76-aaaa', JSON.stringify({ ...rec, call: 'touch\u200bx' }))).toBeUndefined() // drawn as "touchx"
   await ui.unmount()
 })
 

@@ -32,6 +32,9 @@ export type Handed = {
   id: string; key: string; session: string; cwd: string; account: string; command: string; what: string; at: number
   running?: true; outcome?: string
 }
+// A permission prompt hooks/blocked.sh request waits on for the pane's Allow this call, from
+// ~/.cache/session-status/blocked/<sid>.json: the tool, the call as shown, its sha256 and when the wait ends (epoch s).
+export type Perm = { sid: string; tool: string; call: string; hash: string; until: number }
 
 // A pane section's state (config pane.sections): open, its rows; line, its title alone; hidden, named in the pane's
 // last line.
@@ -81,6 +84,8 @@ declare module 'claude-code' {
       // The commands sessions handed the user (hand_command), read from their files each minute; the last Run's result.
       handed: Handed[]
       handedResult: ActionResult | null
+      // The permission prompts whose card offers Allow this call, read each minute.
+      perms: Perm[]
       // The configured terminal (session-status --config terminal), read each sweep: plain shows no tab or split.
       terminal: string
       // The review inbox open_pane watched in this session: a reopen doesn't watch it again (or repeat its line).

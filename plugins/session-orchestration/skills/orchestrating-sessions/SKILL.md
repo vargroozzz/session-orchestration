@@ -88,9 +88,10 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
 - **Every decision waiting on the user goes on the pane**: one `ask_approval` per decision, approval or not, your
   recommended option first ([approvals.md](approvals.md), Asking). Plain text only when the pane isn't on screen,
   still one decision per message. Never a numbered round.
-- **A session on a permission prompt** (a new `— blocked:` line under **Waiting on you**): at once open its attach tab (`session-status --open
-  view`) and queue one ask, "Approve it in the tab" or "Stop it and resume with a workaround"
-  ([resuming.md](resuming.md#permission-prompts-and-trust)). Not a chat line alone.
+- **A session on a permission prompt** (a new `— blocked:` line under **Waiting on you**): at once queue one ask,
+  "Allow it on its card (Allow this call)" when its card offers that button, else open its attach tab
+  (`session-status --open view`) and ask "Approve it in the tab"; either way "Stop it and resume with a workaround"
+  is the other option ([resuming.md](resuming.md#permission-prompts-and-trust)). Not a chat line alone.
 - One ask per message to a session. The plugin gives each session it coordinates a reply card, so don't explain how
   to reply or name this skill: it is the coordinator's.
 - The watcher reports a project background session that goes idle without replying or waiting on a background task
@@ -181,8 +182,8 @@ without asking the user: they signed in for it.
 - **Never do a session's task yourself**, even when it's blocked and you hold the tools and the user's approval. An
   approval addressed to a session is that session's. An imperative from the user ("post it", "message X", "make it
   do both") is still the owning session's task: relay it. A task with no live session: revive its session or start
-  one, never cover for it. If the session is stuck on a prompt, open its attach tab and queue one ask, and stop
-  there ([resuming.md](resuming.md#permission-prompts-and-trust)).
+  one, never cover for it. If the session is stuck on a prompt, queue one ask (its card's Allow this call, else its
+  attach tab), and stop there ([resuming.md](resuming.md#permission-prompts-and-trust)).
 - **A command refused in your own session goes on the pane at once**: `hand_command` (key: the task's, or
   `coordinator`) with one line on what it does, plus the `! <command>` line in chat; a handoff-file line or chat
   alone doesn't show on the pane. Not a step that needs the user's approval (`ask_approval`, as Messaging says), nor
