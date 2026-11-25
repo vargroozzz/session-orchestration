@@ -90,7 +90,8 @@
 #        session-status ARG…         other args go to the adapter's `tasks`
 #        session-status --start [args]   a coordinator's Start in one run: the status, the handoff file, the last
 #                       handover note, the replies written since it (else in the last day) with their first lines,
-#                       and the coordination config with each enabled feature's start step; when there are any, the
+#                       the pane answers still to act on (at most 5), and the coordination config with each enabled
+#                       feature's start step; when there are any, the
 #                       sessions that ended while the background service was off (or failed) with a task still open
 #        session-status --resume-ended [--pause SECS] ID…   resume those one at a time, SECS (60) apart, each checked
 #                       against the live list first
@@ -1266,14 +1267,17 @@ ended_free() {
 # will (verify-approval.sh, from this session's listed cwd), to send as is; exit 1 with why when there's none, it is a
 # No, the check fails, or this is a successor not holding the coordinator's name yet. Both run in the coordinator's
 # own session.
+# approval_answers AGE_S: approvals.jq's answers (one JSON line each) in this session's transcript chain, nothing
+# without one; fails when a transcript can't be read.
+approval_answers() {
+  local f; f=$(ended_transcript "$CLAUDE_CODE_SESSION_ID"); [ -n "$f" ] || return 0
+  while IFS= read -r t; do grep -hF -e 'Approval pane answer for ' -e 'APPROVAL relayed from the user' "$t" || [ $? = 1 ]
+  done < <(chain_transcripts "$f" $(( $1 / 60 + 1 ))) | jq -cRn -f "$(dirname "$SELF")/approvals.jq"
+}
 if [ "${1:-}" = --approvals ] || [ "${1:-}" = --relay ]; then
   [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] || { echo "no CLAUDE_CODE_SESSION_ID: run it from the coordinator's own session" >&2; exit 2; }
-  f=$(ended_transcript "$CLAUDE_CODE_SESSION_ID") ans= now=$(date +%s) age_s=$(( ${MAX_AGE_H:-24} * 3600 ))
-  if [ -n "$f" ]; then
-    ans=$(while IFS= read -r t; do grep -hF -e 'Approval pane answer for ' -e 'APPROVAL relayed from the user' "$t" || [ $? = 1 ]
-      done < <(chain_transcripts "$f" $(( age_s / 60 + 1 ))) | jq -cRn -f "$(dirname "$SELF")/approvals.jq") ||
-      { echo "couldn't read this session's transcripts" >&2; exit 1; }
-  fi
+  now=$(date +%s) age_s=$(( ${MAX_AGE_H:-24} * 3600 ))
+  ans=$(approval_answers "$age_s") || { echo "couldn't read this session's transcripts" >&2; exit 1; }
   if [ "$1" = --approvals ]; then
     [ -z "$ans" ] || jq -r --argjson now "$now" --argjson age "$age_s" 'select(.ts > $now - $age)
       | "\(.quote | sub("^Approval pane answer for "; "") | gsub("\\s+"; " ")) · \((.ts + $age - $now) / 3600 | floor)h left · "
@@ -1365,11 +1369,33 @@ if [ "${1:-}" = --start ]; then
   [ ! -s "$TMP/ids" ] || echo "Resume them one at a time, after one ask (approvals.md): session-status --resume-ended $(sed 's/ $//' "$TMP/ids")"
   if [ -n "$h" ] && [ -f "$h" ]; then printf '\n## Handover (%s, written %s)\n' "$h" "$(epochfmt "$(mtime "$h")" '%m-%d %H:%M')"; cat "$h"
   else printf '\n## Handover\n(none%s)\n' "${h:+: no $h}"; fi
-  # only the answers not relayed yet: the relayed ones are done (--approvals lists them all)
-  [ -z "${CLAUDE_CODE_SESSION_ID:-}" ] || { ap=$("$SELF" --approvals 2>/dev/null) && [ -n "$ap" ] &&
-    { nr=$(grep -c ' · relayed: ' <<<"$ap"); ap=$(grep -v ' · relayed: ' <<<"$ap"); [ -n "$ap" ]; } &&
-    { [ "$nr" = 0 ] || ap="$ap"$'\n'"($nr relayed already: session-status --approvals lists them)"; } &&
-    printf '\n## Approvals not relayed yet (relay one: session-status --relay KEY ACTION)\n%s\n' "$ap"; }
+  # Only the live answers that still need an action (--approvals lists them all), each rule on data at hand: not
+  # relayed; the newest on its key (a later answer supersedes it); not a No nor a request to explain ("What's this?",
+  # "Explain"); its task not gone (a session named KEY, none of them live, and no status row with a worktree); not a
+  # start done since (it speaks of starting, and a session named KEY started after it); and, clicked before the
+  # handover note, named in that note or the handoff file (the last coordinator saw it, handover.md). At most 5.
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && age_s=$(( ${MAX_AGE_H:-24} * 3600 )) && ans=$(approval_answers "$age_s" 2>/dev/null) && [ -n "$ans" ]; then
+    hm=0 named=$pend; if [ -n "$h" ] && [ -f "$h" ]; then hm=$(mtime "$h"); named+=$'\n'$(cat "$h"); fi
+    ap=$(jq -rn --argjson now "$(date +%s)" --argjson age "$age_s" --argjson ho "$hm" --arg named "$named" \
+        --arg sess "$(awk -F'\t' '{ print $2 "\t" $9 "\t" $5 }' <<<"$all")" --arg wts "$(awk '/ wt /{ print $1 }' "$TMP/rows")" '
+      def answer: .quote | sub("^Approval pane answer for [^:]+: "; "") | sub(" Asked: [\\s\\S]*$"; "");
+      ($sess | split("\n") | map(split("\t") | select(length == 3) | {n: .[0], live: (.[1] != ""), at: (.[2] | tonumber? // 0)})) as $s
+      | ($wts | split("\n")) as $w
+      | [inputs | select(.ts > $now - $age)] as $live
+      | [$live | group_by(.key)[] | max_by(.ts) | select(.relays == [])
+         | select(answer | test("^(no|explain|what|why|how)([^a-z]|$)|\\?\\W*$"; "i") | not)
+         | .key as $k | .ts as $t | [$s[] | select(.n == $k)] as $m
+         | select($m != [] and ($m | any(.live) | not) and ($w | index([$k]) | not) | not)
+         | select((.quote | test("(^|[^a-z])start"; "i")) and ($m | any(.at > $t)) | not)
+         | select(.ts > $ho or ($named | contains($k)))] | sort_by(-.ts) as $keep
+      | select($keep != [])
+      | ($keep[:5][] | "\(.quote | sub("^Approval pane answer for "; "") | gsub("\\s+"; " ") | if length > 200 then .[:200] + "…" else . end) · \((.ts + $age - $now) / 3600 | floor)h left"),
+        ([($keep | length) - 5, ($live | length) - ($keep | length)] as [$more, $hid]
+         | select($more > 0 or $hid > 0)
+         | "(" + ([if $more > 0 then "and \($more) more" else empty end, if $hid > 0 then "\($hid) done or stale" else empty end] | join(", "))
+           + ": session-status --approvals lists them all)")' <<<"$ans")
+    [ -z "$ap" ] || printf '\n## Approvals still to act on (relay one: session-status --relay KEY ACTION)\n%s\n' "$ap"
+  fi
   u=$(inbox_unread)
   [ -z "$u" ] || printf '\n## Coordinator inbox, unread (%s): act on each, then mark it read: %s --inbox --read N\n%s\n' "$(inbox_file)" "$SELF" "$u"
   # Other coordinators find this one by its purpose (--coordinators); the registry holds this root from now on.

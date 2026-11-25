@@ -8,8 +8,9 @@ and as a successor (your first prompt says `You succeed "NAME"`). The status com
 ## The old coordinator
 
 Overwrite `<replies>/coordinator-handover.md` with the state that's in no file: live sessions worth knowing and what
-each waits on, and why the restart. Pane asks and their answers carry over by themselves: your successor's `--start`
-lists the answers to relay ([approvals.md](approvals.md#the-relay-block)). An approval the user gave you in chat or
+each waits on, and why the restart. Pane asks and their answers carry over by themselves, but your successor's `--start`
+lists an answer clicked before your note only when the note or the handoff file names its key: name each one you
+haven't acted on yet ([approvals.md](approvals.md#the-relay-block)). An approval the user gave you in chat or
 the question box that a session will still need: ask it again on the pane first. No rules and no files to read: the next
 coordinator's Start reads those, and each restated rule is re-sent on its every wake. Then start your successor:
 

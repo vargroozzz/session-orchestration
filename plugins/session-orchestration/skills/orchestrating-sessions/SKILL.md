@@ -34,7 +34,7 @@ Every coordinator session, before anything else; the user shouldn't have to ask.
 3. When `--start` finishes (its completion notice; don't poll it), read its output: the status, the handoff file,
    the last handover note, the replies written since, and one line per enabled feature. Its status is bounded (at
    most 5 Leftovers and 5 Other sessions lines; the plain status command shows them all), and its approvals are
-   only the ones not relayed yet (`session-status --approvals` lists every live one). Then:
+   only the ones still to act on, at most 5 (`session-status --approvals` lists every live one). Then:
    - do each feature line's start step, and whatever the project's coordinator doc adds;
    - prune the handoff file against the status (Handoff file);
    - act on each unread coordinator inbox entry it lists, then mark it read (`session-status --inbox --read N`);

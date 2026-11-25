@@ -25,7 +25,7 @@ once its Quote approves ACTION. The auto-mode classifier may refuse the call (it
 act): don't reword it or call it again unasked, `hand_command` it (key KEY) so the user's Run press is the consent; the
 Run's outcome brings the block whole ([pane.md](pane.md), Handed-over commands, which also says what to do when the
 Run is refused). `session-status --approvals` lists the live pane answers with the hours left and
-their relays, and `--start` shows them. A typed or question-box answer's block you write yourself, with your
+their relays, and `--start` shows those still to act on. A typed or question-box answer's block you write yourself, with your
 `sessionId`, `cwd` and name: your entry in `claude agents --json`, matched on the name `ListAgents` shows for you
 right now (names change when a session is resumed). The session checks the block with `verify-approval.sh`
 ([worker.md](worker.md), Relayed approvals). Its checks decide what you can relay: the Quote must be words the user

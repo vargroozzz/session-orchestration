@@ -3140,7 +3140,8 @@ ABC-11: Yes, merge ABC-11. Asked: Merge PR #5? · 21h left · not relayed
 ABC-11: No. Asked: Merge PR #5? · 20h left · not relayed
 ABC-31: Yes. Asked: Push ABC-31? · 19h left · relayed: push ABC-31 to w3'
 [ "$(ap --approvals)" = "$want" ] || { echo "--approvals: $(ap --approvals)"; exit 1; }
-out=$(ap --start) || :; [[ $out == *$'\n## Approvals not relayed yet (relay one: session-status --relay KEY ACTION)\n'"$(grep -v ' · relayed: ' <<<"$want")"$'\n(2 relayed already: session-status --approvals lists them)\n'* ]] ||
+# --start: only the newest answer on a key, not relayed
+out=$(ap --start) || :; [[ $out == *$'\n## Approvals still to act on (relay one: session-status --relay KEY ACTION)\nABC-11: Yes, merge ABC-11. Asked: Merge PR #5? · 21h left\n(3 done or stale: session-status --approvals lists them all)\n'* ]] ||
   { echo "--start, approvals: $out"; exit 1; }
 # The newest live answer, an answer in the predecessor: verified, then relayed as is.
 out=$(ap --relay ABC-11 'merge PR #5' 2>"$tmp/err") && [ "$out" = "$(blk 'ABC-11: Yes, merge ABC-11. Asked: Merge PR #5?' 'merge PR #5' "$cid")" ] &&
@@ -3198,6 +3199,31 @@ rc=0; out=$(ap --relay ABC-11 x 2>&1) || rc=$?
 mkdir -p "$tmp/.cache/session-status/handover" && echo "$cid" > "$tmp/.cache/session-status/handover/coord.next"
 for n in coord-next Coordinator; do stub "$n"; rc=0; out=$(ap --relay ABC-11 x 2>&1) || rc=$?
   [ $rc = 1 ] && [[ $out == *"name yet (coord-next)"* ]] || { echo "--relay as $n: $rc $out"; exit 1; }; done
+# --start's trim, each rule: hidden an explain request (ABC-40), a task gone (ABC-41: its session ended, no worktree),
+# a start done since (ABC-42: its session started after the answer), one clicked before the handover note and not
+# named in it (ABC-43), the newest a No (ABC-11); kept a start whose session is older (ABC-44), one before the note
+# but named in it (ABC-45); at most 5, then the counts.
+rm "$tmp/.cache/session-status/handover/coord.next"
+s() { sess "$1" "$2" idle "$3" | jq -c --argjson h "$4" '.startedAt = ((now - $h * 3600) * 1000 | floor)'; }
+printf '#!/bin/sh\necho %s\n' "'[$(sess "$cid" coord idle 4242 interactive),$(s 41414141-0000-0000-0000-000000000000 ABC-41 null 5),$(s 42424242-0000-0000-0000-000000000000 ABC-42 4243 0.5),$(s 44444444-0000-0000-0000-000000000000 ABC-44 4244 2)]'" > "$tmp/bin/claude"
+{ pane 1 'ABC-40: Explain. Asked: Deploy ABC-40?'; pane 1 'ABC-41: Yes, remove its worktree. Asked: Remove the ABC-41 worktree?'
+  pane 1 'ABC-42: Yes, start it. Asked: Start ABC-42?'; pane 3 'ABC-43: Yes. Asked: Deploy ABC-43?'
+  pane 1 'ABC-44: Yes, start it. Asked: Start ABC-44?'; pane 3 'ABC-45: Yes. Asked: Deploy ABC-45?'
+  for i in 0 1 2 3 4; do pane "0.$(( i + 5 ))" "ABC-5$i: Yes. Asked: Push ABC-5$i?"; done; } >> "$proj/$cid.jsonl"
+mkdir -p "$tmp/replies"; echo "Replies folder: \`$tmp/replies\`" > "$root/CLAUDE.local.md"
+echo 'ABC-45 waits on its deploy' > "$tmp/replies/coordinator-handover.md"
+touch -t "$(jq -nr 'now - 2.75 * 3600 | strflocaltime("%Y%m%d%H%M")')" "$tmp/replies/coordinator-handover.md"
+out=$(ap --start) || :
+want='## Approvals still to act on (relay one: session-status --relay KEY ACTION)
+ABC-50: Yes. Asked: Push ABC-50? · 23h left
+ABC-51: Yes. Asked: Push ABC-51? · 23h left
+ABC-52: Yes. Asked: Push ABC-52? · 23h left
+ABC-53: Yes. Asked: Push ABC-53? · 23h left
+ABC-54: Yes. Asked: Push ABC-54? · 23h left
+(and 2 more, 9 done or stale: session-status --approvals lists them all)'
+[ "$(sed -n '/^## Approvals/,/^$/p' <<<"$out" | sed '/^$/d')" = "$want" ] && [ "$(ap --approvals | grep -c 'ABC-4[0-5]')" = 6 ] ||
+  { echo "--start, trimmed approvals: $out"; exit 1; }
+rm -r "$tmp/replies" "$root/CLAUDE.local.md"
 fi
 
 if section idle; then
