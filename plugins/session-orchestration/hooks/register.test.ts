@@ -290,6 +290,57 @@ test('an ask answered in the user\'s own words submits them as the answer', asyn
   expect(await again.find({ type: 'Button', text: 'Yes' })).toBeDefined()
 })
 
+test('a Yes click on an ask with action and session writes its grant before the answer; a No, typed words or a dropped answer leave none', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  mock.env(on, { HOME: '/h' })
+  const order: string[] = []
+  let drop = ''
+  on('prompt.submit', async (_, e) => {
+    if (drop) return { drop }
+    order.push(`submit ${e.text}`)
+    return { text: e.text }
+  })
+  on('process.run', async (_, e) => {
+    if (e.argv.includes('rm -f "$@"')) order.push(`rm ${e.argv.at(-1) ?? ''}`)
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('fs.write', async (_, e) => {
+    if (e.path.includes('/grants/')) order.push(`grant ${e.path} ${e.text}`)
+    return { value: undefined }
+  })
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  let said = ''
+  on('tool.call', { tool: 'AskUserQuestion' }, async (_, e) => ({ result: { questions: e.questions, answers: Object.fromEntries(e.questions.map(q => [q.question, said])) } }))
+  const ask = (key: string, extra = {}) => $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key, question: `Land ${key}?`, options: ['Yes, merge it', 'No'], action: `merge acme/app#2 (${key})`, ...extra })
+  expect((await ask('PROJ-0', { session: 'a b' })).deny).toMatch(/session goes with action/)
+  expect((await $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-0', question: 'q', options: ['Yes', 'No'], session: 'PROJ-0' })).deny).toMatch(/session goes with action/)
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  // one ask waiting at a time, as the single-ask test answers it
+  const click = async (key: string, button: string, extra = {}) => {
+    await ask(key, extra)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+    await ui.press({ key: button })
+    await ui.unmount()
+  }
+  await click('PROJ-1', 'ask-1-0', { session: 'PROJ-1-fix' })
+  const quote = 'Approval pane answer for PROJ-1: Yes, merge it. Asked: Land PROJ-1? Action: merge acme/app#2 (PROJ-1)'
+  expect(order).toEqual([
+    `grant /h/.cache/session-status/grants/act-1-1000.json ${JSON.stringify({ kind: 'action', session: 'PROJ-1-fix', key: 'PROJ-1', action: 'merge acme/app#2 (PROJ-1)', quote, at: 1000 })}`,
+    `submit ${quote}`,
+  ])
+  order.length = 0
+  await click('PROJ-2', 'ask-2-1', { session: 'PROJ-2-fix' }) // No
+  said = 'yes, but only after CI' // typed words, though they start with yes
+  await click('PROJ-3', 'ask-3-words', { session: 'PROJ-3-fix' })
+  await click('PROJ-4', 'ask-4-0') // no session: no grant
+  expect(order.filter(o => !o.startsWith('submit '))).toEqual([])
+  expect(order).toHaveLength(3)
+  order.length = 0
+  drop = 'busy'
+  await click('PROJ-5', 'ask-5-0', { session: '0a0a0a0a' })
+  expect(order).toEqual([expect.stringMatching(/^grant \/h\/.cache\/session-status\/grants\/act-5-1000\.json /), 'rm /h/.cache/session-status/grants/act-5-1000.json'])
+})
+
 const STATUS = `PROJ-4157  Code Review    app#76 OPEN no-human-approval  | wt dirty:0 unpushed:0 | sess:— | Race to settle
 PROJ-4679  In Development app#236 OPEN CONFLICT  | wt dirty:2 unpushed:1 | sess:"pr review proj-4679" blocked | Decisive automap
 PROJ-4842  Code Review    app#258 OPEN  | no-wt | sess:e9d81c83 closed 26h | Extend settler
