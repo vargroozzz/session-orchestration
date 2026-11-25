@@ -1971,7 +1971,7 @@ if [ "${1:-}" = --changes ]; then
           (x ~ /(^|,)!/ || (x == "changes" && w[i + 1] == "requested")) ? "changes-requested" : ""
         if (e == "") continue
         emit(pr " " e (e == "changes-requested" ? "" : " " sha), sprintf("%s %s @%s (%s)", pr, e, sha, $1),
-          sprintf("PR %s (%s): %s on %s. Fix it and push; force-push, post or merge only with the usual approval. Reply when pushed, or blocked.", pr, $1, e, sha), first) }
+          sprintf("PR %s (%s): %s on %s. Fix it and push (force-push only the branch of your own open PR, as worker.md says); post or merge only with the usual approval. Reply when pushed, or blocked.", pr, $1, e, sha), first) }
       prs = ""; for (j = 1; j <= np; j++) prs = prs (j > 1 ? "," : "") ps[j]
       if (np && nm == np) emit($1 " all-merged " prs, sprintf("%s all-merged (%s, %s)", prs, $1, $6),
         sprintf("%s (%s): all merged, and the task is still %s. Unless you already have: deploy per the project doc (a deploy only with the usual approval), then move the task on if nothing blocks. Reply when done, or blocked.", prs, $1, $6), firstm) }

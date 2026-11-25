@@ -506,7 +506,7 @@ echo 'app#1 OPEN CI-FAILED | ' > "$tmp/prs"; out=$(run --changes)
 grep -qxF "$(pev ci-failed -)" <<<"$out" && git init -q --bare "$tmp/origin.git" && git -C "$root/wt" remote add origin "$tmp/origin.git" &&
   git -C "$root/wt" push -q -u origin feature/ABC-12-fix && out=$(run --changes) && grep -qxF "$(pev ci-failed)" <<<"$out" &&
   [ "$(run --changes)" = "no changes" ] && commit && [ "$(run --changes | grep -c '^  \* ')" = 0 ] && git -C "$root/wt" push -q &&
-  [ "$(SESSION_STATUS_PEEK=1 run --changes | sed -n '/^PR events/,$p')" = "$(printf 'PR events (send each owner the nudge under it, sessions.md):\n%s\n    nudge: PR app#1 (ABC-12): ci-failed on %s. Fix it and push; force-push, post or merge only with the usual approval. Reply when pushed, or blocked.' "$(pev ci-failed)" "$(git -C "$root/wt" rev-parse --short=12 '@{u}')")" ] &&
+  [ "$(SESSION_STATUS_PEEK=1 run --changes | sed -n '/^PR events/,$p')" = "$(printf 'PR events (send each owner the nudge under it, sessions.md):\n%s\n    nudge: PR app#1 (ABC-12): ci-failed on %s. Fix it and push (force-push only the branch of your own open PR, as worker.md says); post or merge only with the usual approval. Reply when pushed, or blocked.' "$(pev ci-failed)" "$(git -C "$root/wt" rev-parse --short=12 '@{u}')")" ] &&
   [ "$(run --changes | tail -2 | head -1)" = "$(pev ci-failed)" ] && [ "$(run --changes)" = "no changes" ] &&
   echo 'app#1 OPEN CI-FAILED !bob | ' > "$tmp/prs" && [ "$(run --changes | grep -c '^  \* app#1')" = 1 ] && push &&
   [ "$(run --changes | grep '^  \* app#1')" = "$(pev ci-failed)" ] &&
