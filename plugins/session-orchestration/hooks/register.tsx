@@ -1318,18 +1318,21 @@ export const explainText = (a: Answer, path: string) =>
   `Coordinator pane: the user wants your answer to ${JSON.stringify(a.question)} explained more fully. Rewrite ${path} in place with the expanded answer (same format: the question line, the answer, Evidence:, Date:), checking what you're unsure of; then say in one line that it's on the pane.`
 // session-status --answers' folder, '' while features.answers is off; read each sweep.
 let answersDir = ''
-// Its newest 50 .md files; a file whose name and mtime are unchanged isn't read again.
+// Its newest 50 .md files (no dotfile: --read refuses one); a file whose name and mtime are unchanged isn't read
+// again, and one that can't be read (marked read meanwhile) is left out until a later read works.
 async function loadAnswers($: EngineInterface) {
   if (!timer) return // a worker draws no pane
   const dir = answersDir
   const files = dir && (await $.fs.exists(dir))
-    ? (await $.fs.list(dir)).filter(f => f.kind === 'file' && f.name.endsWith('.md')).sort((x, y) => y.mtimeMs - x.mtimeMs).slice(0, 50) : []
+    ? (await $.fs.list(dir)).filter(f => f.kind === 'file' && f.name.endsWith('.md') && !f.name.startsWith('.')).sort((x, y) => y.mtimeMs - x.mtimeMs).slice(0, 50) : []
   const prev = new Map((await read($, answers)).map(a => [a.name, a]))
   const found = await Promise.all(files.map(async f => {
     const p = prev.get(f.name)
-    return p?.at === f.mtimeMs ? p : parseAnswer(f.name, String(await $.fs.read(`${dir}/${f.name}`).catch(() => '')), f.mtimeMs)
+    if (p?.at === f.mtimeMs) return p
+    const text = await $.fs.read(`${dir}/${f.name}`).catch(() => undefined)
+    return text === undefined ? undefined : parseAnswer(f.name, String(text), f.mtimeMs)
   }))
-  await update($, answers, () => found)
+  await update($, answers, () => found.filter((a): a is Answer => !!a))
 }
 // context-watch.sh's stamps, ${XDG_CACHE_HOME:-$HOME/.cache}/session-status: an empty XDG_CACHE_HOME is unset there (||).
 const stampDir = async ($: EngineInterface) => `${(await $.env.get('XDG_CACHE_HOME').catch(() => undefined)) ||

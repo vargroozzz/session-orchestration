@@ -286,9 +286,11 @@ if [ "${1:-}" = --answers ]; then
   d=$(proj_dir)/answers
   [ $# != 1 ] || { mkdir -p "$d" && echo "$d"; exit; }
   [ $# = 3 ] && [ "$2" = --read ] || { echo "usage: session-status --answers [--read NAME.md]" >&2; exit 2; }
-  [[ $3 =~ ^[A-Za-z0-9._-]+\.md$ ]] && [ -f "$d/$3" ] || { echo "--answers --read: no answer $3 in $(tilde "$d")" >&2; exit 2; }
+  # Any name the pane lists (a .md file not starting with "."), but no path.
+  [[ $3 == ?*.md && $3 != */* && $3 != .* ]] && [ -f "$d/$3" ] || { echo "--answers --read: no answer $3 in $(tilde "$d")" >&2; exit 2; }
   t=$d/archive/$3; [ ! -e "$t" ] || t=$d/archive/${3%.md}-$(date +%s).md
-  mkdir -p "$d/archive" && mv "$d/$3" "$t" && echo "archived $3"; exit
+  # -n and the check: a second press in the same second (another pane) leaves its file, never overwrites the first's.
+  mkdir -p "$d/archive" && mv -n "$d/$3" "$t" && [ ! -e "$d/$3" ] && echo "archived $3"; exit
 fi
 # --land TARGET: fast-forward branch TARGET to HEAD where TARGET is checked out in another worktree (a project that
 # lands by fast-forwarding its main checkout's branch), from a worktree-isolated session: git refuses a plain

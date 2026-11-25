@@ -3757,8 +3757,11 @@ printf 'Why?\nAgain.\n' > "$ad/2026-11-25-why.md"
 o=$(run --start 2>/dev/null); [[ $o == *$'\n## Answers (features.answers)\n1 unread on the pane; '*"$ad/"* ]] || { echo "--start, on: $o"; exit 1; }
 [ "$(run --answers --read 2026-11-25-why.md)" = 'archived 2026-11-25-why.md' ] && [ "$(cat "$ad/archive/2026-11-25-why.md")" = $'Why?\nBecause.' ] &&
   [ "$(ls "$ad/archive" | grep -c '^2026-11-25-why-[0-9]*\.md$')" = 1 ] || { echo "--read, a taken name: $(ls "$ad/archive")"; exit 1; }
-touch "$ad/../x.md" "$ad/x.txt"
-for n in ../x.md x.txt missing.md; do rc=0; run --answers --read "$n" >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--read $n: rc=$rc"; exit 1; }; done
+printf 'Q\nA\n' > "$ad/why it's slow.md"   # any name the pane lists
+[ "$(run --answers --read "why it's slow.md")" = "archived why it's slow.md" ] && [ -f "$ad/archive/why it's slow.md" ] ||
+  { echo "--read, a name with a space: $(ls "$ad/archive")"; exit 1; }
+touch "$ad/../x.md" "$ad/x.txt" "$ad/.x.md"
+for n in ../x.md x.txt .x.md missing.md; do rc=0; run --answers --read "$n" >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--read $n: rc=$rc"; exit 1; }; done
 rc=0; run --answers --read >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--read, no name: rc=$rc"; exit 1; }
 fi
 if section reported-done; then
