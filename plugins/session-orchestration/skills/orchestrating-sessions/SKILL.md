@@ -51,8 +51,9 @@ Waking a session makes it re-read its whole context, often hundreds of thousands
    - **Stale**: queued asks and handoff entries whose facts moved on. Cancel, reword or archive them on the user's
      word, never on your own; `session-status --stale` lists them alone.
    - Every other footer line names its own step or doc; a line that asks (`— apply?`, `— start it?`) goes to the
-     user, and its step runs only on their yes. A Notices line the user calls handled: `session-status --dismiss
-     "LINE"`, which hides it for every session; don't pass it on again.
+     user, and its step runs only on their yes. A messages module's Notices line: act on it per that module's doc
+     (its feature line names it); one the user calls handled: `session-status --dismiss "LINE"`, which hides it for
+     every session; don't pass it on again.
 2. Message a session only to give it work, or for something only it knows. `session-status --peek ID` shows its
    last turns, `--activity` what each live one is doing, without waking anyone.
 3. Never `claude -p --resume` an old session just to ask for status.
@@ -151,7 +152,7 @@ user's call: ask before removing it.
   attach tab), and stop there ([resuming.md](resuming.md#permission-prompts-and-trust)).
 - **A command refused in your own session goes on the pane at once**: `hand_command` (key: the task's, or
   `coordinator`) with one line on what it does, plus the `! <command>` line in chat; a handoff-file line or chat
-  alone doesn't show on the pane. Not a step that needs the user's approval (`ask_approval`, as Messaging says), nor
+  alone doesn't show on the pane. Not a step that needs the user's approval (`ask_approval`, [approvals.md](approvals.md), Asking), nor
   one the pane has as an action button.
 - **In Claude Code Desktop too, a task starts with `claude --bg`, never as a sidebar session** (`start_session`):
   the status, the watcher and `--stop` see only `claude --bg` sessions. The one sidebar session you start is your

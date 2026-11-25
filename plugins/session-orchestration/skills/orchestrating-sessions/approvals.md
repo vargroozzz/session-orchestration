@@ -130,7 +130,8 @@ user a command).
   approval: <action>`. Ask the user about exactly that action; a send's action names every recipient, mention and
   subject, so show them with the body; for a post show the body file (`ask_approval` with `body_file`, `target`, and
   `kind` for a review finding; in plain text, its text). The Action is that line verbatim plus the task key in
-  parentheses, never the CLI command: `session-status --relay KEY ACTION` builds the block. Landing a task's own PR:
+  parentheses (`merge app#271 (PROJ-5164)`), never the CLI command; pass it whole as ACTION to `session-status
+  --relay KEY ACTION`, which builds the block. Landing a task's own PR:
   `session-status --relay KEY 'merge OWNER/REPO#ID (<session name>)'`, KEY being the key the starting yes was given
   under (`--relay` adds `approved under` itself when that isn't the session's own). The grammar, what one relay
   allows and its time limit: [worker.md](worker.md#posting-and-merging), the one home.
