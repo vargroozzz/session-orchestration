@@ -3262,6 +3262,24 @@ stub coord
 pane 0.08 'ABC-13: Yes, land it. Asked: Land ABC-13? Action: merge acme/app#7 (ABC-13)' >> "$proj/$cid.jsonl"
 out=$(ap --relay ABC-13 2>&1) && [ "$out" = "$(blk 'ABC-13: Yes, land it. Asked: Land ABC-13? Action: merge acme/app#7 (ABC-13)' 'merge acme/app#7 (ABC-13)' "$cid")" ] ||
   { echo "--relay, the ask's Action: $out"; exit 1; }
+# A Yes that granted its action on the pane (register.tsx writeGrant): the go note instead, for that action only.
+g=$tmp/.cache/session-status/grants; mkdir -p "$g"
+jq -nc --arg q 'Approval pane answer for ABC-13: Yes, land it. Asked: Land ABC-13? Action: merge acme/app#7 (ABC-13)' \
+  '{kind: "action", session: "abc-fix", key: "ABC-13", action: "merge acme/app#7 (ABC-13)", quote: $q, at: now}' > "$g/act-x-1.json"
+out=$(ap --relay ABC-13 2>&1) && [ "$out" = 'Approved on the pane, granted to abc-fix: merge acme/app#7 (ABC-13). Run the same command again: your approval hook takes the grant (once).' ] ||
+  { echo "--relay, a granted Yes: $out"; exit 1; }
+out=$(ap --relay ABC-13 'merge acme/app#9 (ABC-13)' 2>&1) && [[ $out == $'APPROVAL relayed from the user\n'*$'\nAction: merge acme/app#9 (ABC-13)\n'* ]] ||
+  { echo "--relay, a granted Yes, another action: $out"; exit 1; }
+rm "$g/act-x-1.json"
+# --quote -: the user's own words, verified like a pane answer; not typed by the user, or no ACTION: refused.
+jq -nc --arg ts "$(at 0.07)" '{type: "user", origin: {kind: "human"}, timestamp: $ts, message: {content: "Yes, merge ABC-15 once CI is green"}}' >> "$proj/$cid.jsonl"
+out=$(ap --relay ABC-15 'merge acme/app#9 (ABC-15)' --quote - <<<'Yes, merge ABC-15 once CI is green') &&
+  [ "$out" = "$(printf 'APPROVAL relayed from the user\nQuote: Yes, merge ABC-15 once CI is green\nAction: merge acme/app#9 (ABC-15)\nSource: %s %s' "$cid" "$root")" ] ||
+  { echo "--relay --quote -: $out"; exit 1; }
+rc=0; out=$(ap --relay ABC-15 'merge acme/app#9 (ABC-15)' --quote - <<<'Yes, merge ABC-15' 2>&1) || rc=$?
+[ $rc = 1 ] && [[ $out == 'rejected: no recent message typed by the user'* ]] || { echo "--relay --quote -, words not typed: $rc $out"; exit 1; }
+rc=0; out=$(ap --relay ABC-15 --quote - <<<'Yes, merge ABC-15 once CI is green' 2>&1) || rc=$?
+[ $rc = 2 ] && [[ $out == 'usage: '* ]] || { echo "--relay --quote - without ACTION: $rc $out"; exit 1; }
 rc=0; out=$(ap --relay ABC-12 2>&1) || rc=$?
 [ $rc = 2 ] && [[ $out == "ABC-12's answer carries no Action"* ]] || { echo "--relay, no Action anywhere: $rc $out"; exit 1; }
 # the ask's own Action is held to the plain landing form too
