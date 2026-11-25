@@ -19,7 +19,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Color, EngineInterface, Register, RenderElement, RenderNode, SessionRateLimit, ToolCallResult, ToolSpec, UiPressArgument } from 'claude-code'
 
-import type { ActionResult, Actions, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek, Perm, SectionState } from '../types'
+import type { ActionResult, Actions, Answer, Ask, AskBody, AskKind, Board, Handed, PaneAction, Peek, Perm, SectionState } from '../types'
 
 const PANE = 'coordinator'
 // An ask stays until answered or cancelled; past OLD_MS it is drawn as old (check it still applies). Its answer
@@ -55,6 +55,7 @@ const handedResult = atom({ plugin: 'session-orchestration', key: 'handedResult'
 const perms = atom({ plugin: 'session-orchestration', key: 'perms' } as const, [])
 const terminal = atom({ plugin: 'session-orchestration', key: 'terminal' } as const, 'plain')
 const inboxWatched = atom({ plugin: 'session-orchestration', key: 'inboxWatched' } as const, null)
+const answers = atom({ plugin: 'session-orchestration', key: 'answers' } as const, [])
 
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
 // Text a session wrote, made safe to draw and kept whole: CRLF to LF, then every other control character (an
@@ -302,14 +303,15 @@ const taken = (key: string) => /^\d$/.test(key) ? 'a 1-9 item key' : BUILTIN_KEY
 // path, label of the project's own or command text.
 // ponytail: one bash + lib.sh config read per press even with telemetry off; presses are human-paced. Cache the
 // setting in pane state if a press ever feels slow.
-export const USAGE_EXTRA = ['Stop', 'Run handed','Copy handed', 'Dismiss handed', 'Approval answer', 'Project action', 'Cancel stale']
+// An answer card's buttons take e and k (Archive's and Ask's: what they do there) and log their own names.
+export const USAGE_EXTRA = ['Stop', 'Run handed','Copy handed', 'Dismiss handed', 'Approval answer', 'Project action', 'Cancel stale', 'Mark as read', 'Explain']
 // The sections whose title and row presses are logged as fold-SLUG and card-SLUG (retro.py inventories them); a
 // footer the status command or an adapter adds later isn't logged until it's listed here.
 // The status footer of what this coordinator queued in another project's inbox, until read (session-status).
 export const SENT = 'Sent (session-status --inbox --sent)'
 // The status footer of published report pages (features/report-artifacts.md): each card links its page.
 export const REPORT_PAGES = 'Report pages'
-export const USAGE_SECTIONS = ['Waiting on you', 'Decisions', 'Needs action', 'In review', 'Working', 'Landing', 'Idle', 'Notices', 'Actions', 'Pending', 'Stale prompts', 'Stale', 'Resolved (idle a week)', 'Other projects', 'Other sessions', 'Leftovers (task finished)', 'Moved', 'Waits on you', 'You wait on', 'New for you', 'Worked on', 'Tasks', 'Sent (session-status --inbox --sent)', 'Report pages', 'Scheduled starts (--launch --cancel)']
+export const USAGE_SECTIONS = ['Waiting on you', 'Decisions', 'Needs action', 'In review', 'Working', 'Landing', 'Idle', 'Notices', 'Actions', 'Pending', 'Stale prompts', 'Stale', 'Resolved (idle a week)', 'Other projects', 'Other sessions', 'Leftovers (task finished)', 'Moved', 'Waits on you', 'You wait on', 'New for you', 'Worked on', 'Tasks', 'Sent (session-status --inbox --sent)', 'Report pages', 'Scheduled starts (--launch --cancel)', 'Answers']
 // Its slug: the title, lowercase, its "(…)" dropped; the ones config pane.sections keeps (lib.sh PANE_SLUGS).
 export const sectionSlug = (title: string) => usageName(title.replace(/\s*\(.*$/, ''))
 const ON_YOU = ['waiting-on-you', 'decisions', 'needs-action']
@@ -1222,6 +1224,11 @@ function refresh($: EngineInterface) {
       runStatus($, [], { timeoutMs: 420_000 }), runStatus($, ['--pending']), runStatus($, ['--urls']), loadActions($),
       runStatus($, ['--config', 'terminal']), refreshActivity($), secsRead, loadSeen($).then(() => flushSeeds($)).catch(() => undefined),
       loadPerms($).catch(() => undefined),
+      // An absolute path or nothing: a failed run's text isn't a folder.
+      runStatus($, ['--answers']).then(async d => {
+        answersDir = d.startsWith('/') && !d.includes('\n') ? nativePath(d, await onWindows($)) : ''
+        await loadAnswers($)
+      }).catch(() => undefined),
     ])
     await update($, actions, () => acts)
     // A name only: a failed run's `failed: …` text means none.
@@ -1258,6 +1265,7 @@ function refreshActivity($: EngineInterface) {
     await update($, activity, () => text)
     await loadHanded($).catch(() => undefined) // an unreadable folder leaves the list as it was
     await loadPerms($).catch(() => undefined)
+    await loadAnswers($).catch(() => undefined)
   })().finally(() => {
     activityInFlight = undefined
   })
@@ -1298,6 +1306,30 @@ async function loadPerms($: EngineInterface) {
   const files = (await $.fs.exists(dir)) ? (await $.fs.list(dir)).filter(f => f.kind === 'file' && f.name.endsWith('.json') && now - f.mtimeMs < 35 * 60_000) : []
   const found = await Promise.all(files.map(async f => permOf(f.name.slice(0, -5), String(await $.fs.read(`${dir}/${f.name}`).catch(() => '')))))
   await update($, perms, () => found.filter((p): p is Perm => !!p && p.until * 1000 > now))
+}
+// Answers (features/answers.md): an answer file's first line is the question (a leading `#` or `Q:` dropped; none:
+// the file's name), the rest its body.
+export function parseAnswer(name: string, text: string, at: number): Answer {
+  const [first = '', ...rest] = clean(text).trim().split('\n')
+  return { name, at, question: first.replace(/^(#+|Q:)\s*/i, '').trim() || name, body: rest.join('\n').trim() }
+}
+// An Explain press's prompt: the coordinator rewrites the file it names, so the pane shows the longer answer.
+export const explainText = (a: Answer, path: string) =>
+  `Coordinator pane: the user wants your answer to ${JSON.stringify(a.question)} explained more fully. Rewrite ${path} in place with the expanded answer (same format: the question line, the answer, Evidence:, Date:), checking what you're unsure of; then say in one line that it's on the pane.`
+// session-status --answers' folder, '' while features.answers is off; read each sweep.
+let answersDir = ''
+// Its newest 50 .md files; a file whose name and mtime are unchanged isn't read again.
+async function loadAnswers($: EngineInterface) {
+  if (!timer) return // a worker draws no pane
+  const dir = answersDir
+  const files = dir && (await $.fs.exists(dir))
+    ? (await $.fs.list(dir)).filter(f => f.kind === 'file' && f.name.endsWith('.md')).sort((x, y) => y.mtimeMs - x.mtimeMs).slice(0, 50) : []
+  const prev = new Map((await read($, answers)).map(a => [a.name, a]))
+  const found = await Promise.all(files.map(async f => {
+    const p = prev.get(f.name)
+    return p?.at === f.mtimeMs ? p : parseAnswer(f.name, String(await $.fs.read(`${dir}/${f.name}`).catch(() => '')), f.mtimeMs)
+  }))
+  await update($, answers, () => found)
 }
 // context-watch.sh's stamps, ${XDG_CACHE_HOME:-$HOME/.cache}/session-status: an empty XDG_CACHE_HOME is unset there (||).
 const stampDir = async ($: EngineInterface) => `${(await $.env.get('XDG_CACHE_HOME').catch(() => undefined)) ||
@@ -2166,6 +2198,7 @@ export const register: Register = on => {
     const hs = await read($, handed)
     const ranLast = await read($, handedResult)
     const perms_ = await read($, perms)
+    const answers_ = await read($, answers)
     // Allow this call: the grant blocked.sh request takes (it binds to session and call, as the card showed it). Gone
     // within ~6 s: taken.
     const allowCall = (p: Perm, name: string) => async () => {
@@ -2325,7 +2358,7 @@ export const register: Register = on => {
     }
     const act = (hotkey: string, label: string, onPress: (p: UiPressArgument) => unknown) =>
       <Button key={`act-${hotkey}`} plain hotkey={hotkey} label={label} onPress={async p => {
-        logPress($, /^Stop\b/.test(label) ? 'Stop' : BUILTIN_KEYS[hotkey] ?? 'Project action')  // a card's s is Stop (all)
+        logPress($, /^Stop\b/.test(label) ? 'Stop' : USAGE_EXTRA.includes(label) ? label : BUILTIN_KEYS[hotkey] ?? 'Project action')  // a card's s is Stop (all)
         try {
           await onPress(p)
         } catch (err) {
@@ -2603,6 +2636,24 @@ export const register: Register = on => {
       ], () => [bar(accent,
         why && !top && !twin && !weakStale(why, true) && act('e', 'Archive', archive(label, why)),
         act('k', 'Ask', ask(`the pending item ${JSON.stringify(p.text)}`)))], hotkey)
+    }
+    // An answer the coordinator wrote: its age, the question; the card holds the answer and its file.
+    const answerRow = (a: Answer, accent: Color) => {
+      const path = `${answersDir}/${a.name}`
+      return row(`answer-${a.name}`, accent, seg(` ${ago(now - a.at).padEnd(CHIP_W)} `, { color: accent }), [seg(a.question)], () => [
+        detail(accent, '│', <Box flexDirection="column">{md(`answermd-${a.name}`, a.body || '_(no answer under the question)_')}</Box>),
+        detail(accent, '│', <Text dimColor wrap="truncate-end">{path}</Text>),
+        bar(accent, act('e', 'Mark as read', markRead(a)), act('k', 'Explain', async () => {
+          await $.prompt.submit({ text: explainText(a, path) })
+          $.ui.toast('Asked the coordinator to expand it')
+        }))])
+    }
+    // Moves its file to the folder's archive/ (session-status --answers --read), so no pane lists it again.
+    const markRead = (a: Answer) => async () => {
+      const out = await runStatus($, ['--answers', '--read', a.name])
+      if (!out.startsWith('archived ')) return $.ui.toast(`Not marked read: ${oneLine(out) || 'session-status --answers --read failed'}`)
+      await update($, answers, l => l.filter(x => x.name !== a.name))
+      await update($, selected, () => null)
     }
     // A press archives the entry: `pending done` moves its line and history to the archive, then a sweep shows it gone.
     const archive = (label: string, why: string) => async () => {
@@ -3029,6 +3080,7 @@ export const register: Register = on => {
           ...behind.map(p => ({ id: p.text, draw: () => pendRow(p, ACCENT.Pending, true, digit()) })),
         ])}
         {decisions.length > 0 && section('Decisions', decisions.length, decisions.map(p => ({ id: p.text, draw: () => pendRow(p, ACCENT.Pending, true, digit()) })))}
+        {answers_.length > 0 && section('Answers', answers_.length, accent => answers_.flatMap(a => answerRow(a, accent)))}
 
         {GROUPS.map(g => {
           const ts = orderTasks(st?.tasks.filter(t => groupOfT.get(t) === g) ?? [], factsOf)

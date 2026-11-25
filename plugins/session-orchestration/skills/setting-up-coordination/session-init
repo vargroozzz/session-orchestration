@@ -374,7 +374,7 @@ if [ "$mode" = check ]; then
                 st=$(config start.mode 2>>"$wf") sa=$(config start.kinds.feedback_apply 2>>"$wf") sb=$(config start.sidebar 2>>"$wf")
                 a=$(config features.accounts 2>>"$wf") r=$(config features.review_inbox 2>>"$wf")
                 te=$(config terminal 2>>"$wf") m=$(config messages 2>>"$wf") no=$(config features.notify 2>>"$wf") rt=$(config features.retro 2>>"$wf")
-                rm_=$(config features.remote 2>>"$wf")
+                rm_=$(config features.remote 2>>"$wf") an=$(config features.answers 2>>"$wf")
                 [ "$rm_" != true ] || remote_warn >>"$wf"
                 # Auto mode may deny the inbox's post in a background session without the user's allow rule for it.
                 as=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
@@ -403,6 +403,7 @@ if [ "$mode" = check ]; then
                 [ "$r" != true ] || { f=${f:+$f,}review_inbox; docs+=(review_inbox "$LIB_DIR/features/review-inbox.md"); }
                 [ "$no" = 0 ] || { f=${f:+$f,}notify; docs+=(notify "$LIB_DIR/features/notify.md"); }
                 [ "$rt" != true ] || { f=${f:+$f,}retro; docs+=(retro "$LIB_DIR/features/retro.md"); }
+                [ "$an" != true ] || { f=${f:+$f,}answers; docs+=(answers "$LIB_DIR/features/answers.md"); }
                 [ "$rm_" != true ] || { f=${f:+$f,}remote; docs+=(remote "$LIB_DIR/features/remote.md"); }
                 # feedback.repo_dir's coordinator owns the plugin's feedback cases
                 [ "$(plugin_root)" != "$root" ] || { f=${f:+$f,}plugin_coordinator; docs+=(plugin_coordinator "$LIB_DIR/features/plugin-coordinator.md"); }

@@ -1,7 +1,7 @@
 import type { On, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HIDDEN_BY_MARKDOWN, answerText, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, USAGE_SECTIONS, usageName, GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, SENT, REPORT_PAGES, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf, sectionSlug, sectionState, parseSections, nativePath, permOf } from './register'
+import { HIDDEN_BY_MARKDOWN, answerText, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, USAGE_SECTIONS, usageName, GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, SENT, REPORT_PAGES, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf, sectionSlug, sectionState, parseSections, nativePath, permOf, parseAnswer, explainText } from './register'
 
 test('status rows parse whatever the columns hold', async () => {
   const pad = (k: string, st: string) => `${k.padEnd(9)} ${st.padEnd(14)} `
@@ -508,6 +508,54 @@ test('a waiting session\'s card offers Allow this call while blocked.sh waits; t
   await pressed
   expect(toasts).toEqual(['Allowed: Bash runs in "pr review proj-4679"'])
   expect(permOf('61c8fb76-aaaa', JSON.stringify({ ...rec, call: 'touch\u200bx' }))).toBeUndefined() // drawn as "touchx"
+  await ui.unmount()
+})
+
+test('an answer file: its first line the question, the rest the answer', () => {
+  expect(parseAnswer('a.md', '# Why X?\r\nBecause Y.\n\nEvidence: z\nDate: 2026-11-25\n', 5)).toEqual({ name: 'a.md', at: 5, question: 'Why X?', body: 'Because Y.\n\nEvidence: z\nDate: 2026-11-25' })
+  expect(parseAnswer('b.md', 'Q: Is it on?\nYes.', 0).question).toBe('Is it on?')
+  expect(parseAnswer('c.md', 'Plain question\nAnswer', 0)).toMatchObject({ question: 'Plain question', body: 'Answer' })
+  expect(parseAnswer('d.md', '\n\n', 0)).toMatchObject({ question: 'd.md', body: '' })
+  const t = explainText(parseAnswer('a.md', 'Why "X"?\nY', 0), '/h/answers/a.md')
+  expect(t).toContain('Rewrite /h/answers/a.md in place')
+  expect(t).toContain('"Why \\"X\\"?"')
+})
+
+test('the Answers section lists the folder\'s files; Mark as read archives one, Explain asks the coordinator', async ($, on) => {
+  mock.clock(on)
+  const runs: string[][] = []
+  on('process.run', async (_, e) => {
+    const args = e.argv.slice(2)
+    runs.push(args)
+    const stdout = args[0] !== '--answers' ? '' : args[1] === '--read' ? `archived ${args[2]}` : '/h/answers\n'
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('fs.exists', async (_, e) => ({ value: e.path === '/h/answers' }))
+  on('fs.list', async () => ({ value: [
+    { name: '2026-11-25-why.md', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false },
+    { name: 'archive', kind: 'directory' as const, size: 0, mtimeMs: 0, isLink: false },
+  ] }))
+  on('fs.read', async (_, e) => {
+    if (e.path !== '/h/answers/2026-11-25-why.md') throw new Error('ENOENT')
+    return { value: 'Why is the build slow?\nThe cache is cold.\nEvidence: CI log\nDate: 2026-11-25' }
+  })
+  const submitted: string[] = []
+  on('prompt.submit', async (_, e) => {
+    submitted.push(e.text)
+    return { text: e.text }
+  })
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+  await ui.press({ key: 'refresh' })
+  expect((await ui.find({ type: 'Button', key: 'answer-2026-11-25-why.md' }))?.text).toBe('Why is the build slow?')
+  await ui.press({ key: 'answer-2026-11-25-why.md' })
+  expect((await ui.find({ type: 'Markdown', key: 'answermd-2026-11-25-why.md' }))?.props.text).toBe('The cache is cold.\nEvidence: CI log\nDate: 2026-11-25')
+  await ui.press({ key: 'act-k' })
+  expect(submitted).toEqual([explainText(parseAnswer('2026-11-25-why.md', 'Why is the build slow?', 0), '/h/answers/2026-11-25-why.md')])
+  await ui.press({ key: 'act-e' })
+  expect(runs).toContainEqual(['--answers', '--read', '2026-11-25-why.md'])
+  expect(await ui.find({ type: 'Button', key: 'answer-2026-11-25-why.md' })).toBeUndefined()
   await ui.unmount()
 })
 

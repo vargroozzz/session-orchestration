@@ -8,7 +8,7 @@
 #                                            (excluded from git until shared mode commits it; read from the team
 #                                            repo's when the person file names one, see shared_dir)
 #   .claude/coordination.local.json          person keys: approvals.delegate, approvals.pr_create, features.accounts,
-#                                            features.accounts_weekly_switch, features.notify, features.retro, features.remote,
+#                                            features.accounts_weekly_switch, features.notify, features.answers, features.retro, features.remote,
 #                                            retro.*, start.*,
 #                                            terminal, messages
 #                                            (and its module's block, e.g. msgraph), trusted, team, feedback.mode,
@@ -70,7 +70,7 @@ user_config() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/session-orchestration/co
 # person_keys_drop [MODULE]: the jq filter that drops the person keys (and MODULE's messages block) from a repo file;
 # coord_json reads the repo file through it, and --shared refuses a team file it would change.
 person_keys_drop() {
-  echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane, .coordinator, .report_artifacts$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.retro, .features.remote, .features.docs_watch, .features.report_artifacts) else . end"
+  echo "del(.approvals, .terminal, .messages, .msgraph, .trusted, .team, .feedback, .telemetry, .handoff, .compact, .pending, .history, .fable, .start, .retro, .docs_watch, .pane, .coordinator, .report_artifacts$( [[ ${1:-} =~ ^[A-Za-z0-9_-]+$ ]] && echo ", .[\"$1\"]")) | if .features | type == \"object\" then del(.features.accounts, .features.accounts_weekly_switch, .features.notify, .features.answers, .features.retro, .features.remote, .features.docs_watch, .features.report_artifacts) else . end"
 }
 
 coord_memo= coord_memo_pwd=   # never inherited: valid only for the cwd its caller built it in
@@ -314,6 +314,8 @@ detect_host() {
 #                       other computers reach them (features/remote.md; person only)   default false
 #   features.notify     integer minutes, 0 = off: one local macOS notification when an ask has waited unseen this
 #                       long (features/notify.md; person only)          default 0
+#   features.answers    true | false: the coordinator writes each answer it gives the user to the state folder's answers/,
+#                       listed on the pane (features/answers.md; person only)   default false
 #   start.mode          read_only | propose | at_once: when the coordinator starts a session for new work without the
 #                       user's yes (orchestrating-sessions sessions.md, Starting a session; person only)   default read_only
 #   start.kinds.feedback_apply  the same values, for a plugin feedback apply session (person only)
@@ -480,7 +482,7 @@ config() {
   local key=${1:-} v ok=
   case $key in
     tracker|host|key_pattern|approvals.delegate|approvals.pr_create|features.accounts|features.accounts_weekly_switch|features.review_inbox|features.notify|start.mode|start.kinds.feedback_apply|start.sidebar|terminal|messages|feedback.mode|feedback.send|feedback.repo_dir|feedback.project_dir|telemetry|pending.file|history.dirs|fable.accounts) ;;
-    features.retro|features.remote|retro.scope|retro.schedule|retro.account|retro.sections) ;;
+    features.retro|features.remote|features.answers|retro.scope|retro.schedule|retro.account|retro.sections) ;;
     features.docs_watch|docs_watch.files|docs_watch.pattern) ;;
     plan.enabled|plan.max_parallel|plan.models.design|plan.models.build|plan.models.mechanical|plan.models.review|plan.models.release|plan.models.scan|plan.models.coordinator|plan.models.retro|plan.models.research) ;;
     plan.advisor.design|plan.advisor.build|plan.advisor.mechanical|plan.advisor.review|plan.advisor.release|plan.advisor.scan|plan.advisor.coordinator|plan.advisor.retro|plan.advisor.research) ;;
@@ -488,14 +490,14 @@ config() {
     pane.sections) pane_sections; return 0 ;;
     coordinator.purpose) coord_purpose; return 0 ;;
     features.report_artifacts|report_artifacts.account) report_artifacts_cfg "$key"; return 0 ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.send feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections features.report_artifacts report_artifacts.account)" >&2; return 2 ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote features.answers retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.send feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections features.report_artifacts report_artifacts.account)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
     tracker) case $v in none|github|jira) ok=1 ;; esac ;;
     host) case $v in github|bitbucket|forgejo|none) ok=1 ;; esac ;;
     key_pattern|docs_watch.pattern) { grep -qE -- "$v" </dev/null; [ $? -le 1 ]; } 2>/dev/null && ok=1 ;;
-    approvals.delegate|approvals.pr_create|features.accounts|features.accounts_weekly_switch|features.retro|features.remote|features.docs_watch|plan.enabled|start.sidebar) case $v in true|false) ok=1 ;; esac ;;
+    approvals.delegate|approvals.pr_create|features.accounts|features.accounts_weekly_switch|features.retro|features.remote|features.answers|features.docs_watch|plan.enabled|start.sidebar) case $v in true|false) ok=1 ;; esac ;;
     retro.scope) case $v in project) ok=1 ;; plugin|both) local pr; ok=1
       # plugin scope has one home: feedback.repo_dir's root when that is set, so all-project numbers are measured once
       pr=$(plugin_root) && [ "$pr" != "$(find_root)" ] &&
@@ -552,7 +554,7 @@ config() {
 
 # The coordinator pane's section slugs (hooks/register.tsx sectionSlug: a title, lowercase, its "(…)" dropped), and
 # the on-you ones, which are never hidden.
-PANE_SLUGS=" waiting-on-you decisions needs-action in-review working landing idle other-sessions leftovers notices stale-prompts stale other-projects pending resolved actions moved waits-on-you you-wait-on new-for-you worked-on tasks sent report-pages scheduled-starts "
+PANE_SLUGS=" waiting-on-you decisions needs-action in-review working landing idle other-sessions leftovers notices stale-prompts stale other-projects pending resolved actions moved waits-on-you you-wait-on new-for-you worked-on tasks sent report-pages scheduled-starts answers "
 PANE_ON_YOU=" waiting-on-you decisions needs-action "
 # pane_sections: config pane.sections, from the project's person file only (a per-project, per-person key), as one
 # JSON object of its valid entries.
