@@ -3760,6 +3760,26 @@ o=$(run 2>/dev/null); [[ $o == *"Retry limits · $u · ~/cfg · page behind the 
 awk -F'\t' 'BEGIN { OFS = "\t" } { $7 = 1000; print }' "$rp/report-artifacts.tsv" > "$tmp/rp.tsv" && mv "$tmp/rp.tsv" "$rp/report-artifacts.tsv"
 o=$(run 2>/dev/null); [[ $o != *'Report pages:'* ]] || { echo "board, old row: $o"; exit 1; }
 fi
+if section answers; then
+# features.answers (features/answers.md): off, --answers prints nothing (exit 1) and --start has no Answers section; on,
+# it prints the state folder's answers/ (made), --read archives one (a taken name gets -EPOCH), a bad or missing name is
+# exit 2, and --start counts the unread ones only.
+ad=$(pof "$root")/answers; pf() { echo "$1" > "$root/.claude/coordination.local.json"; }
+rc=0; o=$(run --answers 2>&1) || rc=$?; [ "$rc" = 1 ] && [ -z "$o" ] && [ ! -e "$ad" ] || { echo "--answers, off: rc=$rc $o"; exit 1; }
+[[ $(run --start 2>/dev/null) != *'## Answers'* ]] || { echo "--start, off: an Answers section"; exit 1; }
+pf '{"features": {"answers": true}}'
+[ "$(run --answers)" = "$ad" ] && [ -d "$ad" ] || { echo "--answers, on: $(run --answers 2>&1)"; exit 1; }
+printf 'Why?\nBecause.\n' > "$ad/2026-11-25-why.md"
+[ "$(run --answers --read 2026-11-25-why.md)" = 'archived 2026-11-25-why.md' ] && [ -f "$ad/archive/2026-11-25-why.md" ] &&
+  [ ! -e "$ad/2026-11-25-why.md" ] || { echo "--read: $(ls -R "$ad")"; exit 1; }
+printf 'Why?\nAgain.\n' > "$ad/2026-11-25-why.md"
+o=$(run --start 2>/dev/null); [[ $o == *$'\n## Answers (features.answers)\n1 unread on the pane; '*"$ad/"* ]] || { echo "--start, on: $o"; exit 1; }
+[ "$(run --answers --read 2026-11-25-why.md)" = 'archived 2026-11-25-why.md' ] && [ "$(cat "$ad/archive/2026-11-25-why.md")" = $'Why?\nBecause.' ] &&
+  [ "$(ls "$ad/archive" | grep -c '^2026-11-25-why-[0-9]*\.md$')" = 1 ] || { echo "--read, a taken name: $(ls "$ad/archive")"; exit 1; }
+touch "$ad/../x.md" "$ad/x.txt"
+for n in ../x.md x.txt missing.md; do rc=0; run --answers --read "$n" >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--read $n: rc=$rc"; exit 1; }; done
+rc=0; run --answers --read >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--read, no name: rc=$rc"; exit 1; }
+fi
 if section reported-done; then
 # A key the tracker knows nothing about (no status, no PR) is finished once its session's last `done` reply the reply
 # tool let through says so: `report` with no prompt since (ABC-41), or `pr` whose worktree landed rebased (ABC-45). Not:

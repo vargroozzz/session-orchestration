@@ -534,7 +534,7 @@ test('the Answers section lists the folder\'s files; Mark as read archives one, 
   on('fs.exists', async (_, e) => ({ value: e.path === '/h/answers' }))
   on('fs.list', async () => ({ value: [
     { name: '2026-11-25-why.md', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false },
-    { name: 'archive', kind: 'directory' as const, size: 0, mtimeMs: 0, isLink: false },
+    { name: 'archive', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false },
   ] }))
   on('fs.read', async (_, e) => {
     if (e.path !== '/h/answers/2026-11-25-why.md') throw new Error('ENOENT')
