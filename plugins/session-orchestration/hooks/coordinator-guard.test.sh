@@ -89,6 +89,14 @@ check "$(CLAUDE_CODE_SESSION_ATTENDED=1 g nokind Edit "$(jq -nc --arg p "$cl" '{
 check "$(g nokind Bash "$(jq -nc --arg c "jq '.approvals.delegate=true' x > $cl" '{command: $c}')")" deny 'a redirection into it'
 check "$(g nokind Bash "$(jq -nc --arg c "sed -i '' 's/false/true/' .claude/coordination.local.json" '{command: $c}')")" deny 'sed -i on it'
 check "$(g nokind Bash "$(jq -nc --arg c "jq .approvals .claude/coordination.local.json 2>/dev/null" '{command: $c}')")" allow 'reading it'
+pb() { g nokind Bash "$(jq -nc --arg c "$1" '{command: $c}')"; }
+check "$(pb "sed -i.bak 's/false/true/' .claude/coordination.local.json")" deny 'sed -i.bak on it'
+check "$(pb "sed -Ei 's/false/true/' .claude/coordination.local.json")" deny 'sed -Ei on it'
+check "$(pb "cd .claude && echo {} > coordination.local.json")" deny 'a redirection to the bare name'
+check "$(pb "cp /tmp/x.json .claude/coordination.local.json")" deny 'cp onto it'
+check "$(pb "session-status --init --write --delegate")" deny "setup's --delegate"
+check "$(pb "cp .claude/coordination.local.json /tmp/backup.json")" allow 'a copy from it'
+check "$(pb "git commit -m 'rm the stale key from .claude/coordination.local.json'")" allow 'a commit message naming it'
 check "$(g nokind Write "$(jq -nc --arg p "$root/.claude/coordination.json" '{file_path: $p, content: "{}"}')")" allow 'the repo config is not the person one'
 check "$(w "$root/src/a.ts")" deny 'a project file'
 check "$(w "$root/CLAUDE.md")" deny 'CLAUDE.md'

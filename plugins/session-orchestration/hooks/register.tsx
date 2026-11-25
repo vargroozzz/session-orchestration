@@ -431,7 +431,7 @@ export const weakStale = (why: string, archive = false) =>
   why.split('; ').every(r => r.startsWith('recheck:') || (archive && r.startsWith('reword:')))
 // The pane's own folds: a section's items that need no look one by one, drawn as one row.
 // Leftovers: clean+merged worktrees, removable as a batch.
-export const mergedLeftover = (text: string) => / — worktree clean\+merged: /.test(text)
+export const mergedLeftover = (text: string) => / — worktree clean\+merged( \(rebased\))?: /.test(text)
 export const LEFTOVERS = 'Leftovers (task finished)'
 // Other sessions: superseded, or not running a day or more (`3d`); at-rest ones session-status keeps past its age
 // cut-off land here, listed in the fold's card.
@@ -1231,7 +1231,8 @@ function refresh($: EngineInterface) {
     const failed = status.startsWith('failed: ')
     if (!failed) { lastGood = fresh; lastGoodMs = now; retried = false }
     const retry = failed && !retried
-    if (retry) { retried = true; $.clock.after(60_000, () => void refresh($)) }
+    // skipped when a sweep has succeeded in the meantime (a Refresh press or a tick)
+    if (retry) { retried = true; const since = lastGoodMs; $.clock.after(60_000, () => { if (lastGoodMs === since) void refresh($) }) }
     await update($, board, (): Board => lastGood === fresh || !lastGood ? fresh
       : { ...fresh, status: `${status} (sweep at ${at}; the rows below are from ${lastGood.at}, ${ago(now - lastGoodMs)}${retry ? '; trying again in a minute' : ''})\n${lastGood.status}` })
     await loadHanded($).catch(() => undefined) // again, now with the sessions this sweep saw
