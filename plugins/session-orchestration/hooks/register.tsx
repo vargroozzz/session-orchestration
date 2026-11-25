@@ -820,6 +820,8 @@ let asksQueue: Promise<unknown> = Promise.resolve()
 const isStr = (v: unknown): v is string => typeof v === 'string' && clean(v) === v
 // An ask's still_applies: a GitHub PR, OWNER/REPO#N (session-status re-checks it with the same pattern).
 const isPrRef = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#[0-9]+$/.test(v)
+// An ask's session: the name (or id) of the session that runs its action, as approved-action.sh matches it.
+const isSessionRef = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(v)
 // A bad still_applies (the file is anyone's to write) drops that field, not the whole ask.
 function withoutBadRef(v: unknown): unknown {
   if (!v || typeof v !== 'object' || !('still_applies' in v) || isPrRef(v.still_applies)) return v
@@ -832,7 +834,7 @@ function isAsk(v: unknown): v is Ask {
   const opt = (x: unknown) => x === undefined || isStr(x)
   const b: Record<string, unknown> | undefined = a.body && typeof a.body === 'object' ? { ...a.body } : undefined
   return isStr(a.id) && isStr(a.key) && /^\S+$/.test(a.key) && isStr(a.question) && typeof a.at === 'number' &&
-    Array.isArray(a.options) && a.options.length >= 2 && a.options.every(isStr) && opt(a.details) && opt(a.target) && opt(a.action) && (a.still_applies === undefined || isPrRef(a.still_applies)) &&
+    Array.isArray(a.options) && a.options.length >= 2 && a.options.every(isStr) && opt(a.details) && opt(a.target) && opt(a.action) && (a.session === undefined || isSessionRef(a.session)) && (a.still_applies === undefined || isPrRef(a.still_applies)) &&
     (a.kind === undefined || isKind(a.kind)) && (a.seen === undefined || a.seen === true) && (a.sending === undefined || typeof a.sending === 'number') &&
     (a.body === undefined || (!!b && isStr(b.path) && isStr(b.text) && typeof b.sha256 === 'string' && /^[0-9a-f]{64}$/.test(b.sha256) && typeof b.cut === 'number'))
 }
@@ -965,6 +967,7 @@ const ASK_SCHEMA = {
     kind: { type: 'string', enum: KINDS, description: 'Optional, with body_file only: a PR review finding\'s kind: issue (the code is wrong), suggestion (it works but could be better), question (scope or intent the author or PO decides). The pane shows it as a badge and sorts issues first.' },
     body_file: { type: 'string', description: 'Optional absolute path of a comment body file, prepared before asking. The pane reads it now and shows its text (as markdown) and sha256; the question must name this sha256; any other sha256 it names must be that of a file it names by absolute path (a Teams send\'s attachment).' },
     action: { type: 'string', description: 'Optional, one line: the exact Action a relay of the yes carries (approvals.md), e.g. "merge acme/app#45 (PROJ-123)" or "post comment /abs/body.md on acme/app#45 (sha256 X)". The answer prompt ends with "Action: <it>" and session-status --relay KEY, with no ACTION, takes it from there, so nobody retypes it. A post, or a close with a comment, needs body_file (draft the body first).' },
+    session: { type: 'string', description: 'Optional, with action only: the session that runs the action, by its name as its messages show it (from-name), or its id. The pane shows "Runs in: <it>", and a click on one of the options starting "Yes" grants that session this action (approvals.md, Grants): its approval hook takes the grant once, within 24h, so session-status --relay KEY prints a go note to send it instead of the relay block. A typed answer grants nothing.' },
     still_applies: { type: 'string', description: 'Optional GitHub PR, OWNER/REPO#N (e.g. "acme/app#45"): the ask applies while that PR is open. Every full session-status run (the pane\'s refresh, Start, the sweep, --stale) looks it up (10 s cap) and its Stale section flags the ask once the PR is merged or closed, so an old ask is rechecked by machine, not by hand. For a PR no board row shows: a row\'s PR named in the question is flagged already.' },
   },
   required: ['key', 'question', 'options'],
@@ -1289,6 +1292,21 @@ const handedDir = ($: EngineInterface) => homePath($, HANDED_DIR)
 // Permission prompts (hooks/blocked.sh): its records, and the grants an Allow this call press writes, the only writer.
 export const BLOCKED_DIR = '.cache/session-status/blocked'
 export const GRANTS_DIR = '.cache/session-status/grants'
+// The action grant a Yes click on an ask with action and session writes before its answer is submitted
+// (approvals.md, Grants): hooks/approved-action.sh in that session takes it once, for that action, within 24 h. The
+// same rule as answerText's Action (one of the ask's own options), and the option starts "Yes": a typed answer or a
+// No grants nothing. Returns its path, or undefined when it wrote none (a failed write leaves the relay block).
+async function writeGrant($: EngineInterface, a: Ask, option: string) {
+  if (!a.action || !a.session || !a.options.includes(option) || !/^yes\b/i.test(option.trim())) return undefined
+  const at = Math.floor((await $.clock.now()) / 1000)
+  const f = `${await homePath($, GRANTS_DIR)}/act-${a.id.replace(/[^A-Za-z0-9_-]/g, '')}-${at}.json`
+  const grant = { kind: 'action', session: a.session, key: a.key, action: oneLine(a.action), quote: answerText(a, option), at }
+  return $.fs.write(f, JSON.stringify(grant)).then(() => f, () => undefined)
+}
+// A grant whose answer wasn't sent: removed, so the session can't act on a Yes the coordinator never got.
+const dropGrant = async ($: EngineInterface, f: string | undefined) => {
+  if (f) await runBash($, ['-c', 'rm -f "$@"', '_', f]).catch(() => undefined)
+}
 // A blocked record that offers the button: a hash, the end of its wait and the call it shows; else undefined. A call
 // holding a character clean() draws invisibly or rewrites (CR, zero-width, line separators) gets no button.
 export function permOf(sid: string, text: string): Perm | undefined {
@@ -1749,7 +1767,7 @@ const TOOLS: ToolSpec[] = [
   },
   {
     name: 'ask_approval',
-    description: 'Coordinator only: put a decision waiting on the user (a reserved approval or any other choice) as buttons in the coordinator pane, one decision per ask, your recommended option first. Returns at once; the user\'s click arrives later as a prompt "Approval pane answer for <KEY>: <option>. Asked: <question>" (<option> may be the user\'s own words, typed in the pane\'s question dialog), which is the Quote for a relayed approval (it verifies for 24h from the click). An ask stays until answered or cancelled, across coordinator restarts and plugin releases; past 24h the pane marks it OLD, so check it still applies before acting on its answer. Queueing the same key and question again replaces the waiting ask (same id). Keep the question one line; put what the user should read in details (markdown), target, and for a comment post body_file (the body file, written first: the pane shows its text and sha256). Ask in plain text only when this says the pane isn\'t on screen, or in the question box when the answer needs the user\'s own words (approvals.md, next to the coordinator skill).',
+    description: 'Coordinator only: put a decision waiting on the user (a reserved approval or any other choice) as buttons in the coordinator pane, one decision per ask, your recommended option first. Returns at once; the user\'s click arrives later as a prompt "Approval pane answer for <KEY>: <option>. Asked: <question>" (<option> may be the user\'s own words, typed in the pane\'s question dialog), which is the Quote for a relayed approval (it verifies for 24h from the click). An ask stays until answered or cancelled, across coordinator restarts and plugin releases; past 24h the pane marks it OLD, so check it still applies before acting on its answer. Queueing the same key and question again replaces the waiting ask (same id). Keep the question one line; put what the user should read in details (markdown), target, and for a comment post body_file (the body file, written first: the pane shows its text and sha256). For a gated action a session runs (a merge, a post), give action and session: a Yes click then grants it to that session. Ask in plain text only when this says the pane isn\'t on screen, or in the question box when the answer needs the user\'s own words (approvals.md, next to the coordinator skill).',
     inputSchema: ASK_SCHEMA,
   },
   {
@@ -2087,10 +2105,13 @@ export const register: Register = on => {
     if ([key, question, ...labels].some(x => clean(x) !== x)) {
       return { deny: 'ask_approval: key, question and options may not hold control or bidi characters (but tab and newline).' }
     }
-    const { details, target, body_file, kind, still_applies, action } = e
+    const { details, target, body_file, kind, still_applies, action, session } = e
     const opt = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined)
     if (action !== undefined && (typeof action !== 'string' || !action.trim() || /\n/.test(action) || clean(action) !== action)) {
       return { deny: 'ask_approval: action is one non-empty line, with no control or bidi characters.' }
+    }
+    if (session !== undefined && (!isSessionRef(session) || action === undefined)) {
+      return { deny: 'ask_approval: session goes with action, and is the name (or id) of the session that runs it: letters, digits, ".", "_" and "-" only.' }
     }
     // A yes to a post without its body leaves the worker nothing to post: it takes a second ask (approvals.md).
     const posts = (s: string) => /^\s*post\s+comment\b/i.test(s) || /\bclose\b[^\n]*\bwith(?:\s+[\w-]+){0,3}?\s+comment\b/i.test(s)
@@ -2152,6 +2173,7 @@ export const register: Register = on => {
       ...(isKind(kind) ? { kind } : {}),
       ...(typeof still_applies === 'string' ? { still_applies: still_applies.trim() } : {}),
       ...(typeof action === 'string' ? { action: action.trim() } : {}),
+      ...(isSessionRef(session) ? { session } : {}),
     }, a => a.key === key && a.question === question, at)
     const { isPlaced } = await open($)
     await syncStatus($)
@@ -2275,7 +2297,9 @@ export const register: Register = on => {
       logPress($, 'Approval answer')
       await syncStatus($)
       // Not delivered (a throw, or a hook's drop): answerable again in its place, unless cancel_approval took it meanwhile.
+      const grant = await writeGrant($, a, option)
       const putBack = async () => {
+        await dropGrant($, grant)
         await setAsks($, l => l.map(x => (same(x) ? unsent(x) : x)))
         await syncStatus($)
       }
@@ -2327,10 +2351,11 @@ export const register: Register = on => {
       await syncStatus($)
       const sent: Ask[] = [], failed: string[] = []
       for (const [a, y] of claimed) {
+        const grant = await writeGrant($, a, y)
         const r = await $.prompt.submit({ text: answerText(a, y), asUser: true })
           .catch((e: unknown) => ({ drop: e instanceof Error ? e.message : String(e) }))
         if (r.drop === undefined) sent.push(a)
-        else failed.push(`${a.key} (${r.drop})`)
+        else { failed.push(`${a.key} (${r.drop})`); await dropGrant($, grant) }
       }
       // Not delivered: answerable again in its place.
       if (failed.length) await setAsks($, l => l.map(x => (claimed.some(([a]) => same(x, a)) && !sent.some(a => same(x, a)) ? unsent(x) : x)))
@@ -2871,6 +2896,7 @@ export const register: Register = on => {
               <Text bold wrap="wrap">{draw(kindBadge(a))}{clean(a.question)}</Text>
               {a.target && <Text wrap="wrap"><Text dimColor>target </Text>{a.target}</Text>}
               {a.action && <Text wrap="wrap"><Text dimColor>action </Text>{a.action}</Text>}
+              {a.action && a.session && <Text wrap="wrap"><Text dimColor>Runs in: </Text>{a.session}</Text>}
               {a.body && <Text dimColor wrap="wrap">body {clean(a.body.path)} · sha256 {a.body.sha256}</Text>}
               {a.body && (
                 <Box flexDirection="column" borderStyle="single" borderColor="inactive" paddingX={1}>

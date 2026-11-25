@@ -12,6 +12,8 @@ export type Ask = {
   still_applies?: string
   // The Action a relay of the yes carries (approvals.md): the answer prompt ends with `Action: <it>`.
   action?: string
+  // The session that runs the action (its name or id): a Yes click grants it the action (approvals.md, Grants).
+  session?: string
 }
 // The project state the pane shows: the status command's output, the adapter's `pending` and `urls` text, and
 // the sessions the sweep saw (session-status --agents).
