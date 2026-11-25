@@ -68,9 +68,8 @@ threads again. When you write
 a new handoff, move the older one and anything past (drafts, settled decisions, logs) to `<TASK>-archive.md` beside
 it, newest first, and name that file in the handoff.
 
-**A report for the user to read** (an HTML file, a page): you open it, once, and your report names its path and
-says whether it opened (`opened: yes`, or `opened: no` when `open` failed or you couldn't run it); the coordinator
-opens it only on `opened: no`, or when the report doesn't say.
+**A report for the user to read** (an HTML file): name its path in the reply's text; `done: report` opens it once.
+A report sent another way: `open` it yourself, once.
 
 **A report you send unasked:** only when you're done, blocked, a decision waits on the user, or a `handoff ready`
 (Handing off). Never a progress update ("batch 3 of 8 ready", "2 agents running"): the coordinator would pass it on
@@ -167,12 +166,8 @@ The gated commands, edits included, and the action the hook names for each (ask 
   `Base branch was modified`), waits until merged, watches every CI run on its merge commit and ends with one line:
   `merged and green: SHA`, or what failed (a conflict: rebase and push; auto-merge stays on). Its run lost, or given
   up, after the merge queued: finish with the read-only `gh pr view` and `gh run watch` calls its line names; don't
-  ask for a new relay. A PR left open with no auto-merge queued: `--land` again on the same relay once it can merge (no new commits
-  pushed since).
-  By hand instead: a PR whose `mergeStateStatus` is already `CLEAN`: `gh pr merge N --rebase` (no `--auto`: gh refuses `--auto` there).
-  A gh merge that left the PR open with no auto-merge queued doesn't use the relay while the PR's head is unchanged:
-  gh refused `--auto` (the PR is `CLEAN`): run `gh pr merge N --rebase` on the same relay; a plain merge failed with
-  `Base branch was modified` (main moved under it): run `gh pr merge N --auto --rebase` on it.
+  ask for a new relay. A run (`--land` or a `gh pr merge` by hand) that left the PR open with no auto-merge queued
+  didn't use the relay while the PR's head is unchanged: `--land` again on it once the PR can merge.
   A project that lands by fast-forwarding the branch its main checkout has out, not by a PR: from your worktree,
   `session-status --land <branch>`, alone (git refuses a plain `push . HEAD:<branch>` there, and `git -C` into that
   checkout isn't yours to run). It is gated as `merge <branch>`, relayed as `merge <branch> (<session name>)`; it

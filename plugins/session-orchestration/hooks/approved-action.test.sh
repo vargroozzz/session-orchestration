@@ -735,8 +735,28 @@ gh pr merge 99 -R acme/app
 EOF
 git commit -m x" deny "heredoc into a git hook, then commit"
 check "echo 'gh pr merge 99 -R acme/app' > .husky/pre-commit && git commit -m x" deny "echo into a git hook, then commit"
+# gh counts where a command runs it, not inside a quoted argument of a command that never runs its text.
+P="S=${here%/hooks}/skills/orchestrating-sessions; F=/x/fb; "'$S/session-status --kind build n; echo "--- exit $?"; $S/feedback brief n'
+CLAUDE_CODE_SESSION_ATTENDED=1 check "$P 'a gh comment relay and gh pr merge 5 -R a/b' \$F/c.md" pass "attended, gh in a quoted argument beside variables"
+check "S=/x/skills/orchestrating-sessions; \$S/feedback brief n 'gh pr merge 99 -R acme/app'" deny "a script by that name outside the plugin"
+check "X=ev''al; \$X 'gh pr merge 99 -R acme/app'" deny "a runner's name split by quotes"
+check "\"\$SHELL\" <<< 'gh pr merge 99 -R acme/app'" deny "a here-string into a shell"
+check "tar xf a.tar --to-command 'gh pr merge 99 -R acme/app'" deny "a command that isn't known to be inert"
+check "./x 'gh pr merge 99 -R acme/app'" deny "a script of the session's own"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "x=1; gh pr merge 1 -R acme/app" ask "attended, a variable set, then a merge"
+check "$P 'x' ; gh pr merge 99 -R acme/app" deny "the same, then a real merge"
+check "./run.sh -c 'gh pr merge 99 -R acme/app'" deny "a -c flag can run its text"
+check "foo 'gh pr merge 99 -R acme/app' > .husky/pre-commit" deny "a quoted merge written to a file"
+check "\$X 'gh pr merge 99 -R acme/app'" deny "a variable as the command, set elsewhere"
+check "a=( 'gh pr merge 99 -R acme/app' ); \"\${a[@]}\"" deny "an array run as the command"
+check "foo \$'a\\' b' ; gh pr merge 99 -R acme/app ; foo 'y z'" deny "an ANSI-C quote hiding a merge"
+check "foo x # don't
+gh pr merge 99 -R acme/app" deny "a comment's apostrophe hiding a merge"
+check "S=/x; ssh h 'gh pr merge 99 -R acme/app'" deny "ssh runs its text"
 check "GIT_EDITOR=bash git commit -e -m 'gh pr merge 99 -R acme/app'" deny "a variable set for git"
 check "GIT_EDITOR=bash; git commit -e -m 'gh pr merge 99 -R acme/app'" deny "a bare assignment, then git"
+check "x=1; git log --grep 'gh pr merge 99 -R acme/app'" deny "any assignment, then a command beyond echo or test"
+check "PATH=/x/bin; S=${here%/hooks}/skills/orchestrating-sessions; \$S/feedback brief n 'gh pr merge 99 -R acme/app'" deny "PATH set before a plugin script"
 check "echo 'gh pr merge 99 -R acme/app' | sort -S 1 --compress-prog=bash" deny "sort (runs a compressor)"
 check "git push --receive-pack 'gh pr merge 99 -R acme/app' ." deny "git push --receive-pack"
 check "git show --output=.git/hooks/pre-push HEAD:x && echo 'gh pr merge 5 -R a/b'" deny "git --output writes a file"

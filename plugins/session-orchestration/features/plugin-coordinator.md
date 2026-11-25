@@ -48,11 +48,10 @@ per session. Either way, one line per apply session, with its session name, its 
 kind with the reason, sized per batch with the `choosing-model-effort` skill (a one-file doc fix is `mechanical`, a new
 feature `design`), never one kind for all.
 
-**Apply sessions.** Start one per batch the user names (with `at_once`, per batch), from this root. Run
-`session-status --kind <its kind> <name>`
-first (this start has its own brief, so it's one `--launch` doesn't cover; `<name>`: a task name the project's key pattern matches; exit 2 names a wrong one), then `claude --bg -n <name>` as the coordinator skill's sessions.md says, with this
-brief, which starts with the name so the status shows its owner: what `feedback brief <name> '<what the cases say goes
-wrong>' <case files…>` prints (an apostrophe in it: `'\''`). Its PR line follows `feedback.send`, then `approvals.pr_create`: with `feedback.send` `auto`, they open their PR or
+**Apply sessions.** Start one per batch the user names (with `at_once`, per batch), from this root:
+`feedback apply --kind <its kind> <name> '<what the cases say goes wrong>' <case files…>` (`<name>`: a task name the
+project's key pattern matches; exit 2 names a wrong one). Its brief is `feedback brief`'s, which starts with the name
+so the status shows its owner. Its PR line follows `feedback.send`, then `approvals.pr_create`: with `feedback.send` `auto`, they open their PR or
 issue themselves once `feedback scrub` passes ([feedback.md](../skills/orchestrating-sessions/feedback.md), Applying
 step 4); else with `approvals.pr_create` on (the default in this project), they open their PR without asking; off, it
 reaches you as an ask like any other (the approval hook refuses it without your relay).

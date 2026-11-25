@@ -115,9 +115,11 @@ export async function readBody($: EngineInterface, path: string): Promise<AskBod
   }
 }
 // The prompt a click submits, and the Quote a relay carries. The clicked option comes first, so text in the
-// question can't pose as the answer. Keep in sync with approvals.md and worker.md.
+// question can't pose as the answer; the ask's action ends it, for session-status --relay to read, only after one of
+// the ask's own options (words typed in may limit it: the coordinator relays what they approve). Keep in sync
+// with approvals.md and worker.md.
 export const answerText = (a: Ask, option: string) =>
-  `Approval pane answer for ${a.key}: ${oneLine(option)}. Asked: ${oneLine(a.question)}`
+  `Approval pane answer for ${a.key}: ${oneLine(option)}. Asked: ${oneLine(a.question)}${a.action && a.options.includes(option) ? ` Action: ${oneLine(a.action)}` : ''}`
 // The asks an "Approve all merges" press answers, each with its yes: the whole question is the hook's merge action
 // (`merge app#271`, a `(KEY)` and `?` allowed), exactly one option starts "Yes", and nothing more needs reading
 // (no details), nor rechecking (OLD, stale). Anything else waits for its own click.
@@ -824,7 +826,7 @@ function isAsk(v: unknown): v is Ask {
   const opt = (x: unknown) => x === undefined || isStr(x)
   const b: Record<string, unknown> | undefined = a.body && typeof a.body === 'object' ? { ...a.body } : undefined
   return isStr(a.id) && isStr(a.key) && /^\S+$/.test(a.key) && isStr(a.question) && typeof a.at === 'number' &&
-    Array.isArray(a.options) && a.options.length >= 2 && a.options.every(isStr) && opt(a.details) && opt(a.target) && (a.still_applies === undefined || isPrRef(a.still_applies)) &&
+    Array.isArray(a.options) && a.options.length >= 2 && a.options.every(isStr) && opt(a.details) && opt(a.target) && opt(a.action) && (a.still_applies === undefined || isPrRef(a.still_applies)) &&
     (a.kind === undefined || isKind(a.kind)) && (a.seen === undefined || a.seen === true) && (a.sending === undefined || typeof a.sending === 'number') &&
     (a.body === undefined || (!!b && isStr(b.path) && isStr(b.text) && typeof b.sha256 === 'string' && /^[0-9a-f]{64}$/.test(b.sha256) && typeof b.cut === 'number'))
 }
@@ -956,6 +958,7 @@ const ASK_SCHEMA = {
     target: { type: 'string', description: 'Optional: where the action lands, e.g. "app#282 src/a.ts:42" for an inline comment, "app#282 general", "PROJ-5195" for a Jira comment.' },
     kind: { type: 'string', enum: KINDS, description: 'Optional, with body_file only: a PR review finding\'s kind: issue (the code is wrong), suggestion (it works but could be better), question (scope or intent the author or PO decides). The pane shows it as a badge and sorts issues first.' },
     body_file: { type: 'string', description: 'Optional absolute path of a comment body file, prepared before asking. The pane reads it now and shows its text (as markdown) and sha256; the question must name this sha256; any other sha256 it names must be that of a file it names by absolute path (a Teams send\'s attachment).' },
+    action: { type: 'string', description: 'Optional, one line: the exact Action a relay of the yes carries (approvals.md), e.g. "merge acme/app#45 (PROJ-123)" or "post comment /abs/body.md on acme/app#45 (sha256 X)". The answer prompt ends with "Action: <it>" and session-status --relay KEY, with no ACTION, takes it from there, so nobody retypes it. A post, or a close with a comment, needs body_file (draft the body first).' },
     still_applies: { type: 'string', description: 'Optional GitHub PR, OWNER/REPO#N (e.g. "acme/app#45"): the ask applies while that PR is open. Every full session-status run (the pane\'s refresh, Start, the sweep, --stale) looks it up (10 s cap) and its Stale section flags the ask once the PR is merged or closed, so an old ask is rechecked by machine, not by hand. For a PR no board row shows: a row\'s PR named in the question is flagged already.' },
   },
   required: ['key', 'question', 'options'],
@@ -997,7 +1000,7 @@ const REPLY_SCHEMA = {
     text: { type: 'string', minLength: 1, description: 'The message: your report, answer or question' },
     to: { type: 'string', description: 'A received message\'s `from`, or a session name. Left out: this project\'s coordinator' },
     report: { type: 'string', description: 'Your status report in full (markdown). Written first to <KEY>.md in the replies folder (key, else this session\'s name), replacing the report at its top and keeping its `## Handoff`, so you never write that file by hand; text can then be the short message. Not written: nothing is sent' },
-    done: { type: 'string', enum: DONE_KINDS, description: 'Only on the report that says the task is done; the reply is sent once what this kind needs holds, else it comes back with what is missing. pr: the worktree is clean, its commits are on the remote, the board shows a PR for key with no failing checks or conflict. pushed: clean and pushed, no PR (a branch someone else releases). report: no code; every file path the text names exists' },
+    done: { type: 'string', enum: DONE_KINDS, description: 'Only on the report that says the task is done; the reply is sent once what this kind needs holds, else it comes back with what is missing. pr: the worktree is clean, its commits are on the remote, the board shows a PR for key with no failing checks or conflict. pushed: clean and pushed, no PR (a branch someone else releases). report: no code; every file path the text names exists, and each .html it names is opened for the user, once (the text gains `opened: yes`, or `opened: no (PATHS)`)' },
     key: { type: 'string', description: 'Your task key: with done pr, the key whose PR the board shows; with report, the file is <key>.md' },
     worktree: { type: 'string', description: 'With done pr or pushed: the task\'s worktree (absolute path), when it isn\'t this session\'s cwd' },
     artifact: {
@@ -1809,6 +1812,23 @@ export const register: Register = on => {
       if (!msg.includes(url)) msg = `${msg}\nPage: ${url}`
       filed = ' Page recorded.'
     }
+    // A report's HTML pages its text names open here, once per version (a stamp per path and content), so neither the
+    // worker nor the coordinator opens them. Not the report body's: that may list source files.
+    if (done === 'report') {
+      const pages = [...new Set([...text.matchAll(/(?<![\w.~/:-])(~?\/[\w.~/-]*\.html)(?![\w.-])/g)].map(m => m[1] ?? ''))]
+      const failed: string[] = []
+      for (const p of pages) {
+        const f = p.startsWith('~/') ? homePath($, p.slice(2)) : Promise.resolve(p)
+        const stamp = `${await stampDir($)}/opened/${await hex16(`${await f}\n${await $.fs.read(await f).catch(() => '')}`)}`
+        if (await $.fs.read(stamp).then(() => true, () => false)) continue
+        // shortcut: macOS open, else xdg-open; on Windows (Git Bash) it fails as opened: no, add `start` if needed there.
+        const r = await runBash($, ['-c', 'if [ "$(uname)" = Darwin ]; then open "$1"; else xdg-open "$1"; fi >/dev/null 2>&1', '_', await f],
+          { cwd, timeoutMs: 30_000 }).catch(() => undefined)
+        if (r?.exitCode === 0) await $.fs.write(stamp, p).catch(() => undefined)
+        else failed.push(p)
+      }
+      if (pages.length) msg = `${msg}\n${failed.length ? `opened: no (${failed.join(', ')})` : 'opened: yes'}`
+    }
     let body = msg
     if (report) {
       const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--report-file', id, ...(typeof key === 'string' && key.trim() ? [key.trim()] : [])],
@@ -1974,8 +1994,16 @@ export const register: Register = on => {
     if ([key, question, ...labels].some(x => clean(x) !== x)) {
       return { deny: 'ask_approval: key, question and options may not hold control or bidi characters (but tab and newline).' }
     }
-    const { details, target, body_file, kind, still_applies } = e
+    const { details, target, body_file, kind, still_applies, action } = e
     const opt = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined)
+    if (action !== undefined && (typeof action !== 'string' || !action.trim() || /\n/.test(action) || clean(action) !== action)) {
+      return { deny: 'ask_approval: action is one non-empty line, with no control or bidi characters.' }
+    }
+    // A yes to a post without its body leaves the worker nothing to post: it takes a second ask (approvals.md).
+    const posts = (s: string) => /^\s*post\s+comment\b/i.test(s) || /\bclose\b[^\n]*\bwith(?:\s+[\w-]+){0,3}?\s+comment\b/i.test(s)
+    if (!opt(body_file) && (posts(question) || (typeof action === 'string' && posts(action)))) {
+      return { deny: 'ask_approval: a comment post, or a close with a comment, needs its body: draft the body first, write it to a file and pass it as body_file (the question names its sha256).' }
+    }
     if (still_applies !== undefined && !(typeof still_applies === 'string' && isPrRef(still_applies.trim()))) {
       return { deny: 'ask_approval: still_applies is a GitHub PR, OWNER/REPO#N.' }
     }
@@ -2014,6 +2042,9 @@ export const register: Register = on => {
         return { deny: `ask_approval: the question names sha256 ${bad.join(', ')}, which is neither body_file's (${body.sha256}) nor written right after the absolute path of the file it hashes (as the file is now).` }
       }
     }
+    // The action's sha256s are the question's, checked above: the relay can't carry a file the user didn't see.
+    const stray = typeof action === 'string' ? [...action.matchAll(/\b[0-9a-f]{64}\b/g)].map(m => m[0]).filter(h => !question.includes(h)) : []
+    if (stray.length) return { deny: `ask_approval: the action names sha256 ${stray.join(', ')}, which the question doesn't.` }
     const text = opt(details) && clean(String(details))
     const at = await $.clock.now()
     await loadAsks($).catch(() => undefined)
@@ -2027,6 +2058,7 @@ export const register: Register = on => {
       ...(body ? { body } : {}),
       ...(isKind(kind) ? { kind } : {}),
       ...(typeof still_applies === 'string' ? { still_applies: still_applies.trim() } : {}),
+      ...(typeof action === 'string' ? { action: action.trim() } : {}),
     }, a => a.key === key && a.question === question, at)
     const { isPlaced } = await open($)
     await syncStatus($)
@@ -2708,6 +2740,7 @@ export const register: Register = on => {
               )}
               <Text bold wrap="wrap">{draw(kindBadge(a))}{clean(a.question)}</Text>
               {a.target && <Text wrap="wrap"><Text dimColor>target </Text>{a.target}</Text>}
+              {a.action && <Text wrap="wrap"><Text dimColor>action </Text>{a.action}</Text>}
               {a.body && <Text dimColor wrap="wrap">body {clean(a.body.path)} · sha256 {a.body.sha256}</Text>}
               {a.body && (
                 <Box flexDirection="column" borderStyle="single" borderColor="inactive" paddingX={1}>

@@ -34,6 +34,8 @@
 #        feedback mark FILE sent URL | fixed WHAT | dropped
 #        feedback brief NAME WHY CASE…   an apply session's brief for these case files, its PR line from config
 #                                feedback.send (auto) or approvals.pr_create (true: it opens its PR itself; else it asks first)
+#        feedback apply [--kind KIND] NAME WHY CASE…   starts that apply session: session-status --launch NAME
+#                                --kind KIND (default build) --brief-file <the brief>; its output and exit code
 #        feedback mode           how cases are applied here: pr | fork-pr | issue | local (config feedback.mode, else
 #                                pr with feedback.repo_dir set, else fork-pr when gh is signed in, else issue)
 #        feedback repo           the plugin's GitHub repo (owner/name), from plugin.json's repository
@@ -122,6 +124,12 @@ brief)
   elif [ "$(config approvals.pr_create 2>/dev/null)" = true ]; then pl="Open your PR yourself (approvals.pr_create is on)."
   else pl="Ask before gh pr create."; fi
   echo "Work on $n: Apply plugin feedback: $*. Follow feedback.md, Applying, for these cases only, and this repo's CLAUDE.md release checks. $pl Why: $why Done when: the change is implemented with the repo's checks passing, a PR is open, and each case is marked sent <url>. When finished: reply with done and the check that proves it." ;;
+apply)
+  k=build; [ "${2:-}" != --kind ] || { k=${3:-}; set -- "$1" "${@:4}"; }
+  [ $# -ge 4 ] && [ -n "$k" ] || die "usage: feedback apply [--kind KIND] NAME WHY CASE…"
+  bf=$(mktemp) || exit 1; "$0" brief "${@:2}" > "$bf" || { rm -f "$bf"; exit 2; }
+  # exit 3 (someone else owns NAME): its start-anyway line names the brief file, so that one stays
+  "$(dirname "$0")/session-status" --launch "$2" --kind "$k" --brief-file "$bf"; rc=$?; [ "$rc" = 3 ] || rm -f "$bf"; exit "$rc" ;;
 mode)
   m=$(config feedback.mode 2>/dev/null)
   if [ -n "$m" ] && [ "$m" != auto ]; then echo "$m"

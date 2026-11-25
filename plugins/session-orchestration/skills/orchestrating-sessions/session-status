@@ -187,9 +187,9 @@
 #                       pane.sections), written to the project's .claude/coordination.local.json; a title press runs it
 #        session-status --approvals   the live approval answers clicked in this coordinator's pane (and its
 #                       predecessors'), with the hours left and the relays sent of each
-#        session-status --relay KEY ACTION   the approval block for KEY's newest live pane answer, verified as the
-#                       worker will verify it, to send as is once its Quote approves ACTION (exit 1 with why when
-#                       there's none, it is a No or the check fails)
+#        session-status --relay KEY [ACTION]   the approval block for KEY's newest live pane answer, verified as the
+#                       worker will verify it, to send as is once its Quote approves ACTION (none: the Action the
+#                       ask set, ending its answer; exit 1 with why when there's none, it is a No or the check fails)
 #        session-status --kind KIND[:S|M|L] [NAME [--anyway]]   `--model M --effort E` from plan.models.KIND for a task
 #                       start (a size moves the effort a step), logged as a usage start line (NAME, the -n session name,
 #                       hashed); ` --advisor A` too where config plan.advisor.KIND is set and pairs with the model. A
@@ -200,9 +200,9 @@
 #                       `owner KEY` says other or an origin branch naming KEY has another author's commits; the ask
 #                       to put on the pane is its last line. Unassigned (none): `claim KEY`. --anyway (the user's
 #                       start anyway): passes, claims nothing. KEY `#N`: a GitHub issue (no session name carries one)
-#        session-status --launch NAME --kind KIND[:S|M|L] [--anyway] [--at WHEN | --after-reset [ACCOUNT]] [--] 'WHAT' 'WHY' 'DONE-WHEN'
-#                       a task start in one command: --kind, then the brief built from the three texts, started as
-#                       NAME; --at or --after-reset queues it for a running --watch to start then. Not for coordinator,
+#        session-status --launch NAME --kind KIND[:S|M|L] [--anyway] [--at WHEN | --after-reset [ACCOUNT]] [--] 'WHAT' 'WHY' 'DONE-WHEN' | --brief-file FILE
+#                       a task start in one command: --kind, then the brief built from the three texts (or FILE's
+#                       text, verbatim), started as NAME; --at or --after-reset queues it for a running --watch to start then. Not for coordinator,
 #                       nor review named KEY-<more> (a review of KEY's task: its own first prompt)
 #        session-status --launch --list | --cancel NAME | --now NAME [--anyway]   the queued starts; drop one; start
 #                       one at once
@@ -1262,7 +1262,7 @@ ended_free() {
 # --approvals: the approval answers clicked in this coordinator's pane (approvals.jq) that are still live (MAX_AGE_H,
 # 24h, as long as verify-approval.sh takes the quote), its transcript's and its predecessors' (lib.sh
 # chain_transcripts), newest first, with the hours left and the relays sent of each.
-# --relay KEY ACTION: the approval block (approvals.md) for KEY's newest live pane answer, checked first as the worker
+# --relay KEY [ACTION]: the approval block (approvals.md) for KEY's newest live pane answer, checked first as the worker
 # will (verify-approval.sh, from this session's listed cwd), to send as is; exit 1 with why when there's none, it is a
 # No, the check fails, or this is a successor not holding the coordinator's name yet. Both run in the coordinator's
 # own session.
@@ -1281,16 +1281,7 @@ if [ "${1:-}" = --approvals ] || [ "${1:-}" = --relay ]; then
     exit 0
   fi
   key=${2:-} action=${3:-}
-  [ -n "$key" ] && [ -n "$action" ] && [[ $action != *$'\n'* ]] || { echo "usage: session-status --relay KEY ACTION (one line)" >&2; exit 2; }
-  # A landing's Action as typed: "approved under" is --relay's to add, and words after the bracket (merge instructions)
-  # read as the coordinator's own approval claim, which auto mode refuses and the hook doesn't take. Print the plain form.
-  if [[ $action =~ ^[Mm][Ee][Rr][Gg][Ee][[:space:]]+([^[:space:]]+)[[:space:]]*\(([A-Za-z0-9][A-Za-z0-9._-]*) ]]; then
-    t=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]}   # the next =~ clears BASH_REMATCH
-    # (a sentence's closing . after the bracket claims nothing: the hook takes it too)
-    if grep -qiE 'approved[[:space:]]+under' <<<"$action" || ! [[ $action =~ \)[[:space:]]*\.?[[:space:]]*$ ]]; then
-      echo "give the plain Action, with nothing after its bracket and no \"approved under\" (--relay adds that itself): session-status --relay $key 'merge $t ($n)'" >&2; exit 1
-    fi
-  fi
+  [ -n "$key" ] && [[ $action != *$'\n'* ]] || { echo "usage: session-status --relay KEY [ACTION] (one line; none: the ask's own Action)" >&2; exit 2; }
   ho_live || exit 1
   name=$(ho_field 1 "$CLAUDE_CODE_SESSION_ID" 2) cwd=$(ho_field 1 "$CLAUDE_CODE_SESSION_ID" 6)
   [ -n "$name" ] || { echo "this session isn't listed (claude agents): no source to name" >&2; exit 1; }
@@ -1303,6 +1294,20 @@ if [ "${1:-}" = --approvals ] || [ "${1:-}" = --relay ]; then
   # The newest answer stands: a "No, …" option (approvals.md, Asking) leaves nothing to relay, not even an older yes.
   [[ ${q#"Approval pane answer for $key: "} != [Nn][Oo][![:alnum:]]* ]] ||
     { echo "$key's newest pane answer is a No, nothing to relay: $q" >&2; exit 1; }
+  # No ACTION given: the ask's own, which its answer prompt ends with (ask_approval's action, after the question).
+  if [ -z "$action" ]; then
+    [[ $q == *" Asked: "*" Action: "?* ]] || { echo "$key's answer carries no Action (its ask had none, or the user typed their own words: relay what they approve): session-status --relay $key ACTION" >&2; exit 2; }
+    action=${q##* Action: }
+  fi
+  # A landing's Action: "approved under" is --relay's to add, and words after the bracket (merge instructions) read as
+  # the coordinator's own approval claim, which auto mode refuses and the hook doesn't take. Print the plain form.
+  if [[ $action =~ ^[Mm][Ee][Rr][Gg][Ee][[:space:]]+([^[:space:]]+)[[:space:]]*\(([A-Za-z0-9][A-Za-z0-9._-]*) ]]; then
+    t=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]}   # the next =~ clears BASH_REMATCH
+    # (a sentence's closing . after the bracket claims nothing: the hook takes it too)
+    if grep -qiE 'approved[[:space:]]+under' <<<"$action" || ! [[ $action =~ \)[[:space:]]*\.?[[:space:]]*$ ]]; then
+      echo "give the plain Action, with nothing after its bracket and no \"approved under\" (--relay adds that itself): session-status --relay $key 'merge $t ($n)'" >&2; exit 1
+    fi
+  fi
   others=$(( $(wc -l <<<"$pick") - 1 ))
   [ "$others" = 0 ] || echo "$key has $others older live answer(s) too: relaying the newest (--approvals lists them)" >&2
   # A landing asked under another key: `merge TARGET (<session name>)` becomes `(<session name>, approved under KEY)`
@@ -1632,7 +1637,8 @@ fi
 # and wakes with the result; a past-due one starts at the next tick, a successor's watcher included. A start that
 # fails stays queued marked failed: reported once, never retried by the watcher. --now NAME [--anyway] starts a queued
 # one at once (a failed one too; --anyway: the user's start anyway, after --claim stopped it), --cancel NAME drops it,
-# --list prints them (the sweep's Scheduled starts footer).
+# --list prints them (the sweep's Scheduled starts footer). --brief-file FILE in place of the three texts: FILE's text is
+# the brief, verbatim (feedback apply's, a sub-coordinator's, a review-inbox job's), read when --launch runs.
 # shortcut: --due takes the entries before it starts them, so a watcher killed in between loses that start; mark
 # them firing instead once one is lost.
 # `· failed:`, not `— failed:`: the pane offers what follows `— …: ` as a command to copy (register.tsx leftoverCommand).
@@ -1643,15 +1649,17 @@ launch_take() {
   local f t; f=$(fwd_file launches); [ -s "$f" ] || return 0
   ( inbox_lock "$f"; t=$(jq -c "select($1)" "${@:2}" "$f") && jq -c "select(($1) | not)" "${@:2}" "$f" > "$f.$$" && mv "$f.$$" "$f" && printf '%s\n' "$t" || rm -f "$f.$$" )
 }
-# launch_start NAME KIND ANYWAY WHAT WHY DONE: the plain start. Its line on stdout; exit 0 started, else --kind's, or 1.
+# launch_start NAME KIND ANYWAY WHAT WHY DONE [BRIEF]: the plain start (BRIEF, when given, is the whole first prompt).
+# Its line on stdout; exit 0 started, else --kind's, or 1.
 launch_start() {
-  local flags rc key mem brief out id
+  local flags rc key mem brief=${7:-} out id
   flags=$(bash "$SELF" --kind "$2" "$1" ${3:+"$3"}); rc=$?; [ "$rc" = 0 ] && [ -n "$flags" ] || return $(( rc ? rc : 1 ))
   key=$(grep -oE -m1 "^$(key_re "$(adapter_path "$ROOT")")" <<<"$1" | head -1)
   mem=$(sed -nE 's/^[^`]*[Pp]roject memory[^`]*`([^`]+)`.*/\1/p' CLAUDE.md CLAUDE.local.md 2>/dev/null | head -1)
-  brief="Work on ${key:-$1}: ${4%.}. Why: ${5%.}. Done when: ${6%.}.${mem:+ Read $mem first.} Keep working until done or blocked. When finished: reply with done and the check that proves it."
+  [ -n "$brief" ] || brief="Work on ${key:-$1}: ${4%.}. Why: ${5%.}. Done when: ${6%.}.${mem:+ Read $mem first.} Keep working until done or blocked. When finished: reply with done and the check that proves it."
   # Desktop with sidebar tasks: the app starts it (start_session), so it shows in the sidebar; nothing starts here
-  if [[ ${CLAUDE_CODE_ENTRYPOINT:-} == claude-desktop* ]] && [ "$(config start.sidebar 2>/dev/null)" = true ]; then
+  # (never a sub-coordinator: it always runs as claude --bg)
+  if [[ ${CLAUDE_CODE_ENTRYPOINT:-} == claude-desktop* ]] && [ "${2%%:*}" != coordinator ] && [ "$(config start.sidebar 2>/dev/null)" = true ]; then
     read -r _ m _ e _ <<<"$(tr -d '\\' <<<"$flags")"
     echo "Desktop with start.sidebar: call mcp__ccd_session__start_session (ToolSearch it) with title \"$1\", model \"$m\", effort \"$e\", prompt: $brief"
     return 0
@@ -1668,7 +1676,7 @@ launch_fire() {
   n=$(jq -r .name <<<"$e")
   # shortcut: under Desktop+start.sidebar a due entry leaves the queue on the start_session line alone (it reaches
   # the watcher's wake, which may not act on it); keep it queued until started if such starts go missing
-  r=$(CLAIM_RERUN="session-status --launch --now $n --anyway" launch_start "$n" "$(jq -r .kind <<<"$e")" "$(jq -r .anyway <<<"$e")" "$(jq -r .what <<<"$e")" "$(jq -r .why <<<"$e")" "$(jq -r .done <<<"$e")" 2>&1) &&
+  r=$(CLAIM_RERUN="session-status --launch --now $n --anyway" launch_start "$n" "$(jq -r .kind <<<"$e")" "$(jq -r .anyway <<<"$e")" "$(jq -r .what <<<"$e")" "$(jq -r .why <<<"$e")" "$(jq -r .done <<<"$e")" "$(jq -r '.brief // ""' <<<"$e")" 2>&1) &&
     { tail -1 <<<"$r"; return 0; }
   r=$(tail -1 <<<"$r"); r=${r#"\"$n\" didn't start: "}; r=${r#not started: }; r=${r:-no reason printed}
   # the queue keeps 300 characters of it; the line printed keeps it whole (--claim's ends with the start-anyway command)
@@ -1676,7 +1684,7 @@ launch_fire() {
   echo "\"$n\" not started: $r (session-status --launch --now $n tries again, --cancel $n drops it)"; return 1
 }
 if [ "${1:-}" = --launch ]; then
-  u="usage: session-status --launch NAME --kind KIND[:S|M|L] [--anyway] [--at 'HH:MM'|'YYYY-MM-DD HH:MM' | --after-reset [ACCOUNT]] [--] 'WHAT' 'WHY' 'DONE-WHEN' | --launch --list | --cancel NAME | --now NAME [--anyway]"
+  u="usage: session-status --launch NAME --kind KIND[:S|M|L] [--anyway] [--at 'HH:MM'|'YYYY-MM-DD HH:MM' | --after-reset [ACCOUNT]] [--] 'WHAT' 'WHY' 'DONE-WHEN' | --brief-file FILE | --launch --list | --cancel NAME | --now NAME [--anyway]"
   lf=$(fwd_file launches); shift
   case ${1:-} in
     --list) [ $# = 1 ] || { echo "$u" >&2; exit 2; }; [ ! -s "$lf" ] || launch_lines < "$lf"; exit 0 ;;
@@ -1692,25 +1700,32 @@ if [ "${1:-}" = --launch ]; then
       launch_fire "$(jq -c --arg a "${3:-}" 'del(.failed) | if $a == "" then . else .anyway = $a end' <<<"$e")"; exit ;;
   esac
   name=${1:-}; [ $# -ge 3 ] && [ "$2" = --kind ] && [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || { echo "$u" >&2; exit 2; }
-  kind=$3; shift 3; any= at= acct= label= due= hm=
+  kind=$3; shift 3; any= at= acct= label= due= hm= bfile= lbrief=
   while [ $# -gt 0 ]; do case $1 in
     --anyway) any=--anyway; shift ;;
+    --brief-file) bfile=${2:-}; [ -n "$bfile" ] || { echo "$u" >&2; exit 2; }; shift 2 ;;
     --at) at=${2:-}; [ -n "$at" ] || { echo "$u" >&2; exit 2; }; shift 2 ;;
     # ACCOUNT is a config dir, so it starts with / or ~ (a WHAT that does goes after --)
     --after-reset) at=reset; shift; case ${1:-} in /*|\~*) acct=$1; shift ;; esac ;;
     --) shift; break ;;
     *) break ;;
   esac; done
-  [ $# = 3 ] && [ -n "$1" ] && [ -n "$2" ] && [ -n "$3" ] && config "plan.models.${kind%:[SML]}" >/dev/null 2>&1 || { echo "$u" >&2; exit 2; }
+  if [ -n "$bfile" ]; then
+    [ $# = 0 ] && lbrief=$(cat "$bfile" 2>/dev/null) && [ -n "$lbrief" ] || { echo "--launch: --brief-file takes a readable, non-empty FILE and no texts" >&2; exit 2; }
+    set -- '' '' ''
+  fi
+  [ $# = 3 ] && { [ -n "$lbrief" ] || { [ -n "$1" ] && [ -n "$2" ] && [ -n "$3" ]; }; } && config "plan.models.${kind%:[SML]}" >/dev/null 2>&1 || { echo "$u" >&2; exit 2; }
   # A review named KEY-<more> reviews KEY's task: its brief's "Work on KEY" would make it KEY's owner. One whose
   # name has no key, or is a key whole (a project whose keys are session names), owns its own task (a docs audit).
-  [ "${kind%:[SML]}" != coordinator ] || { echo "--launch: not for coordinator: a coordinator starts by --successor or --coordinator-of" >&2; exit 2; }
+  # With --brief-file the brief is the caller's own: a sub-coordinator's (KEY-coordinator) or a review's goes through.
+  [ "${kind%:[SML]}" != coordinator ] || [[ -n $bfile && $name == ?*-coordinator ]] || { echo "--launch: not for coordinator: a coordinator starts by --successor or --coordinator-of (a sub-coordinator: --launch KEY-coordinator --kind coordinator --brief-file FILE)" >&2; exit 2; }
   rk=$(grep -oE -m1 "^$(key_re "$(adapter_path "$ROOT")")" <<<"$name" | head -1)
-  if [ "${kind%:[SML]}" = review ] && [ -n "$rk" ] && [ "$rk" != "$name" ]; then
-    echo "--launch: not for a review named for task $rk: a review of $rk's task starts by hand, its first prompt starting \`Session task: $rk review\` with the review brief (sessions.md, Owners); a review that owns its own task (a docs audit) takes a name without a task key" >&2; exit 2
+  if [ "${kind%:[SML]}" = review ] && [ -n "$rk" ] && [ "$rk" != "$name" ] && [[ -z $bfile || $lbrief != "Session task: $rk review"* ]]; then
+    echo "--launch: not for a review named for task $rk: a review of $rk's task takes --brief-file FILE, its first prompt starting \`Session task: $rk review\` with the review brief (sessions.md, Owners); a review that owns its own task (a docs audit) takes a name without a task key" >&2; exit 2
   fi
   if [ -z "$at" ]; then
-    CLAIM_RERUN="session-status --launch $name --kind $kind --anyway -- '<the same three texts>'" launch_start "$name" "$kind" "$any" "$1" "$2" "$3"; exit
+    rr="-- '<the same three texts>'"; [ -z "$bfile" ] || rr="--brief-file $bfile"
+    CLAIM_RERUN="session-status --launch $name --kind $kind --anyway $rr" launch_start "$name" "$kind" "$any" "$1" "$2" "$3" "$lbrief"; exit
   fi
   if [ "$at" = reset ]; then
     wu=$(weekly_use); d=$(head -1 <<<"$wu" | cut -f1)
@@ -1728,8 +1743,8 @@ if [ "${1:-}" = --launch ]; then
   fi
   [ ! -s "$lf" ] || ! jq -e --arg n "$name" 'select(.name == $n)' "$lf" >/dev/null 2>&1 ||
     { echo "\"$name\" is scheduled already (session-status --launch --list): --cancel $name first" >&2; exit 2; }
-  jq -cn --argjson due "$due" --arg name "$name" --arg kind "$kind" --arg anyway "$any" --arg what "$1" --arg why "$2" --arg done "$3" --arg label "$label" \
-    '{due: $due, name: $name, kind: $kind, anyway: $anyway, what: $what, why: $why, done: $done, label: $label}' | locked_append "$lf"
+  jq -cn --argjson due "$due" --arg name "$name" --arg kind "$kind" --arg anyway "$any" --arg what "$1" --arg why "$2" --arg done "$3" --arg label "$label" --arg brief "$lbrief" \
+    '{due: $due, name: $name, kind: $kind, anyway: $anyway, what: $what, why: $why, done: $done, label: $label} + if $brief == "" then {} else {brief: $brief} end' | locked_append "$lf"
   echo "scheduled \"$name\" · $kind · $(epochfmt "$due" '%m-%d %H:%M')${label:+ · $label}: a running watcher (session-status --watch) starts it then; --launch --now $name starts it at once, --cancel $name drops it"
   exit 0
 fi

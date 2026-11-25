@@ -19,7 +19,7 @@ Action: <one action on one task>
 Source: <your sessionId> <your cwd>
 ```
 
-For a pane answer, `session-status --relay KEY ACTION` writes the block (KEY's newest answer of the last 24h, Source
+For a pane answer, `session-status --relay KEY [ACTION]` (none: the ask's `action`) writes the block (KEY's newest answer of the last 24h, Source
 filled in) once it passes the check below, and never for a "No, …" answer (exit 1 says why). Send its output as is
 once its Quote approves ACTION. The auto-mode classifier may refuse the call (it reads a merge or post Action as the
 act): don't reword it or call it again unasked, `hand_command` it (key KEY) so the user's Run press is the consent; the
@@ -47,7 +47,7 @@ user a command).
   each naming the key and the exact action ("Yes, patch the PROJ-4172 config and restart the frontend" / "No, leave
   PROJ-4172 as is"). One question per decision. It returns at once and the buttons wait in the pane, so you keep
   receiving worker messages. When the user clicks, the answer arrives as your next prompt, `Approval pane answer
-  for <KEY>: <option>. Asked: <question>`; from **In your own words…**, the user's typed text stands in for
+  for <KEY>: <option>. Asked: <question>` (then ` Action: <action>` when the ask set one); from **In your own words…**, the user's typed text stands in for
   `<option>` (a conditional yes, or a different action): act only on what those words approve. Its **Chat about
   this** asks you to talk it over first ([pane.md](pane.md), Chat about an ask); the ask stays. That whole line is
   the Quote. It verifies for 24h from the click, and only from this plugin's click, so a typed copy doesn't count.
@@ -64,8 +64,11 @@ user a command).
     fields: `details` (markdown: what's being decided, the review comment being answered), `target` (`app#282
     src/a.ts:42`, `app#282 general`, `PROJ-5195`) and, for a comment post, `body_file`. **For a post, write the
     body file first, pass its absolute path, and don't edit it after asking**: the pane refuses the ask if the
-    sha256 the question names isn't the file's, or a question names a sha256 without `body_file`. No control
-    characters in the question or options.
+    sha256 the question names isn't the file's, or a question names a sha256 without `body_file`; a `post comment`
+    question or action, or a close with a comment, without `body_file` is refused too (draft the body first). No
+    control characters in the question or options.
+  - Pass `action`, the exact Action a relay of the yes carries (`merge OWNER/REPO#N (KEY)`, `post comment FILE on T
+    (sha256 X)`): the answer line ends with `Action: <it>`, and `session-status --relay KEY` with no ACTION relays it.
   - **A send's draft holds every word that goes out**: each message's exact text, an attachment's caption or body
     included (Teams won't send a file without one). Check it before you ask: text the session adds after the
     approval isn't covered, and is refused as not in the draft.
@@ -137,9 +140,7 @@ user a command).
   its text). Relay with that action as the Action line, verbatim, plus the task key: `Action: merge app#271
   (PROJ-5164)`. Use the hook's words, not the CLI command: an Action naming the command fails the hook even when
   `verify-approval.sh` said verified. The worker's hook allows only that PR or issue, and for a post only a body
-  file with that sha256; anything else is denied. One relay allows one run (a `gh` merge again while its PR stays open
-  with no auto-merge queued, at the head it first saw: gh refused it, as it does `--auto` on a `CLEAN` PR, or a plain
-  merge failed `Base branch was modified`; so a retry needs no second relay). Every gated command (comment edits
+  file with that sha256; anything else is denied. One relay allows one run (a merge's retry: worker.md's landing). Every gated command (comment edits
   included: an edit is named like a new post) and its action: [worker.md](worker.md#posting-and-merging). A Teams
   send's `--attachments` files are each named with their own sha256 too. A `gh` merge's Action names `OWNER/REPO#ID`;
   the user's approval of the task covers landing its own PR: relay that with the worker's session name in the

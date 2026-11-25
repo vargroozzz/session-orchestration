@@ -92,10 +92,10 @@ A task that would take 3 or more chunks runs under its own coordinator, `KEY-coo
 approvals come only from you; it has no pane, and its asks show on yours keyed KEY. Subprojects stays the answer for
 a subfolder with its own setup. What the sub does: [subcoordinator.md](subcoordinator.md).
 
-- **Start**: `session-status --kind coordinator KEY-coordinator` first, as its own call (it claims KEY, as for any
-  task), then `claude --bg <its flags> -n KEY-coordinator 'Coordinate KEY: <what>. Why: <why>. Done when: <check>.
-  From the coordinator "<your name>": run this task under its own plan. Report back to me only its outcome, or a
-  block I must resolve.'`. Always `claude --bg`, even under `start.sidebar`. Write the handoff entry `delegated to
+- **Start**: write its first prompt to a file (`Coordinate KEY: <what>. Why: <why>. Done when: <check>. From the
+  coordinator "<your name>": run this task under its own plan. Report back to me only its outcome, or a block I must
+  resolve.`) and run `session-status --launch KEY-coordinator --kind coordinator --brief-file FILE` (it claims KEY, as
+  for any task). It starts in the background even under `start.sidebar`. Write the handoff entry `delegated to
   KEY-coordinator: <request>` and track only that; resolve it when the sub's done report checks out.
 - **Status**: KEY is one row, `sub: STATE; plan D/N landed, …`; its sessions fold under it (`session-status KEY`
   lists them). The sub's watcher handles KEY's PR events and its sessions' changes; yours stops the sub once KEY is
@@ -116,10 +116,10 @@ too big for one session: [plans.md](plans.md).
 A new task: `session-status --launch <KEY>-<short-desc> --kind <kind> --
 '<what>' '<who needs it, what it unblocks>' '<the end state of the whole job and the check that proves it>'`, as its
 own call. It runs `--kind` (below), builds the brief, adds "Read <memory file> first." when CLAUDE.md names one,
-starts the session and prints `started "NAME" (ID8) · KIND M/E`. Exit 3 or 2: nothing started, read on. Not for a
-review of another task (named `<KEY>-<more>`, it refuses: its own first prompt, Owners) or a coordinator start
-([handover.md](handover.md)); a review that owns its own task (a docs audit) launches with a name that has no task
-key or is one whole. In Desktop with
+starts the session and prints `started "NAME" (ID8) · KIND M/E`. Exit 3 or 2: nothing started, read on. A review of
+another task (named `<KEY>-<more>`) takes its own first prompt (Owners) by `--brief-file`, below; a coordinator
+start isn't a launch ([handover.md](handover.md)); a review that owns its own task (a docs audit) launches with a name
+that has no task key or is one whole. In Desktop with
 `start.sidebar` on it starts nothing and prints the `start_session` call to make instead. A started session
 needs no "started" line in your handoff file: the status lists it and `--owner` gives its first prompt.
 
@@ -133,17 +133,13 @@ starts` on the pane and by `session-status --launch --list`, and a successor's w
 watcher running (the project's own, not a sub's `--watch KEY`), nothing starts: arm one. It starts under the
 watcher's account, whichever account's reset it waited for.
 
-What it runs, and what you write by hand for a start it doesn't cover: `claude --bg --model <M> --effort <E> -n
-<KEY>-<short-desc> 'Work on <KEY>: <what>. Why: <who needs it, what it unblocks>. Done when: <the end state of the
-whole job and the check that proves it>. Keep working until done or blocked. When finished: reply with done and the
-check that proves it.'`
-- Its closing line stays, for every kind: Sonnet and Haiku sessions (mechanical, scan) skip a done report the brief
-  doesn't ask for, and you end up polling and nudging them.
-- `--model`/`--effort`: size the task into a `plan.models` kind with the `choosing-model-effort` skill, run
-  `session-status --kind <kind> <session-name>` first (the `-n` value), as its own call, and paste the flags it prints whole (`--model M --effort E`, ` --advisor A` when config `plan.advisor.<kind>` sets one, then the tools the task goes without, ` --disallowedTools=…`; the Desktop `start.sidebar` pair too: status-reference.md, `--kind`)
-  (exit 2: a wrong kind or name; fix it, don't start without them). It logs the start for retro. `fable` only as `--kind` prints it
-  (config `fable.accounts`, `choosing-model-effort`) or when the user names it: then set it by hand. A handover or fresh restart of that task takes the same flags without running `--kind` again, so the task logs
-  one start.
+**A first prompt of your own** (a review of another task, a sub-coordinator, plugin feedback, a review-inbox job, a
+retro's followups): write it to a file and run `session-status --launch NAME --kind KIND --brief-file FILE` in place
+of the three texts; the file's text is the first prompt verbatim, so keep its closing "When finished: reply with done
+and the check that proves it." (a Sonnet or Haiku session skips a done report the brief doesn't ask for), and the why
+and done-when a new session needs to make your judgement calls. `feedback apply NAME WHY CASE…` does it for plugin
+feedback. By hand (`claude --bg <the flags --kind printed> -n NAME '<prompt>'`) only for a handover or fresh restart of
+a started task: it takes the same flags without running `--kind` again, so the task logs one start.
 - **`--kind` exits 3, printing nothing: not yours to start** (ownership on start: `--kind`
   runs `session-status --claim` on the key the name starts with). The task is assigned to someone else, or a branch on
   origin naming it has another person's commits. Don't start: queue the ask its stderr names (`ask_approval`: "KEY:
@@ -156,14 +152,6 @@ check that proves it.'`
 - The first prompt names the task. `-n` names the session by its ticket (e.g. `PROJ-1234-fix-settler`: no spaces).
   With the key not known yet, leave it out, and the session names itself with `name_session` once it finds it.
   Without `-n` the real name shows in `ListAgents` a few seconds later and may repeat one: then message `name [ref]`.
-- The new session sees none of your conversation, so the why and the done-when (e.g. "PR open, every review finding
-  answered, `pnpm test` exits 0") let it make the judgement calls you would. When the user's exact wording matters (a
-  precise requirement, a constraint), you may quote it, resolving what only your conversation knows ("as above")
-  and dropping task keys it doesn't need.
-- Add "Read <memory file> first." when the project names one.
-- Single quotes, so backticks or `$` in the text don't run in your shell (write an apostrophe as `'\''`). Name other
-  task keys only when needed: each mention counts toward `session-status`'s `maybe` guess. If the user's default
-  mode is plan, add `--permission-mode default`.
 
 **Propose first, or start at once.** How you start new work is the person key `start.mode` (`start=` on `--start`'s
 `active:` line; `session-status --config start.mode`), with `start.kinds.feedback_apply` overriding it for plugin

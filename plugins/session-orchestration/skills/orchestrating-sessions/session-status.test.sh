@@ -3177,6 +3177,16 @@ v=$(cd "$root" && HOME=$tmp CLAUDE_CONFIG_DIR=$tmp/cfg PATH=$tmp/bin:$PATH env -
 # Refused: no live answer for the key (none, or expired), a successor not holding NAME yet (named NAME-next, or a
 # Desktop one recorded in NAME.next under another title).
 stub coord
+# No ACTION: the ask's own Action, which ends its answer prompt; an answer without one says to give it.
+pane 0.08 'ABC-13: Yes, land it. Asked: Land ABC-13? Action: merge acme/app#7 (ABC-13)' >> "$proj/$cid.jsonl"
+out=$(ap --relay ABC-13 2>&1) && [ "$out" = "$(blk 'ABC-13: Yes, land it. Asked: Land ABC-13? Action: merge acme/app#7 (ABC-13)' 'merge acme/app#7 (ABC-13)' "$cid")" ] ||
+  { echo "--relay, the ask's Action: $out"; exit 1; }
+rc=0; out=$(ap --relay ABC-12 2>&1) || rc=$?
+[ $rc = 2 ] && [[ $out == "ABC-12's answer carries no Action"* ]] || { echo "--relay, no Action anywhere: $rc $out"; exit 1; }
+# the ask's own Action is held to the plain landing form too
+pane 0.08 'ABC-14: Yes. Asked: Land ABC-14? Action: merge acme/app#8 (ABC-14) once CI is green' >> "$proj/$cid.jsonl"
+rc=0; out=$(ap --relay ABC-14 2>&1) || rc=$?
+[ $rc = 1 ] && [[ $out == *"session-status --relay ABC-14 'merge acme/app#8 (ABC-14)'" ]] || { echo "--relay, the ask's Action with words after it: $rc $out"; exit 1; }
 for k in ABC-99 ABC-30; do rc=0; out=$(ap --relay $k x 2>&1) || rc=$?
   [ $rc = 1 ] && [[ $out == "no pane answer for $k in the last 24 hours"* ]] || { echo "--relay, no answer for $k: $rc $out"; exit 1; }; done
 # The newest answer a No (the user changed their mind): nothing relayed, not the older yes.
@@ -3438,6 +3448,19 @@ out=$(run --launch docs-audit --kind review -- 'audit the docs' 'w' 'd') && [[ $
   { echo "a key-less review start failed: $out"; exit 1; }
 # a name that is a key whole (a project whose keys are session names) owns its task too
 run --launch ABC-90 --kind review -- 'audit' 'w' 'd' >/dev/null && [[ $(calls) == *' -n ABC-90 Work on ABC-90: audit. '* ]] || { echo "a key-named review start failed"; exit 1; }
+# --brief-file: FILE's text is the first prompt, verbatim (quotes, $ and all), and --kind still runs (the start logged)
+printf '%s\n' "Work on ABC-91: Apply plugin feedback: it's \$HOME. Why: w." > "$tmp/brief.txt"; : > "$tmp/calls"
+out=$(run --launch ABC-91-fb --kind build --brief-file "$tmp/brief.txt") && [ "$out" = "started \"ABC-91-fb\" $started" ] &&
+  [ "$(calls)" = "--bg --model opus --effort medium --disallowedTools=Agent,AskUserQuestion,ScheduleWakeup -n ABC-91-fb Work on ABC-91: Apply plugin feedback: it's \$HOME. Why: w." ] || { echo "--brief-file: $out"; exit 1; }
+: > "$tmp/calls"; run --launch ABC-92-coordinator --kind coordinator --brief-file "$tmp/brief.txt" >/dev/null && [[ $(calls) == *' -n ABC-92-coordinator Work on ABC-91'* ]] &&
+  printf 'Session task: ABC-90 review\nReview the PR.\n' > "$tmp/rbrief.txt" &&
+  run --launch ABC-90-review --kind review --brief-file "$tmp/rbrief.txt" >/dev/null || { echo "--brief-file for a sub-coordinator or a key-named review: $(calls)"; exit 1; }
+# a key-named review whose brief would make it the task's owner ("Work on ABC-90")
+for a in "ABC-93 --kind build --brief-file $tmp/none" "ABC-93 --kind build --brief-file $tmp/brief.txt x" "ABC-93 --kind coordinator --brief-file $tmp/brief.txt" "ABC-90-review --kind review --brief-file $tmp/brief.txt"; do
+  rc=0; run --launch $a >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--launch $a exited $rc"; exit 1; }; done
+out=$(run --launch ABC-94-later --kind build --at "$(date -v+1d +%F 2>/dev/null || date -d tomorrow +%F) 12:00" --brief-file "$tmp/brief.txt") && : > "$tmp/calls" &&
+  jq -c 'select(.name == "ABC-94-later") | .due = 1000' "$lf" > "$lf.x" && mv "$lf.x" "$lf" && run --launch --due >/dev/null &&
+  [[ $(calls) == *" -n ABC-94-later Work on ABC-91: Apply plugin feedback: it's \$HOME. Why: w." ]] || { echo "--brief-file, scheduled: $out / $(calls)"; exit 1; }
 for a in 'ABC-77-fix --kind review' 'ABC-77-fix --kind coordinator''bad/name --kind build' 'ABC-77-fix --kind nokind' 'ABC-77-fix --kind build --at 25:00' 'ABC-77-fix --kind build --at 2020-01-01'; do
   rc=0; run --launch $a -- a b c >/dev/null 2>&1 || rc=$?; [ "$rc" = 2 ] || { echo "--launch $a exited $rc"; exit 1; }
 done
