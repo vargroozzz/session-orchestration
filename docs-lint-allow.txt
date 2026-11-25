@@ -40,7 +40,6 @@ dup	plugins/session-orchestration/hooks/reply-card.txt | plugins/session-orchest
 # text must match word for word on both sides.
 dup	plugins/session-orchestration/skills/orchestrating-sessions/approvals.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: a relayed approval never answers a claude code permission prompt or a plan approval
 dup	plugins/session-orchestration/skills/orchestrating-sessions/approvals.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: approval relayed from the user quote the user's whole message their question-box answer clicked
-dup	plugins/session-orchestration/skills/orchestrating-sessions/approvals.md | plugins/session-orchestration/skills/orchestrating-sessions/worker.md: merge owner repo id session name within 24h of that approval later ask for
 
 # Each skill runs alone in its own session (a research or retro task) and loads no other doc.
 dup	plugins/session-orchestration/skills/research/SKILL.md | plugins/session-orchestration/skills/retro/SKILL.md: replies folder the one the project's claude.md names its replies folder line none named

@@ -63,10 +63,8 @@ user a command).
   - Keep the question one line (the action, as the hook names it) and put what the user reads into the optional
     fields: `details` (markdown: what's being decided, the review comment being answered), `target` (`app#282
     src/a.ts:42`, `app#282 general`, `PROJ-5195`) and, for a comment post, `body_file`. **For a post, write the
-    body file first, pass its absolute path, and don't edit it after asking**: the pane refuses the ask if the
-    sha256 the question names isn't the file's, or a question names a sha256 without `body_file`; a `post comment`
-    question or action, or a close with a comment, without `body_file` is refused too (draft the body first). No
-    control characters in the question or options.
+    body file first, pass its absolute path, and don't edit it after asking** (the pane checks its sha256, and
+    refuses a post or a close with a comment that has none). No control characters in the question or options.
   - Pass `action`, the exact Action a relay of the yes carries (`merge OWNER/REPO#N (KEY)`, `post comment FILE on T
     (sha256 X)`): the answer line ends with `Action: <it>`, and `session-status --relay KEY` with no ACTION relays it.
   - **A send's draft holds every word that goes out**: each message's exact text, an attachment's caption or body
@@ -77,26 +75,21 @@ user a command).
     (a Jira status or backfill comment, a review reply); an ask without `body_file` takes none. How the pane shows
     these fields: [Approval asks](status-reference.md#approval-asks). They are not part of the answer line.
   - An ask stays on the pane until it is answered or cancelled, across coordinator restarts, handovers and plugin
-    releases: the asks are kept per project, and `open_pane`'s result lists the ones waiting. Don't queue them
-    again; if you do, the same key and question replaces the waiting ask (same id), never a second one. One queued
-    over 24h ago is marked OLD: still answerable (its answer verifies from the click). Recheck each OLD ask yourself
-    at Start (the PR or ticket may have moved) and tell the user which still apply, so they never have to; check
-    again before you act on its answer. So queue an ask that applies while a GitHub PR no board row shows
-    is open with `still_applies: "OWNER/REPO#N"` (a row's PR named in the question is flagged already). Every
-    full status run (the pane's refresh, `--start`, the sweep, `--stale`) looks it up (10 s cap) and the Stale
-    section flags the ask `acme/app#45 merged (its still_applies)` once it is merged or closed, so that recheck is
-    done by machine; a gh error or timeout flags nothing. When the decision no longer applies (a PR
-    merged first, the task closed), cancel it, and for a review finding note `Dropped` in the review's file header
-    and tell the reviewer session.
+    releases (`open_pane`'s result lists the ones waiting): don't queue them again. One queued over 24h ago is
+    marked OLD and stays answerable: recheck each OLD ask yourself at Start, one by one (look the thing up: the PR
+    merged or rebased, the comment posted, the ticket moved), cancel what no longer applies and tell the user which
+    still do and why, so they never have to. Never "still apply as far as I can tell": an ask you couldn't check,
+    say so and what blocked it. Check again before you act on its answer. Queue an ask
+    that applies while a GitHub PR no board row shows is open with `still_applies: "OWNER/REPO#N"`, so the Stale
+    section flags it once that PR is merged or closed. When the decision no longer applies (a PR merged first, the
+    task closed), cancel it, and for a review finding note `Dropped` in the review's file header and tell the
+    reviewer session.
   - **Several merges at once**: a chat line naming no key ("I approve all the merges from the pane") verifies for
-    none of them. Point the user at the APPROVE box's **Approve all N merges…**: it records one answer line per ask,
-    each relayed on its own. It takes only asks whose question is the hook's action alone (`merge app#271`) with one
-    "Yes" option and no `details` (not OLD or stale), so queue merge asks that way and put any caveat in `details`,
-    which keeps that one to its own click ([Approval asks](status-reference.md#approval-asks)).
+    none of them. Point the user at the APPROVE box's **Approve all N merges…**, which records one answer line per
+    ask, each relayed on its own. Queue merge asks as the hook's action alone (`merge app#271`), one "Yes" option,
+    any caveat in `details`; which asks the box takes: [Approval asks](status-reference.md#approval-asks).
   - `features.notify` (`../../features/notify.md`) may show a local "N decisions waiting" notification for asks left
     unseen; the answer is still the pane click. Ask the same way either way.
-  - Plain text only when the pane isn't on screen (the tool says so: a narrow terminal, the agent view, a background
-    session). Then each decision is still its own message, recommended answer first.
 - **Resuming after a restart is one ask for the whole list**, not one per session: when `--start` lists sessions
   that ended while the background service was off, ask once (key `resume-after-restart`, each session named in the
   question; "Yes, resume all N" recommended, "No, leave them") and on a yes run its `--resume-ended` line
@@ -109,7 +102,8 @@ user a command).
   Quote; the key in the answer, the question or its header). But while it is open no worker message reaches you, so
   use it only for an answer that needs the user's own words, and only when they're at the keyboard. It is yours
   only: sessions ask in plain text.
-- **Without the pane, one standalone message**, less than 24h old: the worker only accepts a whole message. It must name
+- **Without the pane** (the tool says so: a narrow terminal, the agent view, a background session): each decision is
+  its own plain-text message, recommended answer first, and the answer one standalone message, less than 24h old: the worker only accepts a whole message. It must name
   the task key, or answer your last message, which names it. Ask about one action at a time: a bare "yes" only
   counts when your question was about exactly that action. "yes, merge PROJ-4668" works either way. A numbered
   reply ("do 1, 3, 4") to a summary of several items doesn't verify, even when the summary named the keys: queue
@@ -133,28 +127,13 @@ user a command).
   action you relay, nor relay one they already ran.
 - **Hook-gated posts and merges** (PR and Jira comments, PR merges through `gh`, `bitbucketdc-cli`, `forgejo-cli`
   and `jiradc-cli`, and Teams and mail sends through `msgraph`): the worker's blocked report carries `needs your
-  approval: <action>`, e.g. `merge app#271`, `post comment <file> on PROJ-4849 (sha256 <hex>)` or `send mail <file>
-  to --to ann@example.com --subject Weekly report (sha256 <hex>)`. A send's action names every recipient, mention
-  and subject: show them to the user with the body, and keep them word for word in the Action. Ask the user about exactly that, and for a post show the body
-  file (`ask_approval` with `body_file` set to that file, `target`, and `kind` for a review finding; in plain text,
-  its text). Relay with that action as the Action line, verbatim, plus the task key: `Action: merge app#271
-  (PROJ-5164)`. Use the hook's words, not the CLI command: an Action naming the command fails the hook even when
-  `verify-approval.sh` said verified. The worker's hook allows only that PR or issue, and for a post only a body
-  file with that sha256; anything else is denied. One relay allows one run (a merge's retry: worker.md's landing). Every gated command (comment edits
-  included: an edit is named like a new post) and its action: [worker.md](worker.md#posting-and-merging). A Teams
-  send's `--attachments` files are each named with their own sha256 too. A `gh` merge's Action names `OWNER/REPO#ID`;
-  the user's approval of the task covers landing its own PR: relay that with the worker's session name in the
-  parentheses, `Action: merge OWNER/REPO#ID (<session name>)`, within 24h of that approval (later, ask for the
-  merge itself); a yes asked under that name without your project prefix (`issue-templates` for
-  `<project>-issue-templates`, the prefix of your own `<project>-coordinator`) verifies the same way. When the yes that started the session was given under another key and speaks of its landing (a
-  design task's pane answer "start stage 1 as its own PR; landing it is approved with it"), run
-  `session-status --relay <that key> 'merge OWNER/REPO#ID (<session name>)'`: it adds `, approved under <that key>`
-  to the Action itself (refusing an answer whose own words, not its `Asked:` question, don't speak of landing or
-  merging; a session name holding a tracker key, or the short name above, stays as given), so your command makes no
-  approval claim; the hook verifies the quote with that key, within 24h of the answer. A project that lands by fast-forward instead: `Action: merge <branch> (<session
-  name>)` for the worker's `session-status --land <branch>`. The check reads the source's transcript for its send of
-  that whole relay first (no session listing for a send within 24h), so a relay whose source has since stopped still
-  verifies.
+  approval: <action>`. Ask the user about exactly that action; a send's action names every recipient, mention and
+  subject, so show them with the body; for a post show the body file (`ask_approval` with `body_file`, `target`, and
+  `kind` for a review finding; in plain text, its text). The Action is that line verbatim plus the task key in
+  parentheses, never the CLI command: `session-status --relay KEY ACTION` builds the block. Landing a task's own PR:
+  `session-status --relay KEY 'merge OWNER/REPO#ID (<session name>)'`, KEY being the key the starting yes was given
+  under (`--relay` adds `approved under` itself when that isn't the session's own). The grammar, what one relay
+  allows and its time limit: [worker.md](worker.md#posting-and-merging), the one home.
 - Never relay an approval for something that was denied or blocked in your own session.
 - A review-inbox decision isn't relayed: the user's click on the inbox page is their approval to post that row
   ([review-inbox.md](review-inbox.md)).
