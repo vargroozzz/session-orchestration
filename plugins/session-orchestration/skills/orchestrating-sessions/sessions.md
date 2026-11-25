@@ -112,9 +112,9 @@ A new task: `session-status --launch <KEY>-<short-desc> --kind <kind> --
 '<what>' '<who needs it, what it unblocks>' '<the end state of the whole job and the check that proves it>'`, as its
 own call. It runs `--kind` (below), builds the brief, adds "Read <memory file> first." when CLAUDE.md names one,
 starts the session and prints `started "NAME" (ID8) · KIND M/E`. Exit 3 or 2: nothing started, read on. A review of
-another task (named `<KEY>-<more>`) takes its own first prompt (Owners) by `--brief-file`, below; a coordinator
-start isn't a launch ([handover.md](handover.md)); a review that owns its own task (a docs audit) launches with a name
-that has no task key or is one whole. In Desktop with
+another task (named `<KEY>-<more>`) takes its own first prompt (Owners) by `--brief-file`, below; a successor
+coordinator's start isn't a launch ([handover.md](handover.md)), a sub-coordinator's is (Sub-coordinators); a review
+that owns its own task (a docs audit) launches with a name that has no task key or is one whole. In Desktop with
 `start.sidebar` on (a person key the user sets, never you) it starts nothing and prints the `start_session` call to
 make instead, for a task the user asks to run as a sidebar session. `start_session` can't run above your own model,
 so a kind on a higher model silently starts at yours: start that task with `claude --bg`, which has no cap. The status

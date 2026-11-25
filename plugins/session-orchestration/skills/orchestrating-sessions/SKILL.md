@@ -142,7 +142,7 @@ user's call: ask before removing it.
   (`CLAUDE.local.md`, `.claude/coordination.local.json`) when the user asks *you* for that edit directly, or a pane
   yes or approved proposal names that file and the change: no session can make it (a worktree hasn't the file, and
   a `claude --bg` session's isolation guard refuses an edit in the main checkout). `.claude/coordination.local.json`
-  and the person-wide config are the exception: coordinator-guard asks the user for every write of them in an
+  and the person-wide config need more than that: coordinator-guard asks the user for every write of them in an
   attended session and refuses it in a background one, pane yes or not. Everything else goes to a
   session, however small: a one-line `CLAUDE.md` edit, a settings or hook fix the user asks you for directly.
 - **Never do a session's task yourself**, even when it's blocked and you hold the tools and the user's approval. An

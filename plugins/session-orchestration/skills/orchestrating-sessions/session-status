@@ -204,8 +204,9 @@
 #                       start anyway): passes, claims nothing. KEY `#N`: a GitHub issue (no session name carries one)
 #        session-status --launch NAME --kind KIND[:S|M|L] [--anyway] [--at WHEN | --after-reset [ACCOUNT]] [--] 'WHAT' 'WHY' 'DONE-WHEN' | --brief-file FILE
 #                       a task start in one command: --kind, then the brief built from the three texts (or FILE's
-#                       text, verbatim), started as NAME; --at or --after-reset queues it for a running --watch to start then. Not for coordinator,
-#                       nor review named KEY-<more> (a review of KEY's task: its own first prompt)
+#                       text, verbatim), started as NAME; --at or --after-reset queues it for a running --watch to start then. Not for coordinator
+#                       but KEY-coordinator with --brief-file, nor review named KEY-<more> unless its --brief-file starts
+#                       `Session task: KEY review`
 #        session-status --launch --list | --cancel NAME | --now NAME [--anyway]   the queued starts; drop one; start
 #                       one at once
 #        session-status --plan FILE [--check | --next | --brief N | --done N]   a design's plan table: waves and chunk
@@ -1707,9 +1708,10 @@ fi
 # working until done or blocked. When finished: reply with done and the check that proves it.`; KEY: the task key NAME
 # starts with, else NAME; MEMORY: CLAUDE.md's "Project memory: `PATH`", the sentence left out when it names none) and
 # starts it as --handover does, printing `started "NAME" (ID8) · K M/E` (Desktop with start.sidebar: the
-# start_session call to make instead, nothing started). Not for a review named KEY-<more>
-# (a review of KEY's task: its first line is `Session task: KEY review`, with the review brief) nor coordinator
-# (--successor, --coordinator-of); a review whose name has no key, or is a key whole, owns its task and starts.
+# start_session call to make instead, nothing started). A review named KEY-<more> (a review of KEY's task) only with
+# a --brief-file whose text starts `Session task: KEY review`, with the review brief; a coordinator only as a
+# sub-coordinator, KEY-coordinator with --brief-file (others: --successor, --coordinator-of); a review whose name has
+# no key, or is a key whole, owns its task and starts.
 # --at 'HH:MM' (today, tomorrow when past) | 'YYYY-MM-DD HH:MM', or --after-reset [ACCOUNT] (that account's weekly
 # reset, lib.sh weekly_use, plus a minute; ACCOUNT: its config dir, default the caller's): queued as a JSON line in $ENC.launches instead. The
 # watcher's nap starts it when due (--launch --due; --kind runs then, so the model and the claim are that moment's)

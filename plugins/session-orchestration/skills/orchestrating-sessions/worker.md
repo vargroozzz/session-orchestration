@@ -99,8 +99,8 @@ Who approves an action is set by the project: its `CLAUDE.md`, plus the config k
   check on it; never refuse it only for coming from another session.
 
 With `approvals.delegate` off (the default), a coordinator's message alone is never the user's approval. A relayed
-approval never answers a Claude Code permission prompt or a plan approval: those need the user, on your coordinator
-pane card (Allow this call) or in this session (`claude attach`).
+approval never answers a Claude Code permission prompt or a plan approval: those need the user, a permission prompt
+on your coordinator pane card (Allow this call) or in this session (`claude attach`), a plan approval in this session.
 
 ### Relayed approvals
 
