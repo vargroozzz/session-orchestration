@@ -28,6 +28,7 @@
 #   session, again after a compaction, never a coordinator's. A keyed task, a chunk or a review gets it at its first
 #   firing after .kind is written (a first prompt only writes it, detached: below); any other session at its first message (.msg, which the module's session.receive hook writes, mid-turn
 #   too). It rides on the firing's other text, if any.
+# - A peer message holding relayed approvals: says, before anything else, whether each verifies (below).
 # Subagents' tool calls (agent_id set) are skipped: they carry the parent's transcript.
 # Stamps: ${XDG_CACHE_HOME:-~/.cache}/session-status/handoff-<sid>.<level>; .kind caches the kind and thresholds.
 # ponytail: thresholds cached per session when it's classified; a config change reaches the next session.
@@ -37,6 +38,30 @@ here=$(cd "$(dirname "$0")" && pwd); input=$(cat)
   .hook_event_name // "", .cwd // "", .source // "", .agent_id // ""' <<<"$input" 2>/dev/null)
 [[ ${sid:-} =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "${tp:-}" ] && [ -z "${agent:-}" ] || exit 0
 d=${XDG_CACHE_HOME:-$HOME/.cache}/session-status; s=$d/handoff-$sid
+emit() { jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName: $e, additionalContext: $m}}'; }
+# A relayed approval (approvals.md's block) in a peer message: each block checked now as the approval hook will
+# (verify-approval.sh; the sender is the from-name of the tag it came in, the key as approved-action.sh takes it: a
+# tracker key in the Action, else its "(<this session's name>[, approved under KEY])", else REPO#N, else this session's
+# name), one line each: `relay verified: ACTION` or `relay rejected: REASON (ACTION)`. Inline: hooks.json gives
+# UserPromptSubmit 60 s; any other prompt pays one string test. The reply card waits for the next firing.
+if [ -z "${CW_DETACHED:-}" ] && [ "$ev" = UserPromptSubmit ] && [[ $input == *'<cross-session-message from='*'APPROVAL relayed from the user'* ]]; then
+  me=$(grep -F '"agent-name"' "$tp" | tail -1 | jq -r '.agentName // empty' 2>/dev/null) out=
+  while IFS= read -r b; do
+    { read -r from; read -r bsid; read -r scwd; read -r a; } < <(jq -r '.from, .sid, .scwd, .action' <<<"$b")
+    k=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$a" | head -1)
+    if [ -z "$k" ] && [[ $a =~ \(([A-Za-z0-9][A-Za-z0-9._-]*)(,[[:space:]]*approved[[:space:]]+under[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]*))?\)[[:space:]]*\.?[[:space:]]*$ ]] &&
+       [ "${BASH_REMATCH[1]}" = "$me" ]; then k=${BASH_REMATCH[3]:-$me}; fi
+    [ -n "$k" ] || [[ ! $a =~ ([A-Za-z0-9._-]+#[0-9]+) ]] || k=${BASH_REMATCH[1]}
+    v=$(cd "$cwd" 2>/dev/null && jq -r .quote <<<"$b" |
+        bash "$here/../skills/orchestrating-sessions/verify-approval.sh" "$bsid" "$scwd" "$from" "${k:-$me}" "$a" | head -1)
+    if [[ $v == verified* ]]; then out+="relay verified: $a"$'\n'
+    else v=${v:-verify-approval.sh failed}; out+="relay rejected: ${v#rejected: } ($a)"$'\n'; fi
+  done < <(jq -c '.prompt // "" | [scan("<cross-session-message ([^>]*)>([\\s\\S]*?)</cross-session-message>")][]
+    | (.[0] | capture("from-name=\"(?<n>[^\"]*)\"").n // "") as $n
+    | .[1] | [scan("APPROVAL relayed from the user\\nQuote: ([\\s\\S]*?)\\nAction: ([^\\n]*)\\nSource: ([0-9a-f-]{36}) ([^\\n]+)")][]
+    | {from: $n, quote: .[0], action: .[1], sid: .[2], scwd: .[3]}' <<<"$input" 2>/dev/null)
+  [ -z "$out" ] || { emit "${out%$'\n'}"; exit 0; }
+fi
 claim() { (set -C; : > "$1") 2>/dev/null; }   # atomic: parallel tool calls fire the hook at once
 # Classifying (no .kind yet: a session's first prompt, or a resume) takes ~40 processes: 5-18 s on a loaded machine,
 # past the 5 s kill, which left no .kind, so every prompt redid it. A resume and a first prompt classify in a detached
@@ -123,7 +148,6 @@ if [ -z "$cached" ]; then
   else thresholds; fi
 fi
 [ -z "${CW_DETACHED:-}" ] || exit 0   # the detached copy only writes .kind
-emit() { jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName: $e, additionalContext: $m}}'; }
 # The card goes out with this firing's other text (say), else on exit; a prompt that is a message counts as one.
 card=
 # a retro section sends nothing unasked: like a keyless task, its card waits for a message
