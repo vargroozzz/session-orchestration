@@ -624,6 +624,22 @@ grep -q "'task': 0," <<<"$out" && grep -q '^note: 1 sessions .*Pass --project RO
 out=$(retro sections plugin memory units sizing 2>&1)
 [ "$out" = $'skipped: memory (not a plugin section)\nunits\nsizing' ] || fail "sections: the listed ones the scope has" "$out"
 retro sections both 2>/dev/null && fail "sections: one scope per run" ""
+# sections --groups: the default plan, narrowed like sections; config retro.groups overrides a scope's plan
+[ "$(retro sections --groups project)" = $'units: units context coordinator\nwaste: waste\nfeedback: feedback memory' ] ||
+  fail "sections --groups project" "$(retro sections --groups project)"
+[ "$(retro sections --groups plugin | tr '\n' '|')" = 'units: units context|waste: waste|spend: spend|protocol: protocol|features: features sizing|writer: feedback|' ] ||
+  fail "sections --groups plugin" "$(retro sections --groups plugin)"
+out=$(retro sections --groups project waste memory 2>&1)
+[ "$out" = $'waste: waste\nfeedback: memory' ] || fail "sections --groups: an empty group starts nothing" "$out"
+gr=$tmp/groot; mkdir -p "$gr/.claude"
+echo '{"retro":{"groups":{"project":{"a":["waste","units"],"b":["units","memory"]}}}}' > "$gr/.claude/coordination.local.json"
+out=$(cd "$gr" && retro sections --groups project 2>&1)
+[ "$out" = $'a: waste units\nb: memory\nwriter: context feedback coordinator' ] || fail "sections --groups: retro.groups, the rest the writer's" "$out"
+echo '{"retro":{"groups":{"project":{"writer":["units"]}}}}' > "$gr/.claude/coordination.local.json"
+out=$(cd "$gr" && retro sections --groups project 2>&1)
+[[ $out == "warning: config retro.groups="*" is not valid: using the default"$'\nunits: units context coordinator\n'* ]] ||
+  fail "sections --groups: a bad retro.groups warns, the default plan" "$out"
+[[ $(retro sections --groups 2>&1) == "usage: retro.py sections"* ]] || fail "sections --groups without a scope: the usage" "$(retro sections --groups 2>&1)"
 # plugin scope away from feedback.repo_dir's root: project's sections, with the warning
 fr=$tmp/froot; mkdir -p "$fr/.claude" "$tmp/fhome/.claude"; echo '{}' > "$fr/.claude/coordination.local.json"
 jq -n --arg d "$fr" '{feedback: {repo_dir: $d}}' > "$tmp/fhome/.claude/coordination.local.json"

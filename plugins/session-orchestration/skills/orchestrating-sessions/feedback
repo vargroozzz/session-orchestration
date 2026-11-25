@@ -201,7 +201,7 @@ scrub)
             or ($k | test("^start\\.")) and ($v | IN("read_only", "propose", "at_once"))
             or ($k | test("^plan\\.models\\.")) and ($v | test("^(haiku|sonnet|opus|fable|claude-[a-z0-9.-]+)(\\[1m\\])?/(low|medium|high|xhigh|max)$"))
             or $k == "retro.scope" and ($v | IN("project", "plugin", "both"))
-            or ($k | test("^retro\\.sections\\.")) and ($v | IN("units", "context", "waste", "spend", "feedback", "coordinator", "memory", "protocol", "features", "sizing"))
+            or ($k | test("^retro\\.(sections|groups)\\.")) and ($v | IN("units", "context", "waste", "spend", "feedback", "coordinator", "memory", "protocol", "features", "sizing"))
             | not) | $v' 2>/dev/null
       a=$(adapter_path "$d") || continue
       (cd "$d" && "$a" key-pattern 2>/dev/null) >> "$keys"   # the adapter contract: cwd = its project root

@@ -2132,10 +2132,10 @@ echo '{}' > "$a/.claude/coordination.local.json"
 [ "$(cfg "$a" features.retro):$(cfg "$a" retro.scope):$(cfg "$a" retro.schedule):$(cfg "$a" retro.sections)" = 'false:project::' ] &&
   [ "$(cd "$a" && CLAUDE_CONFIG_DIR=$tmp/cfg "$here/session-status" --config retro.account)" = "$tmp/cfg" ] &&
   ! grep -qE 'features=.*retro|^  retro:' <<<"$(init "$a" --check)" || { echo "retro defaults: $(init "$a" --check)"; exit 1; }
-echo "{\"features\":{\"retro\":true},\"feedback\":{\"repo_dir\":\"$a\"},\"retro\":{\"scope\":\"both\",\"schedule\":\"sun 09:30\",\"account\":\"$tmp/cfg\",\"sections\":[\"units\",\"waste\"]}}" > "$a/.claude/coordination.local.json"
+echo "{\"features\":{\"retro\":true},\"feedback\":{\"repo_dir\":\"$a\"},\"retro\":{\"scope\":\"both\",\"schedule\":\"sun 09:30\",\"account\":\"$tmp/cfg\",\"sections\":[\"units\",\"waste\"],\"groups\":{\"plugin\":{\"a\": [\"units\"]}}}}" > "$a/.claude/coordination.local.json"
 c=$(init "$a" --check)
 [ "$(cfg "$a" features.retro):$(cfg "$a" retro.scope):$(cfg "$a" retro.schedule):$(cfg "$a" retro.account)" = "true:both:sun 09:30:$tmp/cfg" ] &&
-  [ "$(cfg "$a" retro.sections)" = "$(printf 'units\nwaste')" ] && grep -x 'active: .* features=retro,plugin_coordinator' <<<"$c" >/dev/null &&
+  [ "$(cfg "$a" retro.sections)" = "$(printf 'units\nwaste')" ] && [ "$(cfg "$a" retro.groups)" = '{"plugin":{"a":["units"]}}' ] && grep -x 'active: .* features=retro,plugin_coordinator' <<<"$c" >/dev/null &&
   grep -x "  retro: nothing to do: a retro run reports to you when it ends\. Read $(cd "$here/../.." && pwd)/features/retro.md when .*" <<<"$c" >/dev/null &&
   ! grep -q 'retro overdue' <<<"$c" || { echo "retro on: $c"; exit 1; }
 # a scheduled retro whose newest report is over 8 days old: --check says so (retro-run --status's line)
@@ -2145,8 +2145,8 @@ rp=$(cd "$a" && . "$here/../../lib.sh" && p=$(pwd -P) && r=$(replies_path "$p") 
 echo "{\"feedback\":{\"repo_dir\":\"$b\"},\"retro\":{\"scope\":\"plugin\"}}" > "$a/.claude/coordination.local.json"
 [ "$(cfg "$a" retro.scope 2>&1)" = "$(printf 'warning: retro.scope=plugin runs only from feedback.repo_dir'"'"'s root (%s): project\nproject' "$b")" ] ||
   { echo "retro.scope away from the plugin root: $(cfg "$a" retro.scope 2>&1)"; exit 1; }
-echo '{"features":{"retro":"yes"},"retro":{"scope":"all","schedule":"monday 12:00","account":"~/no-such-dir-x9","sections":["units","bogus"]}}' > "$a/.claude/coordination.local.json"
-for k in features.retro:false retro.scope:project retro.schedule: retro.sections:; do
+echo '{"features":{"retro":"yes"},"retro":{"scope":"all","schedule":"monday 12:00","account":"~/no-such-dir-x9","sections":["units","bogus"],"groups":{"project":{"writer":["units"]}}}}' > "$a/.claude/coordination.local.json"
+for k in features.retro:false retro.scope:project retro.schedule: retro.sections: retro.groups:; do
   w=$(cfg "$a" "${k%%:*}" 2>&1 >/dev/null); [ "$(cfg "$a" "${k%%:*}" 2>/dev/null)" = "${k#*:}" ] && [[ $w == "warning: config ${k%%:*}="*" is not valid: using the default" ]] ||
     { echo "retro bad value ${k%%:*}: $w"; exit 1; }
 done

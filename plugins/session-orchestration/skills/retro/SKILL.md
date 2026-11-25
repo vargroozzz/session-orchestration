@@ -51,6 +51,15 @@ and no heading.
 | `features` | no | feature use over 30 days, unused candidates |
 | `sizing` | no | planner ratio per kind, the trial's arms, cost and done share per kind |
 
+Each section's commands (step 2) and what it measures (step 3) are in `sections/<name>.md` next to this file (their
+paths are relative to this file's folder): read the file of each section this run writes, and no other.
+
+`python3 -I retro.py sections --groups <scope> $(session-status --config retro.sections)` prints the same sections as
+a group plan: one `GROUP: SECTION…` line per group (config `retro.groups`, else the defaults), then a `writer:` line
+for the sections no group lists. One session runs every group's sections: step 2 for all of them, then step 3,
+in the order `retro.py sections` prints (a section's commands may read another's files), and the report lists
+the headings in that order too.
+
 ## Rules
 
 - Read-only outside the replies folder. Change nothing else: no settings, hooks, scripts, CLAUDE.md,
@@ -101,109 +110,18 @@ and no heading.
 ## Steps
 
 1. Read the project's `CLAUDE.md`, its project memory if it names one (retro or R&D entries there override the
-   yardstick below; with an index, read the topic files whose trigger is retro or R&D), and the baseline report
-   with its "Next run" section. Project scope also reads the project's `retro-brief.md` (beside the memory file,
+   section files' yardsticks; with an index, read the topic files whose trigger is retro or R&D), and the baseline
+   report with its "Next run" section. Project scope also reads the project's `retro-brief.md` (beside the memory file,
    else `.claude/retro-brief.md`) if present. Settle the scope, the
-   sections (`retro.py sections`) and N as above.
-2. Run `retro.py` over 7 days into `<R>/retro/<scope>-<N>/`, only for the sections this run writes (`P` below is
-   `--project <root>` in project scope, nothing in plugin scope). Look at three raw rows of each TSV before
-   tallying it. These commands are the analysis: tally from their output, and write no ad-hoc script for it (a
-   count they lack is a `retro.py` change to propose).
-   - `units`: `units 7 P > units.tsv 2> units.txt`, adding `units <slice days> P` for the slice after last run's
-     end. Project scope only: pass the brief's regexes with `--merge`/`--done`/`--post` when its commands differ
-     from the defaults (`retro.py` usage). Where reviewers press merge, a session's merge command never runs: write
-     the window's task keys with `units 7 P --keys keys.txt > /dev/null 2>&1`, then from the project root the
-     adapter's merges for them to `merged.txt` (`.claude/session-status-adapter yesterday <window start, epoch s>
-     $(cat keys.txt)`), and pass `--merged merged.txt` to both `units` calls. An adapter without `yesterday`, or a
-     non-zero exit: leave it out and say merges count only the ones sessions ran (`merge_ran`). Time to merge, with
-     a GitHub host: the PR list to `prs.json` (`gh pr list --state all --limit 1000 --json
-     number,createdAt,mergedAt -R OWNER/REPO`), then `merges <dir> prs.json 7 OWNER/REPO P > merges.txt` (`waste`'s
-     `sessions.tsv` first: it reads it for $ per PR).
-   - `context`: `context 7 <split> P > context.tsv` (split: last run's end, so the slice after it gets its own row).
-   - `waste`: `sessions 7 P > sessions.tsv`, `events 7 P > events.tsv 2> events.txt`, `waits 7 5 P > waits.tsv 2> waits.txt`,
-     `bgtasks 'session-status.*--watch' 7 P > bg-watch.tsv`, plus any `bgtasks` regex the project brief names
-     (project scope), `replies 7 P > replies.tsv` (lost reports), and once they are written `waste <dir> 7 P >
-     waste.txt` (the counts below, tallied from them and `denied.jsonl`). Refusals: count them from `denied.jsonl` for
-     the window when it covers it (project scope: the lines whose `cwd` is the root or under it), else from `deny`
-     rows in `events.tsv` whose `test` column is empty (`-p`/`dontAsk`: headless permission tests); say which
-     source was used. A denial whose text (a deny row's `detail2`, after `source/reasonType: `) starts "Background
-     session: this compound command" is project-memory's split hint, not a refusal: count those separately,
-     and leave them and the retry after each out of the refusal and retry-waste counts, so runs stay comparable.
-     The classifier's no-verdict denials (`denied.jsonl` logs them as "Classifier unavailable") get their cause from
-     `events.txt`'s `noverdict` line: report it beside the count. `hook_changed` and `sibling_changed` come from a
-     PreToolUse hook that rewrites a call's input (`updatedInput`), which the user can fix in their own hooks;
-     `ended` is the classifier's side.
-   - `feedback`: project scope, `../orchestrating-sessions/feedback list --project` from the project root; plugin
-     scope, `feedback list --plugin` and `feedback list --all --plugin` (the cases last run filed or named, and
-     whether they are `fixed` now).
-   - `coordinator`: `triggers <coordinator> 7 P`: the coordinator is the first name (not a `uds:` line)
-     `bash <orchestrating-sessions skill folder>/session-status --coordinator` prints (only `uds:` lines: it runs under
-     another account; take its name from `session-status --activity`'s coordinator row), run from the project root
-     (`triggers` takes a session name or an id prefix). Add an earlier coordinator's id when last run's "Next run"
-     names one. Then `handoff 28 P > handoff.tsv 2> handoff.txt` (config `pending.file`, else the state folder's
-     `pending.md`; an entry with no history file has rewordings `-`).
-   - `protocol`: `start 7 > start.tsv` (each coordinator's Start by part, the medians last) and `loads 7 > loads.tsv`
-     (messages, skill, `worker.md`, card and reply loads by session kind).
-   - `spend`: `spend 7 <dir> > spend.md` (it writes `spend-*.tsv` into `<dir>` too, and reads `protocol`'s
-     `start.tsv` when `<dir>` has it, for the Coordinator Starts lines).
-   - `features`: `usage 30 > usage.tsv` and `events 30 > events30.tsv`.
-   - `sizing`: `chunks 7 > chunks.tsv` and `trial > trial.tsv` when the usage log has chunk lines; `kinds 7 >
-     kinds.tsv` when it has start lines. Exit 2 with `unmeasured: WHY` on stderr (no usage log, or one starting after
-     the window's end) is no measurement: write that line in the report, never a zero.
-   - The plugin series' first run (no `retro-plugin-<N>.md` yet) also runs every command above again with
+   sections and their groups (`retro.py sections --groups`) and N as above.
+2. Run `retro.py` over 7 days into `<R>/retro/<scope>-<N>/`, only for the sections this run writes, by each
+   one's `sections/<name>.md` (`P` there is `--project <root>` in project scope, nothing in plugin scope). Look at
+   three raw rows of each TSV before tallying it. These commands are the analysis: tally from their output, and
+   write no ad-hoc script for it (a count they lack is a `retro.py` change to propose).
+   - The plugin series' first run (no `retro-plugin-<N>.md` yet) also runs every section's commands again with
      `--until <this window's start>` into `<R>/retro/plugin-1/prev/`: the "last run" column. Its rnd-run reports
      mixed both scopes, so they are not its baseline.
-3. Measure each section this run writes, with last run's number beside each:
-   - `units`: $ and tokens (output + cache write + cache read) per merged PR, per finished ticket and per review
-     posted: `units.tsv` and its totals line, counted from the sessions' own transcripts (only commands that ran),
-     not a tracker sweep. Time to done: review written → posted, "merge it" → merged. Weekly $ only as context, one
-     line.
-   - `context`: base context per session (first request, median) and average context per request; requests above
-     200K and their excess tokens; resume forks (`fork` rows): `context.tsv`.
-   - `waste`: classifier refusals, retries after a denial (same command opening, ≤5 min), `!`/`claude attach`
-     handoffs to the user (`bang` rows are a session's suggestion, one per distinct session and command; `ran` rows
-     are the user running one), wrong relayed claims (`self` rows plus corrections), lost reports (bg tasks SILENT,
-     `replies.tsv` rows; a `NO NOTICE YET` task was still running at the window's end: not lost), waits over 5
-     minutes, those tagged `sleep` (the machine woke: the same end minute in 3+ sessions) counted apart (`waits.txt`
-     totals). Not counted yet (known gaps, so figures stay comparable run to run): subagent transcripts
-     (`<session>/subagents/*.jsonl`), and history a fork copied from its parent is counted again in the fork's row.
-     Name them when a figure hinges on them.
-   - `spend`: from `spend.md`, the week's $ by account and the three largest shares by project, kind, model and
-     trigger; the cost of rebuilding big contexts (cache writes after a gap), wakes that did nothing, test runs (full
-     suites against sections), gh calls and handovers; each beside last run's, and one proposal for the largest
-     share that is waste rather than work.
-   - `feedback`, project scope: group this project's cases (friction from its hosts, sign-ins, docs and scripts)
-     into patterns (the same cause, place or fix; one case seen ≥2× is a pattern of its own) and propose one project
-     fix per pattern (a doc, script or setting), naming its case files; the followups session applies the approved
-     ones and marks those cases fixed. Plugin scope: the open cases, most seen first, and for each case last run
-     filed or named, landed (`fixed`) or not.
-   - `coordinator`: the coordinator's wakes, requests and $ by trigger. Handoff entries: the on-you wait per blocker
-     bucket, entries with reason `unknown`, recurring entries (rounds > 1), and detail and history bytes beside
-     last run's. Read the top 5 rows by `wait_d` and the top 5 by `rewordings` (their history files, by
-     `session-status --pending-history LABEL --last 10`, not whole) and name the issues that recur; one proposal at
-     most. `history read` against `unread` in `handoff.txt` says whether sessions that opened a history file did
-     better: report it, and say when either side is under 5 entries.
-   - `memory`: memory's size (index plus topic files, bytes / 4) beside last run's, also in "Next run". If the
-     project memory index has a graduation rule and the brief has no graduation check of its own, run
-     project-memory's `graduate` skill's Gather and Propose steps (no Apply) and put its numbered list in as one
-     proposal outside the 5 below.
-   - `protocol`, against its targets: `start.tsv`'s median and `target` rows (per entrypoint when there are several:
-     the app's harness base runs ~30K above the CLI's; the base itself is the harness's, no target) and `loads.tsv`'s
-     workers' skill loads (0 to reply: the card replaces them) and `reply_target`. Name the part furthest over.
-   - `features`: each `unused` row of `usage.tsv` (0 uses in 30 days, there all window) is a candidate to drop or
-     merge: at most one proposal listing them, never a removal on the run's own say. Pane buttons show `-` under
-     `telemetry: off` (setting-up-coordination, Config; the default `full` and `local` log them): say so, and judge
-     them not at all. `block`, `refuse`, `relay`, `error` and the `wake poll-failed`/`gave-up` rows (telemetry `full`; `wake wake` is a watcher's normal wake, counted, not a fault) are the plugin's faults:
-     count them in `waste`, and a row that grew since last run (a hook line, a --flag, an exit code) is a fix to
-     propose. `fold-SECTION` (a
-     section's title pressed to one line), `unfold-SECTION` (pressed open) and `card-SECTION` (a row opened there)
-     say which pane sections the user opens and which never: report them. A section folded and never unfolded is one
-     nobody reads (a candidate for `hidden` in config pane.sections).
-   - `sizing`: the `ratio` per kind (median act/est) from `chunks.tsv`, and a new size multiplier for a kind whose
-     median strays past 1.0 ± 0.3; `trial.tsv`'s arms week over week against last run's; from `kinds.tsv`, cost per
-     start and done share per kind beside last run's, and a plan.models change for a kind that costs more than the
-     next kind up or reaches done less than the one below it, or escalates in more than one start in four (its
-     default is too low).
+3. Measure each section this run writes, by its `sections/<name>.md`, with last run's number beside each:
    - Project scope: run the project brief's own checks.
    - Plugin scope: one line, "Other tools: last scanned <date>", the newest `last_checked` in
      `<R>/research/competitors.tsv` (else `<R>/rnd/competitors.tsv`, its old place; neither: "never"). Over 28 days
