@@ -1119,7 +1119,7 @@ setacct cfg "$(failed "$e1" one),$(failed "$e2" ABC-62-x),$(failed "$e3" three),
 cp "$root/.claude/session-status-adapter" "$tmp/adapter.keep"
 printf '#!/bin/sh\ncase $1 in tasks) printf "ABC-60\\t-\\t\\t\\nABC-61\\t-\\t\\t\\n" ;; pending) echo "- ABC-62: waiting on its PR; ABC-61 too" ;; *) exit 2 ;; esac\n' > "$root/.claude/session-status-adapter"
 out=$(run --start)
-[ "$(sed -n '/^## Ended while/,/^## /p' <<<"$out" | grep -v '^## \|^$')" = "$(printf '  "one" (e1e1e1e1) · status row ABC-60\n  "ABC-62-x" (e2e2e2e2) · handoff file (ABC-62)\nResume them one at a time, after one ask (approvals.md): session-status --resume-ended e1e1e1e1 e2e2e2e2')" ] ||
+[ "$(sed -n '/^## Ended while/,/^## /p' <<<"$out" | grep -v '^## \|^$')" = "$(printf '  "one" (e1e1e1e1) · status row ABC-60\n  "ABC-62-x" (e2e2e2e2) · handoff file (ABC-62)\nOne ask for them all, key resume-after-restart (resuming.md, After a restart); on its yes: session-status --resume-ended e1e1e1e1 e2e2e2e2')" ] ||
   { echo "--start, ended sessions: $out"; exit 1; }
 setacct cfg "$(failed "$e3" three)"; [ -z "$(run --start | grep '^## Ended')" ] || { echo "--start listed an ended session with no open task row"; exit 1; }
 mv "$tmp/adapter.keep" "$root/.claude/session-status-adapter"
