@@ -1526,6 +1526,25 @@ echo p-coordinator-next > "$tmp/tab-title"; setacct cfg "$(sess "$o" p-coordinat
 out=$(as "$o" --successor) && rc=0 || rc=$?
 [ "$rc" = 0 ] && grep -q '^started "p-coordinator-next" under ~/cfg (tab 2 quiet)' <<<"$out" && [ "$(cat "$tmp/tab-title")" = p-coordinator ] ||
   { echo "--successor from a tab still titled NAME-next: $rc $out"; exit 1; }
+# A terminal with split_tty: the successor opens as a split of the caller's own tab (by its tty), quietly, no tab opened.
+echo 'split_tty() { [ "$1" != --account ] || shift 2; echo "split $1${TERMINAL_QUIET:+ quiet}"; }' >> "$tmp/.config/session-orchestration/terminals/fake.sh"
+out=$(as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 0 ] && grep -q "^started \"p-coordinator-next\" under ~/cfg (a split of this session's tab: split ttys009 quiet)" <<<"$out" ||
+  { echo "--successor as a split of the caller's tab: $rc $out"; exit 1; }
+# Its split failed (no such tab): a tab of its own.
+echo 'split_tty() { return 1; }' >> "$tmp/.config/session-orchestration/terminals/fake.sh"
+out=$(as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 0 ] && grep -q '^started "p-coordinator-next" under ~/cfg (tab 2 quiet)' <<<"$out" || { echo "--successor, split failed: $rc $out"; exit 1; }
+# A split that errs (exit 3) may have started it already: no tab opened, and the text says to check that tab.
+echo 'split_tty() { echo boom; return 3; }' >> "$tmp/.config/session-orchestration/terminals/fake.sh"
+out=$(as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 3 ] && grep -qF 'the terminal failed (exit 3): boom. The split of this session'"'"'s tab (ttys009) may have started it: check that tab first. Nothing there: hand the user' <<<"$out" &&
+  ! grep -q 'tab 2' <<<"$out" || { echo "--successor, split errored: $rc $out"; exit 1; }
+# A background caller: the split goes into the tab showing it (here a `claude attach` to it), not its daemon pty's.
+echo 'split_tty() { [ "$1" != --account ] || shift 2; echo "split $1"; }' >> "$tmp/.config/session-orchestration/terminals/fake.sh"
+printf '#!/bin/sh\ncase "$*" in "-o tty= -p 7") echo ttys009 ;; "-o tty= -p 55") echo ttys011 ;; "-axo pid=,args=") echo "55 /usr/bin/claude attach %s" ;; *) exec /bin/ps "$@" ;; esac\n' "$o" > "$tmp/bin/ps"
+setacct cfg "$(sess "$o" p-coordinator idle 7 background)"; out=$(as "$o" --successor) && rc=0 || rc=$?
+[ "$rc" = 0 ] && grep -qF "(a split of this session's tab: split ttys011)" <<<"$out" || { echo "--successor from the background: $rc $out"; exit 1; }
 # The retitle failed (no terminal for its process): refused, and the text says the tab may be the caller's own.
 echo p-coordinator-next > "$tmp/tab-title"; setacct cfg "$(sess "$o" p-coordinator idle 1 interactive)"
 out=$(as "$o" --successor) && rc=0 || rc=$?

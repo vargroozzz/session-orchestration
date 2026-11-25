@@ -7,7 +7,7 @@ SS=$P/skills/orchestrating-sessions/session-status
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/proj/.claude" "$T/home/.claude-work"
 printf '#!/bin/sh\necho "${PS_OUT-ghostty}"\n' > "$T/bin/ps"
-printf '#!/bin/sh\nshift 2; printf "%%s|" "$@"\n' > "$T/bin/osascript"   # drops -e SCRIPT, prints the argv
+printf '#!/bin/sh\n[ -z "${OSA_NONE:-}" ] || { echo none; exit; }\nshift 2; printf "%%s|" "$@"\n' > "$T/bin/osascript"   # drops -e SCRIPT, prints the argv
 printf '#!/bin/sh\n' > "$T/proj/.claude/session-status-adapter"
 chmod +x "$T/bin/"* "$T/proj/.claude/session-status-adapter"
 cd "$T/proj" || exit 1
@@ -32,6 +32,11 @@ TERMINAL_QUIET=1 check "ghostty quiet (a handover): the AppleScript keeps the fr
 check "ghostty: a title alone (no folder, no command) opens in HOME, no unbound variable" 0 "tab|$HOME|t||1|" --open view t
 check "ghostty split" 0 "right|/tmp|||0|claude logs ab|" --open split /tmp -- claude logs ab
 check "ghostty split, its account" 0 "right|/tmp||$HOME/.claude-work|0|" --open split --account "$HOME/.claude-work" /tmp -- claude logs ab
+# split_tty (--successor): the TTY rides in title's slot, /dev/ dropped; no terminal on it (the AppleScript's none): 1
+out=$(. "$P/terminals/ghostty.sh"; TERMINAL_QUIET=1; split_tty --account "$HOME/.claude-work" /dev/ttys005 /tmp claude x 2>&1)
+[ "$out" = "tty|/tmp|ttys005|$HOME/.claude-work|0|claude x|1|" ] || { echo "FAIL ghostty split_tty: $out"; fails=$((fails + 1)); }
+out=$(. "$P/terminals/ghostty.sh"; export OSA_NONE=1; split_tty ttys005 /tmp claude x 2>&1); rc=$?
+[ "$rc" = 1 ] && [ "$out" = "no Ghostty terminal on ttys005" ] || { echo "FAIL ghostty split_tty, no such tty: $rc $out"; fails=$((fails + 1)); }
 PS_OUT= check "Ghostty not running" 2 "Ghostty is not running" --open split /tmp -- claude logs ab
 check "bad mode" 1 usage --open tab /tmp -- x
 

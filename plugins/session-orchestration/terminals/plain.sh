@@ -3,7 +3,9 @@
 # keeps is in skills/orchestrating-sessions/status-reference.md (Terminals).
 open_view() { [ "${1:-}" != --account ] || shift 2; shift 2; echo "$*"; return 2; }
 open_split() { [ "${1:-}" != --account ] || shift 2; shift; echo "$*"; return 2; }
-# The old coordinator's terminal at a handover (session-status --prev-name --title, --await name or done), found by its tty
-# (ttys005): title_tty TTY TITLE titles its tab, close_tty TTY closes it. Plain does neither: 2.
+# The old coordinator's terminal at a handover (session-status --successor, --prev-name --title, --await name or done),
+# found by its tty (ttys005): split_tty [--account DIR] TTY DIR CMD… opens the successor in a split of its tab,
+# title_tty TTY TITLE titles that tab, close_tty TTY closes it. Plain does none: 2.
+split_tty() { return 2; }
 title_tty() { return 2; }
 close_tty() { return 2; }
