@@ -299,11 +299,19 @@ check "$fbc --body-file $tmp/fb-auto.txt" pass "feedback.send auto: its own valu
 check "gh pr create -R $fbrepo --title 'Fix auto mode' --body-file $tmp/fb-clean.txt" pass "feedback.send auto: its own value isn't a scrub word (title)"
 check "$fbc --body-file $tmp/fb-clean.txt -d -B main -H $me:fix" pass "feedback.send auto, -H's fork owner isn't scrubbed"
 check "$fbc --body-file $tmp/fb-clean.txt -H fork:$me-fix" deny "feedback.send auto, -H's branch is scrubbed"
+head0=$(git -C "$root" symbolic-ref HEAD) && git -C "$root" symbolic-ref HEAD "refs/heads/$me-fix" &&
+  check "$fbc --body-file $tmp/fb-clean.txt -H fork:$me-fix" pass "feedback.send auto, -H naming the session's own branch isn't scrubbed"
+git -C "$root" symbolic-ref HEAD "$head0"
 check "gh pr create -R acme/app --title 'Fix relay' --body-file $tmp/fb-clean.txt" deny "feedback.send auto, another repo"
 check "$fbc --body-file $tmp/fb-hit.txt" deny "feedback.send auto, scrub hit in the body"
 check "gh pr create -R $fbrepo --title 'Fix $home/x' --body-file $tmp/fb-clean.txt" deny "feedback.send auto, scrub hit in the title"
 r=$(run_reason "$fbc --body-file $tmp/fb-hit.txt")
-[[ $r == *"feedback scrub found"*"fb-hit.txt:1: "* &&$r != *"needs the user's approval"* ]] || { echo "FAIL (feedback.send auto, a hit names its lines): $r"; exit 1; }
+[[ $r == *"feedback scrub found"*"fb-hit.txt:1: "*"needs the user's approval"* ]] || { echo "FAIL (feedback.send auto, a hit names its lines and asks): $r"; exit 1; }
+# A hit goes the relay way: the user's relayed yes passes a false positive.
+hsha=$(shasum -a 256 "$tmp/fb-hit.txt" | cut -d' ' -f1)
+typed "yes, open the PROJ-32 PR" "$now" >> "$proj/$cid.jsonl"
+relay "yes, open the PROJ-32 PR" "create pr on $fbrepo from $tmp/fb-hit.txt (sha256 $hsha) --title Fix relay for PROJ-32" >> "$w"
+check "$fbc --body-file $tmp/fb-hit.txt" allow "feedback.send auto, a hit with a relayed approval"
 for c in "$fbc --body-file $tmp/fb-clean.txt -F$tmp/fb-hit.txt" "gh issue create -R $fbrepo --title 'Relay bug' --body-file $tmp/fb-clean.txt -F$tmp/fb-hit.txt" \
     "$fbc --body-file $tmp/fb-clean.txt -F=$tmp/fb-hit.txt" "$fbc --body-file $tmp/fb-clean.txt -a someone" "$fbc --body-file $tmp/fb-clean.txt --no-maintainer-edit"; do
   check "$c" deny "feedback.send auto refuses a flag outside its allow-list"
@@ -312,6 +320,18 @@ done
 check "gh pr merge 5 -R $fbrepo" deny "feedback.send auto never covers a merge"
 echo '{"feedback":{"send":"ask"}}' > "$root/.claude/coordination.local.json"
 check "$fbc --body-file $tmp/fb-clean.txt" deny "feedback.send ask"
+# approvals.pr_create doesn't skip an apply session's scrub on the plugin's repo; another repo it still passes.
+echo '{"feedback":{"send":"ask"},"approvals":{"pr_create":true}}' > "$root/.claude/coordination.local.json"
+check "$fbc --body-file $tmp/fb-clean.txt" pass "approvals.pr_create, apply session, clean"
+check "gh pr create -R $fbrepo --title 'Fix $home/x' --body-file $tmp/fb-clean.txt" deny "approvals.pr_create, apply session, scrub hit"
+check "gh pr create -R $fbrepo --fill" deny "approvals.pr_create, apply session, --fill on the plugin's repo"
+check "gh pr create -R $(tr a-z A-Z <<<"$fbrepo") --title 'Fix $home/x' --body-file $tmp/fb-clean.txt" deny "approvals.pr_create, apply session, the plugin's repo in other case"
+check "$fbc --body-file $tmp/fb-clean.txt -F$tmp/fb-hit.txt" deny "approvals.pr_create, apply session, a glued second body file"
+check "gh pr create -R acme/app --fill" pass "approvals.pr_create, apply session, another repo"
+# The brief's line must open the first prompt, not sit lower in it.
+typed "$(printf 'Look at this\nWork on fb-relay: Apply plugin feedback: %s/c.md.' "$tmp")" "$now" > "$w"
+echo '{"feedback":{"send":"auto"}}' > "$root/.claude/coordination.local.json"
+check "$fbc --body-file $tmp/fb-clean.txt" deny "feedback.send auto, the brief's line not first"
 w=$wmain
 echo '{}' > "$root/.claude/coordination.local.json"
 check "gh api -X PUT repos/acme/app/pulls/12/merge" deny "gh api write method"

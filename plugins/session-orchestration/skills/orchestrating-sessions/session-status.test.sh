@@ -1577,6 +1577,11 @@ rf=$root/replies/p-fix-thing.md
   printf 'new\n\n## Handoff\nx' | as "$z" --report-file "$z" >/dev/null &&
   [ "$(cat "$rf")" = "$(printf 'new\n\n## Handoff\nx\n\n# Design\nbody')" ] &&
   printf '# Design\nbody' > "$rf" && printf 'r' | as "$z" --report-file "$z" >/dev/null && [ "$(cat "$rf")" = "$(printf 'r\n\n# Design\nbody')" ] &&
+  ra=${rf%.md}-archive.md && printf '# Report\nlong' > "$rf" && printf '# Done\nshort' | as "$z" --report-file "$z" >/dev/null &&
+  [ "$(cat "$rf")" = "$(printf '# Done\nshort')" ] && [ "$(tail -2 "$ra")" = "$(printf '# Report\nlong')" ] &&
+  printf '# Done 2\n\n## Handoff\nh2' | as "$z" --report-file "$z" >/dev/null && [ "$(head -1 "$rf")" = '# Done 2' ] &&
+  [ "$(grep -c '^# ' "$ra")" = 2 ] && printf 'plain' | as "$z" --report-file "$z" >/dev/null && [ "$(grep -c '^# ' "$ra")" = 2 ] &&
+  rm "$ra" &&
   [ "$(printf 'keyed' | as "$z" --report-file "$z" PROJ-9)" = "$root/replies/PROJ-9.md" ] && rm "$root/replies/PROJ-9.md" &&
   mkdir -p "$tmp/.cache/session-status" && printf 'task PROJ-8 - 0 0\nre\n' > "$tmp/.cache/session-status/handoff-$z.kind" &&
   [ "$(printf 'cached key' | as "$z" --report-file "$z")" = "$root/replies/PROJ-8.md" ] && rm "$root/replies/PROJ-8.md" &&

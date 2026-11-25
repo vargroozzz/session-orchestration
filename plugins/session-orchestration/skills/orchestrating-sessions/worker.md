@@ -58,7 +58,7 @@ stale), say so in the report and send it without `done`.
 names one: a new coordinator reads it there. Pass it as `reply`'s `report` (with `key`): the tool writes it at the
 file's top, keeps the `## Handoff` below (and a deliverable from its first `# Title` line, e.g. a design), and sends nothing when it can't write; `text` can then be the short
 message. A chunk session's report goes to `<TASK>-cN-report.md`, and one that would replace a plan to
-`<NAME>-report.md` (the tool prints the path). Without the tool, write the file yourself (overwrite it). Anything else you write to that file (a `## Handoff`, a
+`<NAME>-report.md`; a report with a `# ` line of its own replaces a deliverable, which moves to `<TASK>-archive.md` (the tool prints the path). Without the tool, write the file yourself (overwrite it). Anything else you write to that file (a `## Handoff`, a
 round of questions, a log entry) updates the status report at its top in the same write: a reader takes the top as
 the state. Keep it to the report and the newest `## Handoff` (under ~8 KB): every successor reads it. Give the
 handoff what the next step needs from what you read (the `file:line` spots, what each open review comment asks, the

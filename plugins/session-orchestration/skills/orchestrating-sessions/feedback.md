@@ -118,7 +118,8 @@ footer's `— apply?` is then answered already.
 
    Each outgoing `gh pr create` or `gh issue create` (with `--title` and `--body-file <absolute path>`) goes to the
    user as one approval: the approval hook refuses it without a relay and prints the action to report. With
-   `approvals.pr_create` `true`, the `pr` mode's `gh pr create` runs without one (an issue and a fork PR still ask).
+   `approvals.pr_create` `true`, the `pr` mode's `gh pr create` runs without one (an issue and a fork PR still ask),
+   once the hook's `feedback scrub` passes as under `auto` below (a create on another repo skips it).
    Otherwise an apply session that the plugin coordinator started works in that coordinator's folder, so it asks the
    way worker.md's Approvals says, and a relayed approval verifies for it. Run nothing outward-facing before that yes.
 
@@ -127,8 +128,10 @@ footer's `— apply?` is then answered already.
    relay, once the hook's own `feedback scrub` of its flags and body file finds nothing, and reports the URL to the
    coordinator afterwards. Under `auto` the create takes only `-R`, `-t`/`--title`, `-F`/`--body-file <absolute path>`
    (space-separated), `-l`/`--label`, `-B`/`--base`, `-H`/`--head` and `-d`/`--draft`; any other flag is refused. A
-   hit is refused with the scrub's lines: reword and run it again, never send it with a hit. `-H`'s fork owner isn't
-   scrubbed (it is public), its branch is. Any other session (a handed-over apply session's successor too: its first
+   hit asks with the scrub's lines: reword and run it again; only when every line is a false positive (a commit SHA, a
+   test key in quoted code) ask the user, whose relayed yes then passes it. `-H`'s fork owner isn't scrubbed (it is
+   public), nor its branch when that is the session's own (its name, which `git push` publishes anyway); any other
+   branch is. Under `approvals.pr_create` alone the same allow-list holds for an apply session's create there. Any other session (a handed-over apply session's successor too: its first
 prompt is the handover's), and any other repo, asks as above. The change itself
    goes through the repo's own checks (its `CLAUDE.md`, `./scrub-check.sh` here), not `feedback scrub`, which flags
    test keys, URLs and hashes in code. What `auto` gives up: the scrub is then the only gate, and it is a deny list of
