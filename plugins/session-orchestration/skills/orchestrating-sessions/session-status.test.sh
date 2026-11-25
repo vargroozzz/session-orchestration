@@ -3216,14 +3216,13 @@ mkdir -p "$tmp/replies"; echo "Replies folder: \`$tmp/replies\`" > "$root/CLAUDE
 echo 'ABC-45 waits on its deploy' > "$tmp/replies/coordinator-handover.md"
 touch -t "$(jq -nr 'now - 2.75 * 3600 | strflocaltime("%Y%m%d%H%M")')" "$tmp/replies/coordinator-handover.md"
 out=$(ap --start) || :
+# (ABC-13 and ABC-14, the --relay answers above, are the newest two: left out here, their order a tie)
 want='## Approvals still to act on (relay one: session-status --relay KEY ACTION)
 ABC-50: Yes. Asked: Push ABC-50? · 23h left
 ABC-51: Yes. Asked: Push ABC-51? · 23h left
 ABC-52: Yes. Asked: Push ABC-52? · 23h left
-ABC-53: Yes. Asked: Push ABC-53? · 23h left
-ABC-54: Yes. Asked: Push ABC-54? · 23h left
-(and 3 more, 9 done or stale: session-status --approvals lists them all)'
-[ "$(sed -n '/^## Approvals/,/^$/p' <<<"$out" | sed '/^$/d')" = "$want" ] && [ "$(ap --approvals | grep -c 'ABC-4[0-6]')" = 7 ] ||
+(and 5 more, 9 done or stale: session-status --approvals lists them all)'
+[ "$(sed -n '/^## Approvals/,/^$/p' <<<"$out" | sed '/^$/d' | grep -v '^ABC-1[34]: ')" = "$want" ] && [ "$(ap --approvals | grep -c 'ABC-4[0-6]')" = 7 ] ||
   { echo "--start, trimmed approvals: $out"; exit 1; }
 rm -r "$tmp/replies" "$root/CLAUDE.local.md"
 fi
