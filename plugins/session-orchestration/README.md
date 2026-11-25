@@ -136,8 +136,9 @@ every change. Delegation, accounts, terminal and personal memory always stay per
 
 Installing the plugin adds these to every Claude Code session, in every project:
 
-- **Approval gate** (`hooks/approved-action.sh`, its header lists each command): a PR merge, review or comment post
-  and an issue or Jira comment (gh and the Bitbucket, Forgejo and Jira CLIs named above), a Teams or mail send, and a
+- **Approval gate** (`hooks/approved-action.sh`, its header lists each command): a PR merge, review or comment post,
+  a PR or issue opened (unless `approvals.pr_create` lets a PR through) and an issue or Jira comment (gh and the
+  Bitbucket, Forgejo and Jira CLIs named above), a Teams or mail send, and a
   `--link send` to another person's coordinator need your approval, relayed by the coordinator (a link send: your Yes
   on the pane); without it an interactive session asks you and a background one is denied. So is a call it can't
   name as one action (a writing `gh api` call; msgraph calendar, mail rule and file grant writes), and a read-only gh call

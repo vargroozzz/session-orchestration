@@ -3,7 +3,9 @@
 # comment create|update, jiradc-cli issue comment create|update), a PR review (forgejo-cli pr review), a PR merge
 # (bitbucketdc-cli or forgejo-cli pr merge) and their GitHub twins (gh pr merge|comment|review, gh issue comment), and
 # gh pr|issue create (its Action: "create pr|issue on OWNER/REPO from BODYFILE (sha256 SHA) <its other flags, word for
-# word>", --title required, --fill/--template/--editor/--web denied; gh pr create passes when approvals.pr_create is
+# word>", --title required, --fill/--template/--editor/--web denied; forgejo-cli pr create the same, its body file
+# --description-file; bitbucketdc-cli pr create, whose flags aren't read, can't be relayed: asked, when attended; a
+# pr create passes when approvals.pr_create is
 # true, and an apply session's gh pr|issue create on the plugin's own repo when feedback.send is auto, its flags are
 # on the allow-list and feedback scrub finds nothing in them and its body file; a hit or another flag is denied), run only on a relayed approval that names it: a coordinator's "APPROVAL relayed from the user" block, received by this session, whose quote
 # verify-approval.sh verifies and whose Action line names the target (REPO#ID for a PR, the issue key for Jira),
@@ -299,7 +301,7 @@ opaque=${cmd:0:1} cmd=${cmd:2}
 msw='(^|[^A-Za-z0-9_.-])msgraph(-cli)?(@[^[:space:]]*)?'
 # Its commands that send or forward under the user's name (a mail rule can forward, a file grant mails an invite).
 msv='(message[[:space:]]+(send|update)|mail[[:space:]]+((draft|scheduled)[[:space:]]+)?(send|reply|forward)|mail[[:space:]]+rule[[:space:]]+(create|update)|calendar[[:space:]]+(create|update|cancel|respond)|file[[:space:]]+grant)([[:space:]]|$)'
-ops='bitbucketdc-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|comment[[:space:]]+(create|reply|update))([[:space:]]|$)|forgejo-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|review|comment[[:space:]]+(create|update))([[:space:]]|$)|jiradc-cli[^[:space:]]*.*[[:space:]]issue[[:space:]]+comment[[:space:]]+(create|update)([[:space:]]|$)|'"$msw"'[[:space:]](.*[[:space:]])?'"$msv"
+ops='bitbucketdc-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|create|comment[[:space:]]+(create|reply|update))([[:space:]]|$)|forgejo-cli[^[:space:]]*.*[[:space:]]pr[[:space:]]+(merge|review|create|comment[[:space:]]+(create|update))([[:space:]]|$)|jiradc-cli[^[:space:]]*.*[[:space:]]issue[[:space:]]+comment[[:space:]]+(create|update)([[:space:]]|$)|'"$msw"'[[:space:]](.*[[:space:]])?'"$msv"
 # msgraph named through a variable or $(…) ($(which msgraph), M=msgraph), or a send verb right after a variable or
 # $(…) ($M mail send, "$bin" message send: a wrapper whose name isn't known here).
 msind='(=["'"'"']?|\$\(|`)[[:space:]]*((which|command[[:space:]]+-v|type[[:space:]]+-p)[[:space:]]+)?([^[:space:]]*/)?msgraph(-cli)?([^A-Za-z0-9_.-]|$)|\$[^[:space:]]*[[:space:]]+'"$msv"
@@ -477,7 +479,7 @@ while IFS= read -r t; do toks+=("$t"); done <<<"$tokstr"
 # Walk the tokens: each CLI call (up to |, ;, &&, ||) is read as SUB TARGET [flags]; a gh call (gh where a command
 # starts) as GROUP VERB TARGET with its flags anywhere.
 groups=' agent-task alias api attestation auth browse cache codespace completion config copilot extension gist gpg-key help issue label org pr preview project release repo ruleset run search secret ssh-key status variable version workflow '
-calls=0 ghcalls=0 apiw= kind= target= repo= bodyfile= body= help= host= mode= modes=0 fj= cm= crk= crf= crt= crx=()
+calls=0 ghcalls=0 apiw= kind= target= repo= bodyfile= body= help= host= mode= modes=0 fj= cm= crk= crf= crt= crx=() crn= bbc=
 i=0 st=1
 while [ "$i" -lt "${#toks[@]}" ]; do
   t=${toks[$i]}; i=$((i + 1)); prev=; [ "$i" -lt 2 ] || prev=${toks[$((i - 2))]}
@@ -551,6 +553,7 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     case "$cli:$sub" in
       *bitbucketdc-cli*:'pr merge'*) k=merge; s=2 ;;
       *bitbucketdc-cli*:'pr comment create'*|*bitbucketdc-cli*:'pr comment reply'*|*bitbucketdc-cli*:'pr comment update'*) k=prpost; s=3 ;;
+      *bitbucketdc-cli*:'pr create'*|*forgejo-cli*:'pr create'*) k=create; s=2 ;;
       *forgejo-cli*:'pr merge'*) k=merge; s=2 ;;
       *forgejo-cli*:'pr review'*) k=review; s=2 ;;
       *forgejo-cli*:'pr comment create'*|*forgejo-cli*:'pr comment update'*) k=prpost; s=3 ;;
@@ -559,6 +562,26 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     esac
     calls=$((calls + 1)); host= kind=$k target= repo= bodyfile= body= mode= modes=0 cm= fj=
     case "$cli" in *forgejo-cli*) fj=1 ;; esac
+    if [ "$k" = create ]; then
+      crk=pr crx=() crt= crf= crn=${cli##*/} bbc=; crn="${crn%%@*} pr create"; [ -n "$fj" ] || bbc=1
+      # forgejo-cli's flags, word for word like gh's; bitbucketdc-cli's aren't read here (bbc: it can't be relayed).
+      # Help only right after create: later, it may be an unknown flag's value.
+      case "${args[2]:-}" in -h|--help) help=1 ;; esac
+      set -- "${args[@]:2}"
+      while [ $# -gt 0 ]; do
+        case "$1" in --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}" ;; esac
+        case "$1" in
+          --repo) repo=${2:-}; shift ;;
+          --description-file) bodyfile=${2:-}; shift ;;
+          --description) body=1; shift ;;
+          --title) crt=1; crx+=("$1 ${2:-}"); shift ;;
+          --from|--to|--reviewers) crx+=("$1 ${2:-}"); shift ;;
+          *) crx+=("$1") ;;
+        esac
+        shift
+      done
+      continue
+    fi
     set -- "${args[@]:$s}"
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -615,7 +638,7 @@ while [ "$i" -lt "${#toks[@]}" ]; do
     'pr comment'|'issue comment') k=prpost ;;
     'pr review') k=review ;;
     # create's flags aren't the others' (-a assignee, -r reviewer, -f fill, -B base): its words are read again.
-    'pr create'|'issue create') k=create crk=${pos[0]} crx=() r= bf= bd= hp= crt= cro=
+    'pr create'|'issue create') k=create crk=${pos[0]} crx=() r= bf= bd= hp= crt= cro= crn="gh ${pos[0]} create" bbc=
       set -- ${args[@]+"${args[@]}"}
       while [ $# -gt 0 ]; do
         case "$1" in --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}" ;; esac
@@ -678,10 +701,11 @@ if [ "$kind" = create ]; then
   # approvals.pr_create: the session opens its own task's PR without an ask (an issue still asks).
   prc=; [ "$crk" != pr ] || [ "$(cd "$cwd" 2>/dev/null && . "$here/../lib.sh" >/dev/null 2>&1 && config approvals.pr_create 2>/dev/null)" != true ] || prc=1
   [ -z "$prc" ] || [ -n "$apply" ] || pass
+  [ -z "$bbc" ] || attended "Blocked: $crn can't be named as an approved action (the approval hook doesn't read its flags). Hand the user the command with hand_command."
   [ -z "$crf" ] || attended "Blocked: gh $crk create $crf fills in text the approval can't name. Give --title and --body-file <absolute path>, or hand the user the command with hand_command."
-  [ -n "$crt" ] || decide deny "Blocked: give gh $crk create its --title, so the approval can name it."
+  [ -n "$crt" ] || decide deny "Blocked: give $crn its --title, so the approval can name it."
   # the action names the text as written: a variable or $(…) there could hold anything when it runs
-  [[ "${crx[*]:-}$bodyfile" != *[\$\`]* ]] || attended "Blocked: gh $crk create with a \$ or backtick in its flags or body file: the approval names them as written, not what they expand to. Write the values out."
+  [[ "${crx[*]:-}$bodyfile$repo" != *[\$\`]* ]] || attended "Blocked: $crn with a \$ or backtick in its flags, repo or body file: the approval names them as written, not what they expand to. Write the values out."
   target=$crk
 fi
 [ -n "$target" ] || decide deny "Blocked: no PR id, issue key, chat, message id or recipient in this command."
@@ -712,6 +736,8 @@ else
                   [ -z "$fj" ] || [[ $repo == */* ]] || decide deny "Blocked: name the repository as --repo OWNER/REPO, so the approval can name OWNER/REPO#ID."
                   what="$repo#$target"; [ -z "$fj" ] || short="${repo##*/}#$target" ;;
     jirapost) what=$target ;;
+    create) [[ $repo == */* ]] || decide deny "Blocked: name the repository as --repo OWNER/REPO, so the approval can name it."
+            what=$repo ;;
     send) short=$mshort
           [ -z "$att" ] || decide deny "Blocked: mail attachments can't be named by the body file's sha256. Send the text alone, or hand the user the command with hand_command." ;;
   esac
@@ -728,6 +754,7 @@ if [ "$kind" = merge ] || [ "$kind" = approve ]; then
   action="$kind $what"
 else
   bf='--body-file <absolute path>'; [ "$kind" != send ] || bf="$bf (mail forward: --comment-file)"
+  [ "$kind$fj" != create1 ] || bf='--description-file <absolute path>'
   [ -z "$body" ] || decide deny "Blocked: post the comment with $bf, not inline text, so the approval can name the file's sha256."
   [ -n "$bodyfile" ] && [ "$bodyfile" != - ] || decide deny "Blocked: post the comment with $bf, so the approval can name the file's sha256."
   case "$bodyfile" in /*) ;; *) decide deny "Blocked: give the body file as an absolute path: $bf." ;; esac

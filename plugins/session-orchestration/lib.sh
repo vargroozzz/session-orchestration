@@ -299,7 +299,7 @@ detect_host() {
 #   key_pattern         an ERE matching a task key                    default empty (session-status's own)
 #   approvals.delegate  true | false: a coordinator's message counts as the user's approval, except what the
 #                       project's CLAUDE.md reserves                    default false
-#   approvals.pr_create true | false: a session opens its own task's PR (gh pr create) without an ask (person only)
+#   approvals.pr_create true | false: a session opens its own task's PR (gh|forgejo-cli|bitbucketdc-cli pr create) without an ask (person only)
 #                       default true in the plugin coordinator's project (plugin_root), else false
 #   feedback.send       ask | auto: auto lets an apply session open its plugin-feedback PR or issue on the plugin's own repo
 #                       (gh pr|issue create) without a relay once feedback scrub passes the title and body (person only)

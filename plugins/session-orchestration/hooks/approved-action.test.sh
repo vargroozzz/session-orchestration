@@ -278,8 +278,30 @@ check "gh pr create -R acme/app --title 'Fix login' -F $tmp/body.txt" deny "gh p
 check "gh pr create -R acme/app --title \"\$T\" --base main -F $tmp/body.txt" deny "gh pr create, a variable in a flag"
 check "gh pr create -R acme/app --title 'Fix login' --base=main -F $tmp/body.txt" allow "gh pr create, relayed"
 check "gh issue create -R acme/app -l bug --title Crash --body-file $tmp/body.txt" allow "gh issue create, relayed"
+# forgejo-cli pr create: the same Action, from --description-file. bitbucketdc-cli pr create can't be relayed.
+fjc="$fj pr create --repo org/app --from feat/x --title 'Fix login'"
+check "$fjc --description-file $tmp/body.txt" deny "forgejo pr create, no relay (approvals.pr_create false)"
+grep -qF "create pr on org/app from $tmp/body.txt (sha256 $sha) --from feat/x --title Fix login" <<<"$(run_reason "$fjc --description-file $tmp/body.txt")" ||
+  { echo "FAIL (forgejo pr create names its action): $(run_reason "$fjc --description-file $tmp/body.txt")"; exit 1; }
+check "forgejo-cli pr create --help" pass "forgejo pr create --help"
+check "$fjc --description-file $tmp/body.txt --labels --help" deny "forgejo pr create, --help as an unknown flag's value"
+for c in "$fj pr create --repo \$O/app --from feat/x --title Fix --description-file $tmp/body.txt" "gh pr create -R \$O/app --title Fix -F $tmp/body.txt"; do
+  grep -qF 'backtick in its flags, repo or body file' <<<"$(run_reason "$c")" || { echo "FAIL (a variable in the create's repo): $c: $(run_reason "$c")"; exit 1; }
+done
+check "$fjc --description 'Fixes it.'" deny "forgejo pr create, inline description"
+check "$fjc --description-file body.txt" deny "forgejo pr create, relative description file"
+check "$fj pr create --repo org/app --from feat/x --description-file $tmp/body.txt" deny "forgejo pr create, no --title"
+check "$fj pr create --repo app --from feat/x --title Fix --description-file $tmp/body.txt" deny "forgejo pr create, --repo without owner"
+check "$bb pr create --project PROJ --repo app --title Fix" deny "bitbucket pr create can't be relayed"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "$bb pr create --project PROJ --repo app --title Fix" ask "attended bitbucket pr create asks"
+typed "yes, open the PROJ-32 PR" "$now" >> "$proj/$cid.jsonl"
+relay "yes, open the PROJ-32 PR" "create pr on org/app from $tmp/body.txt (sha256 $sha) --from feat/x --title Fix login for PROJ-32" >> "$w"
+check "$fjc --to dev --description-file $tmp/body.txt" deny "forgejo pr create, a flag the relay doesn't name"
+check "$fjc --description-file=$tmp/body.txt" allow "forgejo pr create, relayed"
 echo '{"approvals":{"pr_create":true}}' > "$root/.claude/coordination.local.json"
 check "gh pr create -R acme/app --fill" pass "gh pr create under approvals.pr_create"
+check "$fjc --description-file $tmp/body.txt" pass "forgejo pr create under approvals.pr_create"
+check "$bb pr create --project PROJ --repo app --title Fix" pass "bitbucket pr create under approvals.pr_create"
 check "gh issue create -R acme/app --title Crash2 --body-file $tmp/body.txt" deny "gh issue create still asks under approvals.pr_create"
 # feedback.send auto: an apply session's create (first prompt from feedback brief) on the plugin's own repo passes when
 # scrub finds nothing personal in its flags and body; a hit denies with the scrub's lines. Another repo, another

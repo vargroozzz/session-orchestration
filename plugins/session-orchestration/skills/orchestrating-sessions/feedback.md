@@ -117,7 +117,7 @@ footer's `— apply?` is then answered already.
 | `local` | set `feedback.mode` to `local` | Nothing is sent; the cases stay files |
 
    Each outgoing `gh pr create` or `gh issue create` (with `--title` and `--body-file <absolute path>`) goes to the
-   user as one approval: the approval hook refuses it without a relay and prints the action to report. With
+   user as one approval, asked with the action worker.md's Posting and merging names for it. With
    `approvals.pr_create` `true`, the `pr` mode's `gh pr create` runs without one (an issue and a fork PR still ask),
    once the hook's `feedback scrub` passes as under `auto` below (a create on another repo skips it).
    Otherwise an apply session that the plugin coordinator started works in that coordinator's folder, so it asks the

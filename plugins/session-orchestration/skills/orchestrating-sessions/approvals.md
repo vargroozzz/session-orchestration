@@ -126,7 +126,7 @@ user a command).
   both. On `verified`, `verify-approval.sh` names the session's handed commands for the key, and the session withdraws
   the one for this action before acting; Run on a withdrawn command runs nothing. Don't point the user at Run for an
   action you relay, nor relay one they already ran.
-- **Hook-gated posts and merges** (PR and Jira comments, PR merges through `gh`, `bitbucketdc-cli`, `forgejo-cli`
+- **Hook-gated posts and merges** (PR and Jira comments, PR merges and creates through `gh`, `bitbucketdc-cli`, `forgejo-cli`
   and `jiradc-cli`, and Teams and mail sends through `msgraph`): the worker's blocked report carries `needs your
   approval: <action>`. Ask the user about exactly that action; a send's action names every recipient, mention and
   subject, so show them with the body; for a post show the body file (`ask_approval` with `body_file`, `target`, and
