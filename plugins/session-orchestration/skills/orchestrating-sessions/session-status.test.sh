@@ -88,6 +88,11 @@ EOF
 chmod +x "$tmp/bin/claude"; : > "$tmp/calls"; }
 
 if section board; then
+# --help prints the reference's command rows, never a sweep; a --WORD the sweep doesn't take is refused, not a key
+e=$(run --helpme 2>&1) && rc=0 || rc=$?
+h=$(run --help --watch) && [[ $h == '| `session-status --watch '* ]] && [ "$(run -h | grep -c .)" -gt 20 ] &&
+  ! run --help --nope 2>/dev/null && [ "$rc" = 2 ] && [ "$e" = 'session-status: unknown option --helpme (session-status --help)' ] ||
+  { echo "--help: $h / $e"; exit 1; }
 [ "$(run --coordinator)" = coord ] && [ -z "$(CLAUDE_CODE_SESSION_ID=$cid run --coordinator)" ] || { echo "--coordinator failed"; exit 1; }
 # Scope-aware: ABC-12's worker gets its sub-coordinator, ABC-12-coordinator, first; no one else sees the sub, the sub
 # itself gets the project's coordinator.
@@ -720,6 +725,11 @@ git -C "$root" worktree add -q -b feature/ABC-34-link "$root/wt12" origin/main &
 touch "$tmp/agents.fail"; SESSION_STATUS_FINISHED_OUT=$tmp/fo run >/dev/null; rm "$tmp/agents.fail"
 [ -f "$tmp/fo.wt" ] && [ ! -s "$tmp/fo.wt" ] || { echo "a failed session listing left a worktree removable: $(cat "$tmp/fo.wt")"; exit 1; }
 SESSION_STATUS_FINISHED_OUT=$tmp/fo run >/dev/null; [ "$(cut -f3 "$tmp/fo.wt")" = feature/ABC-34-old ] || { echo "removable: $(cat "$tmp/fo.wt")"; exit 1; }
+# wt2's cache/, found the same, is remembered and not diffed again; a file written into it since keeps wt2 after all
+[ "$(ls "$tmp/.cache/session-status/same" | grep -c .)" = 1 ] && echo n > "$root/wt2/cache/notes" &&
+  SESSION_STATUS_FINISHED_OUT=$tmp/fo run >/dev/null && [ ! -s "$tmp/fo.wt" ] && rm "$root/wt2/cache/notes" &&
+  SESSION_STATUS_FINISHED_OUT=$tmp/fo run >/dev/null && [ "$(cut -f3 "$tmp/fo.wt")" = feature/ABC-34-old ] ||
+  { echo "the same-folder stamp: $(ls "$tmp/.cache/session-status/same") / $(cat "$tmp/fo.wt")"; exit 1; }
 # its Leftovers line says it landed, not "unmerged commit(s) all on origin"
 [[ $(cut -f7 "$tmp/fo.wt") == 'ABC-34 Done — worktree clean+merged (rebased): '*'branch -D feature/ABC-34-old' ]] || { echo "rebased line: $(cut -f7 "$tmp/fo.wt")"; exit 1; }
 run --changes >/dev/null
@@ -1038,7 +1048,11 @@ printf -- '- Replies folder (for reports): `replies/`.\n' > "$root/CLAUDE.md"; m
 # Accounts on: a report written to the replies folder wakes --changes (a worker on another account can't message).
 echo '{"features":{"accounts":true}}' > "$root/.claude/coordination.local.json"; run --changes >/dev/null
 echo brief > "$root/replies/ABC-41-c1.md"; [ "$(run --changes)" = "no changes" ] || { echo "a coordinator's brief woke --changes"; exit 1; }
-echo report > "$root/replies/ABC-41.md"; echo report > "$root/replies/ABC-41-c1-report.md"; out=$(run --changes)
+echo report > "$root/replies/ABC-41.md"; echo report > "$root/replies/ABC-41-c1-report.md"; run --changes ABC-45 >/dev/null; out=$(run --changes)
+# a sub's watcher (`--changes KEY`): only KEY's reports, the sub's own live session no reason to skip one
+setacct cfg "$(sess "$hid" ABC-45-coordinator idle 1)"
+echo report > "$root/replies/ABC-45.md"; o45=$(run --changes ABC-45); rm "$root/replies/ABC-45.md"; setacct cfg ""
+grep -q '^now:   \* report written: ABC-45.md (' <<<"$o45" && ! grep -q 'ABC-41' <<<"$o45" || { echo "--changes ABC-45 reports: $o45"; exit 1; }
 rm "$root/replies/ABC-41.md" "$root/replies/ABC-41-c1.md" "$root/replies/ABC-41-c1-report.md" "$root/.claude/coordination.local.json"; run --changes >/dev/null
 grep -q '^now:   \* report written: ABC-41.md (' <<<"$out" && grep -q '^now:   \* report written: ABC-41-c1-report.md (' <<<"$out" ||
   { echo "a report didn't wake --changes: $out"; exit 1; }
