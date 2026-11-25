@@ -37,7 +37,8 @@ case "${1:-}" in
     printf '%s\n' "$rec" > "$d/blocked/$sid.call"
     jq -e 'has("hash")' <<<"$rec" >/dev/null 2>&1 || exit 0
     c=$(jq -c '.call' <<<"$rec") t=$(jq -r '.tool_name' <<<"$in")
-    g=$d/grants f=$d/grants/$sid.$h; mkdir -p "$g" 2>/dev/null; find "$g" -type f -mmin +60 -delete 2>/dev/null
+    g=$d/grants f=$d/grants/$sid.$h; mkdir -p "$g" 2>/dev/null; find "$g" -type f ! -name 'act-*' -mmin +60 -delete 2>/dev/null
+    find "$g" -type f -name 'act-*' -mmin +1500 -delete 2>/dev/null   # an ask's action grant holds a day (approved-action.sh)
     tp=$(jq -r '.transcript_path // empty' <<<"$in") n0=; [ ! -f "$tp" ] || n0=$(wc -c < "$tp")
     # This session and call, as the card showed it (a record rewritten to show another call gets nothing), written
     # during this wait (a grant left from an earlier prompt never counts), fresh.

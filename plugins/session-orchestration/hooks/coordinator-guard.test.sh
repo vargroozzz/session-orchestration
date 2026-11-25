@@ -224,6 +224,7 @@ check "$(w "$tmp/state/replies/PROJ-2.md")" allow 'the parent: replies outside t
 check "$(g n1 Bash '{"command":"touch ~/.cache/session-status/grants/x"}')" deny 'a grant written by Bash'
 check "$(g n1 Bash '{"command":"d=~/.cache/session-status; touch $d/grants/x","description":"x"}')" deny 'a grant path built in Bash'
 check "$(g n1 Write '{"file_path":"/home/u/.cache/session-status/grants/s.ab","content":"{}"}')" deny 'a grant written by Write'
+check "$(g n1 Write '{"file_path":"/home/u/.cache/session-status/grants/act-1-1.json","content":"{}"}')" deny 'an action grant written by Write'
 check "$(g n1 Bash '{"command":"ls","description":"session-status grants"}')" allow 'the words in the description only'
 check "$(g n1 Edit '{"file_path":"/home/u/p/docs.md","old_string":"a","new_string":"~/.cache/session-status/grants"}')" allow 'an edit naming the folder'
 echo ok

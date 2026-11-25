@@ -42,6 +42,11 @@ run s7
 wait
 [ "$(cat "$tmp/out-s3")" = "$allow" ] && [ ! -e "$g/s3.$h3" ] || { echo "FAIL valid grant: $(cat "$tmp/out-s3")"; exit 1; }
 for s in s4 s5 s6 s7 s11; do [ ! -s "$tmp/out-$s" ] || { echo "FAIL $s granted: $(cat "$tmp/out-$s")"; exit 1; }; done
+# Each request's cleanup: a permission grant goes after an hour, an action grant (an ask's Yes) after 25 hours.
+: > "$g/old.perm"; : > "$g/act-old-1.json"; : > "$g/act-stale-1.json"
+perl -e 'utime(time - 7200, time - 7200, @ARGV)' "$g/old.perm" "$g/act-old-1.json"; perl -e 'utime(time - 93600, time - 93600, @ARGV)' "$g/act-stale-1.json"
+run s20 1; wait
+[ ! -e "$g/old.perm" ] && [ -e "$g/act-old-1.json" ] && [ ! -e "$g/act-stale-1.json" ] || { echo "FAIL grant cleanup: $(ls "$g")"; exit 1; }
 # The no-wait cases below wait 20 s if they wait at all; under 10 s is no wait even on a loaded machine.
 # AskUserQuestion: nothing for the pane to grant, so no hash and no wait.
 SECONDS=0; run s8 20 AskUserQuestion; wait

@@ -27,8 +27,8 @@
 # a `Coordinate` prompt), messages (SendMessage, reply's `to`) and `claude stop`s no session whose name holds another
 # key, and edits only <replies>/KEY.md, KEY-*.md and the project memory. Its open_pane is refused
 # in register.tsx. A parent's start_session of a `Coordinate` prompt is refused even under start.sidebar.
-# Every session and subagent: no tool call writes a pane grant (blocked.sh request; only the coordinator pane's
-# Allow this call press does): a Bash command naming both session-status and grants, or a file tool's path into
+# Every session and subagent: no tool call writes a pane grant (blocked.sh request, approved-action.sh; only the
+# coordinator pane's Allow this call press or Yes click does): a Bash command naming both session-status and grants, or a file tool's path into
 # session-status/grants, is refused.
 # Any other session pays one bash start and a file test (and, until context-watch caches its kind, lib.sh and a
 # first-prompt read).
@@ -73,7 +73,7 @@ fi
 if [[ $input =~ \"tool_name\":\ *\"Bash\" && $input =~ session-status && $input =~ grants ]] &&
      jq -e '.tool_input.command // "" | test("session-status") and test("grants")' <<<"$input" >/dev/null 2>&1 ||
    [[ $input =~ \"(file_path|notebook_path)\":\ *\"[^\"]*session-status/grants ]]; then
-  deny "A pane grant (~/.cache/session-status/grants) is written only by the coordinator pane's Allow this call press, never by a tool call." pane-grant
+  deny "A pane grant (~/.cache/session-status/grants) is written only by the coordinator pane's Allow this call press or Yes click, never by a tool call." pane-grant
 fi
 # a subagent: its cd and edits aren't the coordinator's, but a sidebar session it starts is just as unseen; a
 # sub-coordinator's subagent keeps the sub's limits (its starts and edits), all but the cd rule

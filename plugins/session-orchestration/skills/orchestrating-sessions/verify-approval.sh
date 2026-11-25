@@ -62,7 +62,11 @@ if [[ $sent =~ ^[0-9]+$ ]] && [ "$sent" -ge $(( ref - max_age_h * 3600 )) ]; the
 else
   IFS=$'\037' read -r _ s_name _ _ _ s_cwd s_kind _ <<<"$(list_sessions | awk -F'\t' -v id="$id" '$1 == id' | head -1 | tr '\t' '\037')"
   if [ -n "$s_name$s_cwd" ]; then
-    [ "$s_name" = "$sender" ] || reject "sender isn't the source session"
+    # A successor coordinator relays as NAME-next until it takes NAME (session-status --successor's typed first prompt).
+    [ "$s_name" = "$sender" ] || { [ "$sender" = "$s_name-next" ] && [ -f "$f" ] &&
+      jq -rn 'first(inputs | select(.type == "user")) | select(.origin.kind == "human") | .message.content
+        | if type == "string" then . else ([.[]? | .text? // empty] | join(" ")) end' "$f" 2>/dev/null |
+        grep -qF "You succeed \"$s_name\" ("; } || reject "sender isn't the source session"
     [ "$s_kind" = interactive ] || reject "source session isn't interactive"
     [ "$s_cwd" = "$cwd" ] || reject "source cwd doesn't match the running session"
     [ -f "$f" ] || reject "no transcript for the source session"
