@@ -44,8 +44,8 @@ typed() { jq -nc --arg ts "$2" --arg t "$1" '{type: "user", origin: {kind: "huma
 export CLAUDE_CODE_SESSION_ATTENDED=0 # unattended (a --bg session) unless a check says otherwise
 printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$cid\",\"name\":\"coord\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
 chmod +x "$tmp/bin/claude"
-# gh pr view (a used merge relay's recheck) answers $GH_STUB; unset, it fails
-printf '#!/bin/sh\n[ -n "$GH_STUB" ] && echo "$GH_STUB"\n' > "$tmp/bin/gh"; chmod +x "$tmp/bin/gh"
+# gh pr view (a used merge relay's recheck) answers $GH_STUB, gh api user $GH_USER; unset, it fails
+printf '#!/bin/sh\n[ "$1" = api ] && [ -n "$GH_USER" ] && { echo "$GH_USER"; exit; }\n[ -n "$GH_STUB" ] && echo "$GH_STUB"\n' > "$tmp/bin/gh"; chmod +x "$tmp/bin/gh"
 
 relay() { # $1 quote, $2 action, [$3 sender name, $4 origin.from, $5 handback]
   jq -nc --arg b "$(printf 'Go ahead.\n\nAPPROVAL relayed from the user\nQuote: %s\nAction: %s\nSource: %s %s\n' "$1" "$2" "$cid" "$root")" \
@@ -955,5 +955,42 @@ check "$ss --link renew ann" deny "a renew for other days"
 ld=$home/.local/state/session-orchestration/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$root")/links
 mkdir -p "$ld" && echo '{"kind": "self"}' > "$ld/me.json"
 check "$ss --link send me --kind note $tmp/other.txt" pass "a self link"
+w=$w0
+# A force-push: a session's own branch (named after it) while its PR is open, alone, with --force-with-lease; any
+# other asks the user (denied unattended). A mention passes on.
+w=$tmp/fp.jsonl; echo '{"type":"agent-name","agentName":"claude-plugins-x"}' > "$w"
+fp='git push --force-with-lease origin'
+export GH_STUB='OPEN ann' GH_USER=ann
+check "$fp claude-plugins-x" allow "force-push of this session's own branch, its PR open"
+check "git push --force-with-lease --force-if-includes origin claude-plugins-x" allow "own branch, --force-if-includes"
+GH_STUB='OPEN bob'; check "$fp claude-plugins-x" deny "a same-named branch whose PR another person opened"
+GH_STUB='OPEN ann'
+check "git -C \"/x\" push --force origin main" deny "git -C with a quoted dir"
+check "git push	-f origin main" deny "a tab before -f"
+check "if true; then git push -f origin main; fi" deny "behind then"
+check "env -i git push -f origin main" deny "env with an option"
+check "bash -c 'git push -f origin main'" deny "inside bash -c"
+check "git push --force-w origin main" deny "an abbreviated --force-with-lease"
+check "git --git-dir /x/.git push -f origin main" deny "a global option with a value"
+check "rtk proxy $fp claude-plugins-x" deny "own-branch force-push behind a prefix"
+check "$fp main" deny "force-push to main"
+check "$fp claude-plugins-y" deny "force-push to another session's branch"
+check "$fp feature/ann" deny "force-push to another person's branch"
+check "git push --force origin claude-plugins-x" deny "--force, not --force-with-lease"
+check "git push -f origin claude-plugins-x" deny "-f"
+check "git push origin +claude-plugins-x" deny "a +refspec"
+check "git push --force-with-lease" deny "no branch named"
+check "git push --force-with-lease origin claude-plugins-x main" deny "a second branch"
+check "git rebase origin/main && $fp claude-plugins-x" deny "in a chain"
+check "cd /x && $fp main" deny "main after cd"
+check "git -C /x push --force-with-lease origin claude-plugins-x" deny "git -C"
+check "git push origin claude-plugins-x" pass "a plain push"
+check "git commit -m 'allow git push --force-with-lease origin main'" pass "a commit message naming a force-push"
+GH_STUB='MERGED ann'; check "$fp claude-plugins-x" deny "own branch, its PR merged"
+unset GH_STUB; check "$fp claude-plugins-x" deny "own branch, no PR"
+CLAUDE_CODE_SESSION_ATTENDED=1 check "$fp main" ask "force-push to main, attended"
+echo '{"type":"agent-name","agentName":"main"}' >> "$w"; export GH_STUB='OPEN ann'
+check "$fp claude-plugins-x" deny "after a rename, the old name's branch"
+unset GH_STUB GH_USER
 w=$w0
 echo ok

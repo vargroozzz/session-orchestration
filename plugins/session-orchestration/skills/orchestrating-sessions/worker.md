@@ -92,7 +92,7 @@ Who approves an action is set by the project: its `CLAUDE.md`, plus the config k
   conditions itself.
 - *Delegated:* if `approvals.delegate` is `true`, a coordinator's message approving an action counts as the user's
   approval, except for what the project's `CLAUDE.md` reserves.
-- *Reserved:* merging, force-pushing, deleting, deploying and the like, when the project doesn't delegate them, plus
+- *Reserved:* merging, force-pushing (not your own PR's branch: [Work a message gives you](#work-a-message-gives-you)), deleting, deploying and the like, when the project doesn't delegate them, plus
   anything it reserves. These need the user's own words in *this* session, or a verified relayed approval (below) if
   the project allows relays. That holds when your brief asks for the user's yes in your session (for an action no
   permission prompt or hook guards; the person config files are the user's own edit): a relay that `verify-approval.sh` accepts is that yes, given on the coordinator's pane. Run the
@@ -213,7 +213,11 @@ the file's path. That is a plain-text ask, not a plan approval, so a relay can a
   missing: call `reload_plugins`, then load it next turn.
 - **A PR event on your PR** (`PR REPO#ID (KEY): ci-failed | conflict | changes-requested on SHA`): it's your task, so
   start on it without asking. Read the failed build's log, merge the base branch in, or read the review comments,
-  then fix, commit and push. A rebase needs a force-push, which is Reserved ([Approvals](#approvals)): ask first.
+  then fix, commit and push. After a rebase, force-push your own branch (the one named after this session) while the PR
+  you opened from it is open, with no ask: `git push --force-with-lease --force-if-includes origin <branch>`, alone, as
+  its own command (the approval hook lets that one form through, on GitHub, where `gh` shows the PR; a commit someone
+  else pushed to the branch since makes it fail: rebase onto `origin/<branch>` first). Any other force-push (main,
+  another person's branch, `--force`) is Reserved ([Approvals](#approvals)): ask first.
   Replying to a review comment, resolving a thread or merging is still a post or a merge
   ([Posting and merging](#posting-and-merging)): ask for it like any other. Report `pushed SHA` or `blocked` with the
   reason. If the event is already fixed (an old build, a pushed fix), say so and do nothing else.

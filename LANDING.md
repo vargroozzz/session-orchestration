@@ -18,7 +18,8 @@ a release.
    merges. Until yours shows merged, after each `gh pr checks <N> -R OWNER/REPO --watch` check
    `gh pr view <N> -R OWNER/REPO --json state,mergeStateStatus` (they may share the merge's command, and a wait loop may
    test them: `[ "$(gh pr view …)" = MERGED ]`); `BEHIND` needs nothing, only a conflict (`DIRTY`) does:
-   `git fetch origin && git rebase origin/main && git push --force-with-lease`. Auto-merge stays on and merges once CI
+   `git fetch origin && git rebase origin/main`, then `git push --force-with-lease --force-if-includes origin <branch>` alone (the approval
+   hook lets a session force-push its own open PR's branch in that one form; worker.md, "A PR event on your PR"). Auto-merge stays on and merges once CI
    is green. No merge queue: GitHub offers it only to organization repos.
    Since no PR is tested on top of the others, `test.yml` runs again on each push to `main`. Once yours is merged, watch
    the run on its landing commit (`gh pr view <N> -R OWNER/REPO --json mergeCommit` names it;

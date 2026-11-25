@@ -54,7 +54,7 @@
 # doesn't see. It posts only review-inbox rows the user approved on the page, each checked by verify-row.sh.
 input=$(cat)
 # (The raw JSON: a newline before gh is the two characters \n.)
-pre='session-status[[:space:]]+--land|--link|bitbucketdc-cli|forgejo-cli|jiradc-cli|msgraph|\$[^[:space:]]*[[:space:]]+(message|mail|calendar|file)[[:space:]]|(^|[^A-Za-z0-9_.-]|\\[nrt])gh([^A-Za-z0-9_.-]|$)'
+pre='git[^A-Za-z0-9_].*push|session-status[[:space:]]+--land|--link|bitbucketdc-cli|forgejo-cli|jiradc-cli|msgraph|\$[^[:space:]]*[[:space:]]+(message|mail|calendar|file)[[:space:]]|(^|[^A-Za-z0-9_.-]|\\[nrt])gh([^A-Za-z0-9_.-]|$)'
 [[ $input =~ $pre ]] || exit 0
 
 done=
@@ -161,6 +161,31 @@ if [[ $raw =~ $kpre ]]; then
   decide allow "Your user's Yes on the pane for: $action"
 fi
 coordinated || pass
+# A force-push (worker.md, "A PR event on your PR"): a task session may force-push its own PR's branch after a rebase,
+# without an ask: the branch named after the session (its agent name), while a PR from it that the gh user opened is
+# open, as one plain command, `git push --force-with-lease [--force-if-includes] origin <name>`, with no push refspec
+# or mirror configured for origin. Any other force-push (main, another person's branch, --force, a +refspec, an
+# abbreviated --for…, one in a chain or a bash -c) asks the user (denied unattended). A push counts where a command
+# starts, behind a quote too (bash -c '…'), past wrappers, keywords and git's global options; text that only mentions
+# one mid-sentence (a commit message, a grep) passes on.
+# shortcut: a text check; a push it can't see (a git alias, a script) is left to the permission mode, as before.
+fpre='(^|[;&|({`"'"'"']|'$'\n'')[[:space:]]*((then|do|else|if|while|until|!|env|command|rtk|proxy|sudo|exec|nohup|time|nice|timeout|xargs|bash|sh|zsh|-[^[:space:]]*|[0-9]+[smhd]?|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*)[[:space:]]+)*git([[:space:]]+(-[Cc]|--git-dir|--work-tree|--namespace|--exec-path|--config-env|--super-prefix)[[:space:]]+[^[:space:]]+|[[:space:]]+-[^[:space:]]+)*[[:space:]]+push([[:space:]][^;&|'$'\n'']*)?[[:space:]](--for[a-z-]*|--mi[a-z]*|-[A-Za-z]*f[A-Za-z]*|\+[^[:space:]]*)([=[:space:]"'"'"']|$)'
+fone='^[[:space:]]*git[[:space:]]+push[[:space:]]+--force-with-lease([[:space:]]+--force-if-includes)?[[:space:]]+origin[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]*)[[:space:]]*$'
+if [[ $raw =~ $fpre ]]; then
+  fask="Send the coordinator your blocked status report with the line: needs your approval: force-push <the branch>. Then end your turn."
+  [[ $raw =~ $fone ]] || attended "Blocked: a force-push runs without the user only as \`git push --force-with-lease --force-if-includes origin <this session's name>\`, alone, while that branch's PR is open. $fask"
+  fb=${BASH_REMATCH[2]}
+  me=$(jq -r 'select(.type == "agent-name") | .agentName // empty' "$tp" 2>/dev/null | tail -1)
+  [ -n "$me" ] && [ "$fb" = "$me" ] || attended "Blocked: force-push to $fb: a session force-pushes only its own branch, the one named after it (${me:-this session is unnamed}). $fask"
+  [ -z "$(cd "$cwd" 2>/dev/null && { git config --get-all remote.origin.push; git config --get remote.origin.mirror; })" ] ||
+    attended "Blocked: origin has a push refspec or mirror configured, so this force-push may update more than $fb. $fask"
+  # The PR's author is the gh user: a teammate's open PR from a branch of the same name stays theirs.
+  fs=$(cd "$cwd" 2>/dev/null && gh pr view "$fb" --json state,author --jq '.state + " " + .author.login' 2>/dev/null) || fs=
+  fu=$(cd "$cwd" 2>/dev/null && gh api user --jq .login 2>/dev/null) || fu=
+  [ -n "$fu" ] && [ "$fs" = "OPEN $fu" ] ||
+    attended "Blocked: force-push to $fb: no open PR from it that ${fu:-the gh user} opened (gh pr view $fb: ${fs:-none}). $fask"
+  decide allow "This session's own branch $fb, whose PR is open: a force-push after a rebase needs no approval."
+fi
 # A landing by fast-forward (session-status --land BRANCH, worker.md) is gated as a merge: its action is "merge
 # BRANCH", relayed as "merge BRANCH (<this session's name>)". Seen where a command starts; it must run alone.
 lpre='(^|[;&|(]|'$'\n'')[[:space:]]*(bash[[:space:]]+)?([^[:space:]]*/)?session-status[[:space:]]+--land([[:space:]]|$)'
