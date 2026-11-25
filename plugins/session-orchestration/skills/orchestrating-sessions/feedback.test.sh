@@ -81,6 +81,21 @@ echo '{"approvals": {"pr_create": true}, "feedback": {"send": "auto"}}' > .claud
 [[ $("$FB" brief fix-x why "$a") == *" Open your PR or issue yourself once feedback scrub passes"*"(feedback.send is auto: "*" Why: why."* ]] || fail "brief, feedback.send auto"
 "$FB" brief fix-x why "$T/none.md" 2>/dev/null && fail "brief with a missing case file"
 [[ $("$FB" brief fix-x 'does it hang?' "$a") == *" Why: does it hang? Done when:"* ]] || fail "brief, a WHY ending in ?"
+
+# apply: the brief goes to session-status --launch as its --brief-file (a copy beside a stub); bad args start nothing.
+mkdir -p "$T/plug/skills/o"; cp "$FB" "$T/plug/skills/o/"; cp "${FB%/*}/../../lib.sh" "$T/plug/"
+printf '#!/bin/sh\necho "$*" > "%s/launched"; cat "$6" >> "%s/launched"; exit ${RC:-0}\n' "$T" "$T" > "$T/plug/skills/o/session-status"
+chmod +x "$T/plug/skills/o/session-status"
+"$T/plug/skills/o/feedback" apply fix-x 'it breaks.' "$a" || fail "apply exit"
+[[ $(head -1 "$T/launched") == "--launch fix-x --kind build --brief-file "* ]] && [ "$(tail -n +2 "$T/launched")" = "$("$FB" brief fix-x 'it breaks.' "$a")" ] || fail "apply launch: $(cat "$T/launched")"
+"$T/plug/skills/o/feedback" apply --kind mechanical fix-x 'it breaks.' "$a" && [[ $(head -1 "$T/launched") == "--launch fix-x --kind mechanical "* ]] || fail "apply --kind: $(head -1 "$T/launched")"
+# exit 3 (another owner): the start-anyway line it printed names the brief file, so that file stays
+RC=3 "$T/plug/skills/o/feedback" apply fix-x 'it breaks.' "$a"; rc=$?; bf=$(head -1 "$T/launched"); bf=${bf##* }
+[ "$rc" = 3 ] && [ -s "$bf" ] || fail "apply, exit 3 keeps the brief: $rc $bf"; rm -f "$bf"
+rm -f "$T/launched"
+"$T/plug/skills/o/feedback" apply --kind fix-x why "$a" 2>/dev/null; [ $? = 2 ] && [ ! -e "$T/launched" ] || fail "apply --kind without enough args"
+"$T/plug/skills/o/feedback" apply fix-x why 2>/dev/null; [ $? = 2 ] || fail "apply without a case"
+"$T/plug/skills/o/feedback" apply fix-x why "$T/none.md" 2>/dev/null; [ $? = 2 ] && [ ! -e "$T/launched" ] || fail "apply with a missing case file"
 echo '{}' > .claude/coordination.local.json
 [[ $("$FB" repo) =~ ^[^/]+/[^/]+$ ]] || fail "repo: $("$FB" repo)"
 [ "$("$FB" label)" = todo ] || fail "label: $("$FB" label)"

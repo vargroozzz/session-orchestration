@@ -65,7 +65,9 @@ takes them.
 
 - **The coordinator.** The status sweep's footer shows `plugin feedback: N open (M seen ≥2×) — apply?` at most
   once a day, then `· project feedback: K open …, for the next retro` when the project has some. Pass it on to the
-  user with the other footer items; on a yes to the apply, start an apply session (below).
+  user with the other footer items; on a yes to the apply, start an apply session (Applying, below) with
+  `feedback apply [--kind KIND] NAME WHY CASE…`: it writes `feedback brief`'s text to a file and runs
+  `session-status --launch NAME --kind KIND --brief-file` on it (KIND default `build`).
 - **The retro** ends its report with the open plugin cases, most seen first (`feedback list --plugin`), and offers
   the apply; the project's cases are proposals in that report ([retro](../retro/SKILL.md), step 7).
 

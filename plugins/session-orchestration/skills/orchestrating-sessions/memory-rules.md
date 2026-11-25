@@ -64,8 +64,8 @@ Sessions append to it; you prune it.
   session runs project-memory's `graduate` skill (`/graduate`), which also resolves open project cases and
   deferred task files (in the folder `cases tasks` prints).
 - **A retro only measures and proposes** (the `retro` skill). When the user approves some of its proposals, start a
-  fresh followups session for them (`claude --bg -n retro-<scope>-<N>-followups`, from the report's name `retro-<scope>-<N>`;
-  brief: that report in the replies folder plus the approved numbers, reporting in
+  fresh followups session for them (`session-status --launch retro-<scope>-<N>-followups --kind build --brief-file
+  FILE`, from the report's name `retro-<scope>-<N>`; FILE's brief: that report in the replies folder plus the approved numbers, reporting in
   `replies/retro-<scope>-<N>-followups.md`; a proposal that edits an untracked person file is yours to
   make, since no `--bg` session may edit the main checkout: SKILL.md Rules). Never resume the
   retro session for it. A proposal built from project feedback cases names them: the followups session marks each

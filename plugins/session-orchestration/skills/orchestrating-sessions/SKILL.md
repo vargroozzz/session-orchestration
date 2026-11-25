@@ -208,9 +208,8 @@ without asking the user: they signed in for it.
 - **Nor is a session's progress.** Tell the user what finished, what's blocked and what waits on them; a progress
   update a session sends anyway stays with you.
 - **Check a session's wording against the project docs before repeating it** to the user.
-- **Open a report a session wrote** (an HTML file, a page) only when its reply says `opened: no` or says nothing
-  about opening it: on `opened: yes` that session opened it already. Either way, give the user its path, and say it
-  is open only once one of you opened it.
+- **A report page a reply names** (an HTML file): on `opened: yes` it is open; on `opened: no`, or no `opened:`
+  line, open it yourself. Either way give the user its path.
 
 ## When to read what
 

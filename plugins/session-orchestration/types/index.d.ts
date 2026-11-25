@@ -10,6 +10,8 @@ export type Ask = {
   details?: string; target?: string; body?: AskBody; kind?: AskKind; seen?: true; sending?: number
   // A GitHub PR, OWNER/REPO#N: the ask applies while it is open (session-status's Stale section looks it up).
   still_applies?: string
+  // The Action a relay of the yes carries (approvals.md): the answer prompt ends with `Action: <it>`.
+  action?: string
 }
 // The project state the pane shows: the status command's output, the adapter's `pending` and `urls` text, and
 // the sessions the sweep saw (session-status --agents).

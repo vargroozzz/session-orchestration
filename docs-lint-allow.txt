@@ -27,7 +27,6 @@ dup	plugins/session-orchestration/features/plugin-coordinator.md | plugins/sessi
 dup	plugins/session-orchestration/features/remote.md | plugins/session-orchestration/skills/orchestrating-sessions/status-reference.md: peer a link to a coordinator on another account held by the coordinator of
 dup	plugins/session-orchestration/skills/orchestrating-sessions/handover.md | plugins/session-orchestration/skills/orchestrating-sessions/status-reference.md: an interactive claude model m effort e remote-control n name-next act as a coordinator
 dup	plugins/session-orchestration/skills/orchestrating-sessions/sessions.md | plugins/session-orchestration/skills/orchestrating-sessions/status-reference.md: ask_approval key reason start anyway on a separate branch leave it on start anyway
-dup	plugins/session-orchestration/skills/orchestrating-sessions/sessions.md | plugins/session-orchestration/skills/orchestrating-sessions/status-reference.md: keep working until done or blocked when finished reply with done and the check
 
 # A doc index row quotes its doc's trigger words, so a session matches them to what it sees.
 dup	plugins/session-orchestration/hooks/reply-card.txt | plugins/session-orchestration/skills/orchestrating-sessions/SKILL.md: you worked around this plugin or the project took an extra round trip misreported

@@ -1,7 +1,7 @@
 import type { On, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HIDDEN_BY_MARKDOWN, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, USAGE_SECTIONS, usageName, GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, SENT, REPORT_PAGES, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf, sectionSlug, sectionState, parseSections, nativePath } from './register'
+import { HIDDEN_BY_MARKDOWN, answerText, overdueAsks, parseAsks, queuedText, byKind, kindCounts, attachFor, clip, fixesOf, groupOf, keyIn, leftoverCommand, notice, wrapText, facts, orderTasks, parsePending, parseStatus, parseTask, pendingOf, prsOf, BUILTIN_KEYS, USAGE_EXTRA, USAGE_SECTIONS, usageName, GROUPS, RESOLVED, STALE, STALE_ITEMS, OTHER_PROJECTS, SENT, REPORT_PAGES, staleOf, weakStale, pendingLabel, foldOf, LEFTOVERS, OTHER, cancelText, onYouOf, sectionSlug, sectionState, parseSections, nativePath } from './register'
 
 test('status rows parse whatever the columns hold', async () => {
   const pad = (k: string, st: string) => `${k.padEnd(9)} ${st.padEnd(14)} `
@@ -1324,6 +1324,44 @@ test('reply with report writes it to the replies file first; not written, nothin
   expect(checked).toEqual(['/home/u/notes.md'])
 })
 
+test('reply done report opens each HTML page it names once, and says whether it opened', async ($, on) => {
+  on('session.cwd', async () => ({ value: '/work/proj' }))
+  on('session.id', async () => ({ value: 'sess-4' }))
+  mock.env(on, { HOME: '/h' })
+  const files = new Map<string, string>()
+  on('fs.read', async (_, e) => {
+    const v = files.get(e.path)
+    if (v === undefined) throw new Error('ENOENT')
+    return { value: v }
+  })
+  on('fs.write', async (_, e) => { files.set(e.path, e.text); return { value: undefined } })
+  const opened: string[] = []
+  let openRc = 0
+  on('process.run', async (_, e) => {
+    const opener = e.argv[1] === '-c' && String(e.argv[2]).includes('xdg-open')
+    if (opener) opened.push(String(e.argv[4]))
+    const r = opener ? { exitCode: openRc, stdout: '', stderr: '' } : { exitCode: 0, stdout: e.argv[2] === '--coordinator' ? 'proj-coordinator\n' : '', stderr: '' }
+    return { value: { ...r, isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const sent: string[] = []
+  on('session.send', async (_, e) => { sent.push(e.text); return { isDelivered: true } })
+  const reply = (text: string) => $.tool.call({ tool: 'mcp__session-orchestration__reply', text, done: 'report' })
+  await reply('audit done: /home/u/r.html and ~/x/s.html, notes /home/u/n.md')
+  expect(opened).toEqual(['/home/u/r.html', '/h/x/s.html'])
+  expect(sent.at(-1)).toBe('audit done: /home/u/r.html and ~/x/s.html, notes /home/u/n.md\nopened: yes')
+  await reply('again: /home/u/r.html')
+  expect(opened.length).toBe(2)
+  expect(sent.at(-1)).toBe('again: /home/u/r.html\nopened: yes')
+  files.set('/home/u/r.html', '<p>v2</p>') // rewritten: a new version opens again
+  await reply('v2: /home/u/r.html, old /home/u/r.html.bak')
+  expect(opened.slice(2)).toEqual(['/home/u/r.html'])
+  openRc = 1
+  await reply('new: /home/u/t.html')
+  expect(sent.at(-1)).toBe('new: /home/u/t.html\nopened: no (/home/u/t.html)')
+  await $.tool.call({ tool: 'mcp__session-orchestration__reply', text: 'not done: /home/u/v.html' })
+  expect(opened.length).toBe(4)
+})
+
 test('reply with artifact records the page first and links it; not recorded, nothing is sent', async ($, on) => {
   on('session.cwd', async () => ({ value: '/work/proj/.worktrees/PROJ-1' }))
   on('session.id', async () => ({ value: 'sess-3' }))
@@ -1453,6 +1491,32 @@ test('ask_approval stores still_applies trimmed on the ask, and refuses one that
   const a = { id: '1', key: 'PROJ-1', question: 'q', options: ['Yes', 'No'], at: 1 }
   expect(parseAsks(JSON.stringify([{ ...a, still_applies: 'false' }, { ...a, id: '2', still_applies: 'acme/app#7' }]))).toEqual([a, { ...a, id: '2', still_applies: 'acme/app#7' }])
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS }) // lets the pane's first refresh finish in this test
+  await ui.unmount()
+})
+
+test('ask_approval: a post or a close with a comment needs body_file; action is stored and ends the answer prompt', async ($, on) => {
+  mock.clock(on)
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('fs.read', async () => ({ value: { base64: 'IyMgTml0CgpVc2UgYGZvbygpYCBoZXJlLhtbMzFtCg==' } }))
+  await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
+  const sha = 'fb45bdda1ae27282b4844fa4afa557cbcc9621cefc02ce030fa715a27e31006c'
+  const ask = (question: string, extra = {}) => $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-1', question, options: ['Yes', 'No'], ...extra })
+  expect((await ask('close #166 with a one-line comment?')).deny).toMatch(/draft the body first/)
+  expect((await ask('Close PROJ-1?', { action: 'post comment /tmp/c.md on acme/app#2' })).deny).toMatch(/draft the body first/)
+  expect((await ask('merge acme/app#2', { action: 'merge acme/app#2\n(PROJ-1)' })).deny).toMatch(/one non-empty line/)
+  const post = `post comment /tmp/c.md on acme/app#2 (sha256 ${sha})`
+  expect((await ask(post, { body_file: '/tmp/c.md', action: `post comment /tmp/d.md on acme/app#2 (sha256 ${'1'.repeat(64)})` })).deny).toMatch(/the question doesn't/)
+  expect((await ask(post, { body_file: '/tmp/c.md', action: post })).deny).toBeUndefined()
+  expect((await ask('Post the PROJ-1 comment?')).deny).toBeUndefined() // a question about posting, no post grammar
+  expect((await ask('Close PROJ-1 with the fix merged; no comment needed?')).deny).toBeUndefined()
+  const a = { id: '1', key: 'PROJ-1', question: 'Land it?', options: ['Yes', 'No'], at: 1 }
+  expect(answerText({ ...a, action: 'merge acme/app#2 (PROJ-1)' }, 'Yes')).toBe('Approval pane answer for PROJ-1: Yes. Asked: Land it? Action: merge acme/app#2 (PROJ-1)')
+  // words the user typed may limit the action: no Action rides along, the coordinator relays what they approve
+  expect(answerText({ ...a, action: 'merge acme/app#2 (PROJ-1)' }, 'only after Bob reviews it')).toBe('Approval pane answer for PROJ-1: only after Bob reviews it. Asked: Land it?')
+  expect(answerText(a, 'Yes')).toBe('Approval pane answer for PROJ-1: Yes. Asked: Land it?')
+  expect(parseAsks(JSON.stringify([{ ...a, action: 7 }]))).toEqual([])
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
   await ui.unmount()
 })
 

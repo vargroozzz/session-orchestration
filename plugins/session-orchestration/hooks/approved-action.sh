@@ -28,7 +28,7 @@
 # denied (asked, when attended). A post or merge it can't find as a call (inside bash -c, a heredoc a shell reads) is
 # denied too: post from a file. A command that only mentions one (a grep pattern, a commit message, a prompt, a
 # heredoc cat writes to a file or session-status --inbox-add stores) passes when every command in it is on an allowlist of ones that never run their text
-# (SAFE); read-only calls (gh pr view, gh api GET, an inline graphql query) pass too. A gated call may share its
+# (SAFE), or as a quoted argument when the command is only those, this plugin's own scripts and plain assignments (inert(), below); read-only calls (gh pr view, gh api GET, an inline graphql query) pass too. A gated call may share its
 # command with read-only gh calls (gh pr view|checks, gh run view|watch, …, gh by name right after the subcommand), in
 # $(…) or a loop too: a landing's status poll. A read-only gh call in $(…) passes alone too as echo's argument,
 # on a line of plain echo calls (echo "#$n $(gh pr view $n …)", in a for loop too). A read-only call that could still
@@ -297,10 +297,41 @@ ghro='[[:space:]]+((pr|issue)[[:space:]]+(view|checks|list|status|diff)|run[[:sp
 cmd=$(printf '%s\n' "$cmd" | awk 'NR > 1 { printf "%s", (c ? "" : " ; ") } { c = match($0, /\\+$/) && RLENGTH % 2; if (c) sub(/\\$/, ""); printf "%s", $0 }') || exit 1
 # What the CLI mentions are counted in: the command without its quoted runs of words (a grep pattern, a commit
 # message, a prompt), which are arguments, not calls. A quoted single word stays (gh "pr" merge), and so do a value
-# (X='npx cli', run as $X later) and a "…" holding $( or `, which the shell runs. Unless every command is safe(),
-# the whole command counts.
-scan=$(printf '%s' "$cmd" | awk "${awkv[@]}" -v q="'" -v opaque="$opaque" "$awklib"'{ s = s (NR > 1 ? "\n" : "") $0 } END {
-  if (opaque || !safe(lex(s))) { printf "%s", s; exit }
+# (X='npx cli', run as $X later) and a "…" holding $( or `, which the shell runs. A command that isn't all safe()
+# (a plugin script, $S/feedback brief … 'a gh comment relay') drops them too when inert() says every command in it
+# is one that never runs its text: then, or when the quoting can't be read (an open quote, a comment, $'…'), the whole
+# command counts.
+scan=$(printf '%s' "$cmd" | awk "${awkv[@]}" -v q="'" -v opaque="$opaque" "$awklib"'
+# inert(U): lexed U is only commands that never run their arguments: plain NAME=VALUE (a literal path) on their own,
+# the scripts of this plugin (by path or $NAME/… with NAME set so before), and safe() ones; no input (<, <<<), no $(…)
+# or `…`, no redirect but to /dev/null or &N. An allowlist: a re-parser it does not know fails closed.
+# An assignment may change what a later command does (an exported GIT_EDITOR, PATH): names that steer a tool are
+# refused, and after any assignment only echo, printf, true, false, test or [ may follow beside the plugin scripts.
+function inert(u,   r, n, seg, x, m, w, y, t, k, val, asg) {
+  if (index(u, "<") || index(u, "`") || index(u, "$(")) return 0
+  r = u; gsub(/&?[0-9]*>>?[ \t]*(&[0-9]+|&-|\/dev\/null)([ \t;|&)]|$)/, " ", r); if (r ~ />/) return 0
+  n = split(u, seg, /[;|&()\n]/)
+  for (x = 1; x <= n; x++) { m = split(seg[x], w, /[ \t]+/)
+    for (y = 1; y <= m && (w[y] == "" || index(PRE, " " w[y] " ")); y++);
+    if (y > m) continue
+    if (w[y] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
+      for (; y <= m; y++) { if (w[y] == "") continue
+        if (w[y] !~ /^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_.\/-]*$/) return 0
+        k = w[y]; sub(/=.*/, "", k)
+        if (k ~ /^(PATH|HOME|IFS|ENV|BASH_ENV|CDPATH|SHELLOPTS|BASHOPTS|PS4)$|^(GH_|GIT_|CLAUDE_|LD_|DYLD_|XDG_)/) return 0
+        val[k] = substr(w[y], length(k) + 2); asg = 1 }
+      continue }
+    t = w[y]
+    if (match(t, /^[$][A-Za-z_][A-Za-z0-9_]*/) || match(t, /^[$][{][A-Za-z_][A-Za-z0-9_]*[}]/)) {
+      k = substr(t, 1, RLENGTH); gsub(/[^A-Za-z0-9_]/, "", k); if (!(k in val)) return 0
+      t = val[k] substr(t, RLENGTH + 1) }
+    if (index(t, PROOT "/skills/") == 1 && t !~ /\/\.\.(\/|$)/ && !index(t, "$")) continue
+    if (asg && w[y] !~ /^(echo|printf|true|false|test|\[)$/ || !safe(seg[x])) return 0 }
+  return 1 }
+{ s = s (NR > 1 ? "\n" : "") $0 } END {
+  if (opaque) { printf "%s", s; exit }
+  full = s; ok = safe(u = lex(s))
+  if (!ok && (LQ != "" || index(u, ";#") || index(s, "$" q))) { printf "%s", s; exit }
   while (match(s, "[\\\\\"" q "]")) {
     out = out substr(s, 1, RSTART - 1); c = substr(s, RSTART, 1); s = substr(s, RSTART + 1)
     if (c == "\\") { out = out c substr(s, 1, 1); s = substr(s, 2); continue }
@@ -310,7 +341,7 @@ scan=$(printf '%s' "$cmd" | awk "${awkv[@]}" -v q="'" -v opaque="$opaque" "$awkl
     b = substr(s, 1, e - 1); s = substr(s, e + 1)
     if (b !~ /[ \t]/ || out ~ /=$/ || (c == "\"" && (index(b, "$(") || index(b, "`")))) out = out c b c
   }
-  printf "%s", out s }') || exit 1
+  printf "%s", (ok || inert(u) ? out s : full) }') || exit 1
 ghn=$(grep -oE "$ghw" <<<"$scan" | wc -l | tr -d ' ')
 ghron=$(grep -oE "(^|[^A-Za-z0-9_.-])gh$ghro" <<<"$scan" | wc -l | tr -d ' ')
 # Matched with quotes dropped too, so a quoted subcommand (pr 'merge') or flag is still seen.
