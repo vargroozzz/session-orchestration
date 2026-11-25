@@ -46,7 +46,7 @@ emit() { jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName:
 # Inline: hooks.json gives UserPromptSubmit 60 s; any other prompt pays one string test. The reply card waits for the
 # next firing.
 if [ -z "${CW_DETACHED:-}" ] && [ "$ev" = UserPromptSubmit ] && [[ $input == *'<cross-session-message from='*'APPROVAL relayed from the user'* ]]; then
-  me=$(grep -F '"agent-name"' "$tp" | tail -1 | jq -r '.agentName // empty' 2>/dev/null) out=
+  me=$(grep -F '"agent-name"' "$tp" 2>/dev/null | jq -r 'select(.type == "agent-name") | .agentName // empty' 2>/dev/null | tail -1) out=
   while IFS= read -r b; do
     { read -r from; read -r bsid; read -r scwd; read -r a; } < <(jq -r '.from, .sid, .scwd, .action' <<<"$b")
     k=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$a" | head -1)

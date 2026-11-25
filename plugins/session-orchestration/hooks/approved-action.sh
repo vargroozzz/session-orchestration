@@ -822,7 +822,7 @@ $relays}" || exit 1   # the predecessor's go first: older, and the loop below re
 done
 # A relay counts for this command when its Action names the target as a whole word, and the sha256 for a post or
 # "merge"/"approve" with no sha256 for a merge or bare approval (a gh review: its kind and "review" too); then the quote must verify, with the task key the Action names.
-tried= me=$(jq -r 'select(.type == "agent-name") | .agentName // empty' "$tp" 2>/dev/null | tail -1) now=$(date +%s)
+tried= me=$(grep -F '"agent-name"' "$tp" 2>/dev/null | jq -r 'select(.type == "agent-name") | .agentName // empty' 2>/dev/null | tail -1) now=$(date +%s)
 # The user's Yes on the coordinator pane to an ask that names this session as the one that runs its action: the pane
 # wrote a grant (register.tsx writeGrant; coordinator-guard keeps sessions from writing one), good for a day, to this
 # session's name or an 8+ hex prefix of its id. Last line: tried first.

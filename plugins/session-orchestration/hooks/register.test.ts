@@ -290,10 +290,12 @@ test('an ask answered in the user\'s own words submits them as the answer', asyn
   expect(await again.find({ type: 'Button', text: 'Yes' })).toBeDefined()
 })
 
-test('a Yes click on an ask with action and session writes its grant before the answer; a No, typed words or a dropped answer leave none', async ($, on) => {
+test('a Yes click on an ask with action and session writes its grant before the answer; a No, typed words or a dropped answer leave none, and a later answer for the key voids it', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/h' })
   const order: string[] = []
+  const dir = '/h/.cache/session-status/grants'
+  const grants = new Map<string, string>() // the grants folder: path to text
   let drop = ''
   on('prompt.submit', async (_, e) => {
     if (drop) return { drop }
@@ -301,12 +303,23 @@ test('a Yes click on an ask with action and session writes its grant before the 
     return { text: e.text }
   })
   on('process.run', async (_, e) => {
-    if (e.argv.includes('rm -f "$@"')) order.push(`rm ${e.argv.at(-1) ?? ''}`)
+    if (e.argv.includes('rm -f "$@"')) {
+      const paths = e.argv.slice(e.argv.indexOf('_') + 1)
+      paths.forEach(p => grants.delete(p))
+      order.push(`rm ${paths.join(' ')}`)
+    }
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.write', async (_, e) => {
-    if (e.path.includes('/grants/')) order.push(`grant ${e.path} ${e.text}`)
+    if (e.path.includes('/grants/')) { grants.set(e.path, e.text); order.push(`grant ${e.path} ${e.text}`) }
     return { value: undefined }
+  })
+  on('fs.exists', async (_, e) => ({ value: e.path === dir }))
+  on('fs.list', async (_, e) => ({ value: e.path !== dir ? [] : [...grants.keys()].map(p => ({ name: p.slice(dir.length + 1), kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }))
+  on('fs.read', async (_, e) => {
+    const t = grants.get(e.path)
+    if (t === undefined) throw new Error('ENOENT')
+    return { value: t }
   })
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   let said = ''
@@ -335,10 +348,15 @@ test('a Yes click on an ask with action and session writes its grant before the 
   await click('PROJ-4', 'ask-4-0') // no session: no grant
   expect(order.filter(o => !o.startsWith('submit '))).toEqual([])
   expect(order).toHaveLength(3)
+  // The newest answer stands: a No for the key after its Yes voids the Yes's grant (the other key's stays).
+  await click('PROJ-6', 'ask-5-0', { session: 'PROJ-6-fix' })
+  expect([...grants.keys()]).toEqual([`${dir}/act-1-1000.json`, `${dir}/act-5-1000.json`])
+  await click('PROJ-6', 'ask-6-1', { session: 'PROJ-6-fix' })
+  expect([...grants.keys()]).toEqual([`${dir}/act-1-1000.json`])
   order.length = 0
   drop = 'busy'
-  await click('PROJ-5', 'ask-5-0', { session: '0a0a0a0a' })
-  expect(order).toEqual([expect.stringMatching(/^grant \/h\/.cache\/session-status\/grants\/act-5-1000\.json /), 'rm /h/.cache/session-status/grants/act-5-1000.json'])
+  await click('PROJ-5', 'ask-7-0', { session: '0a0a0a0a' })
+  expect(order).toEqual([expect.stringMatching(/^grant \/h\/.cache\/session-status\/grants\/act-7-1000\.json /), 'rm /h/.cache/session-status/grants/act-7-1000.json'])
 })
 
 const STATUS = `PROJ-4157  Code Review    app#76 OPEN no-human-approval  | wt dirty:0 unpushed:0 | sess:— | Race to settle

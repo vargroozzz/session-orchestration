@@ -3293,9 +3293,11 @@ pane 0.05 'ABC-11: No, leave PR #5 open. Asked: Merge PR #5?' >> "$proj/$cid.jso
 rc=0; out=$(ap --relay ABC-11 x 2>&1) || rc=$?
 [ $rc = 1 ] && [[ $out == "ABC-11's newest pane answer is a No"* ]] || { echo "--relay, newest a No: $rc $out"; exit 1; }
 mkdir -p "$tmp/.cache/session-status/handover" && echo "$cid" > "$tmp/.cache/session-status/handover/coord.next"
-# A successor still named coord-next (or recorded in coord.next) relays too: the worker's check takes NAME-next.
-for n in coord-next Coordinator; do stub "$n"; out=$(ap --relay ABC-13 2>&1) && [[ $out == 'APPROVAL relayed from the user'* ]] ||
-  { echo "--relay as $n: $out"; exit 1; }; done
+# A successor still named coord-next relays too (the worker's check takes NAME-next); one recorded in coord.next but
+# listed under the app's title waits until it holds coord.
+stub coord-next; out=$(ap --relay ABC-13 2>&1) && [[ $out == 'APPROVAL relayed from the user'* ]] || { echo "--relay as coord-next: $out"; exit 1; }
+stub Coordinator; rc=0; out=$(ap --relay ABC-13 2>&1) || rc=$?
+[ $rc = 1 ] && [[ $out == *"relay once it holds coord" ]] || { echo "--relay as Coordinator, recorded in coord.next: $rc $out"; exit 1; }
 # --start's trim, each rule: hidden an explain request (ABC-40), a task gone (ABC-41: its session ended, no worktree),
 # a start done since (ABC-42: its session started after the answer), one clicked before the handover note and not
 # named in it (ABC-43; this coordinator started after it), the newest a No (ABC-11); kept a start whose session is

@@ -1422,6 +1422,10 @@ if [ "${1:-}" = --approvals ] || [ "${1:-}" = --relay ]; then
   ho_live || exit 1
   name=$(ho_field 1 "$CLAUDE_CODE_SESSION_ID" 2) cwd=$(ho_field 1 "$CLAUDE_CODE_SESSION_ID" 6)
   [ -n "$name" ] || { echo "this session isn't listed (claude agents): no source to name" >&2; exit 1; }
+  # A Desktop successor recorded only in NAME.next relays once it holds NAME: the worker's check takes
+  # NAME-next, not the app's title.
+  n=$(ho_name "$CLAUDE_CODE_SESSION_ID"); [[ $n != *-next ]] || [ "$n" = "$name" ] ||
+    { echo "this session is the successor recorded in ${n%-next}.next, listed as $name: relay once it holds ${n%-next}" >&2; exit 1; }
   # A landing's Action: "approved under" is --relay's to add, and words after the bracket (merge instructions) read as
   # the coordinator's own approval claim, which auto mode refuses and the hook doesn't take. Print the plain form.
   if [[ $action =~ ^[Mm][Ee][Rr][Gg][Ee][[:space:]]+([^[:space:]]+)[[:space:]]*\(([A-Za-z0-9][A-Za-z0-9._-]*) ]]; then
