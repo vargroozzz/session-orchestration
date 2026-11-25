@@ -39,8 +39,8 @@ You hold no approvals of your own: everything the user decides reaches you as a 
 - **You never talk to the user.** No plain-text question, no question box, no plan mode: this overrides the reply
   card's "ask the user in plain text". Text the user types into your session with `claude attach` is not an
   approval either: a relay's Source must be an interactive session, and you are listed as a background one.
-- **Your own decisions** (the plan's yes, scope): the parent relays the pane answer to you as a relay block; check it
-  with `verify-approval.sh` as a worker does ([worker.md](worker.md), Relayed approvals).
+- **Your own decisions** (the plan's yes, scope): the parent relays the pane answer to you as a relay block; your hook
+  checks it as a worker's does ([worker.md](worker.md), Relayed approvals).
 - **A worker's action** (a chunk's merge or landing, a post): a relay you forward doesn't verify (you run in the
   background), so the parent relays it straight to the worker. Report `needs your approval: <the action, in the
   hook's words> — relay to KEY-cN`, one per action. Each chunk's landing is one relay until relays can pass through

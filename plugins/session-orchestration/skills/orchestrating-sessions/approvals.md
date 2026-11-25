@@ -9,6 +9,17 @@ give the go yourself, and ask the user only for what its `CLAUDE.md` reserves. A
 approval: those need the user, a permission prompt on its pane card (Allow this call) or in that session (`claude
 attach <id>`), a plan approval in that session.
 
+## Grants
+
+An ask for a hook-gated action a session runs (its `needs your approval: <action>`) carries `action` and `session`:
+the session's name as its messages show it, or its id (whole, or its first 8 or more characters); the pane shows
+"Runs in: <it>". The user's click on one of its options starting "Yes" writes a grant that session's approval hook
+takes once, for that action only, within 24h: no quote to verify, no Source. `session-status --relay KEY` then prints,
+instead of the block, the go note to send as is (`Approved on the pane, granted to S: ACTION. Run the same command
+again: …`); the note approves nothing itself, the hook finds the grant. An answer typed in the pane (In your own
+words…) grants nothing. The relay block stays for the rest: an ask without `session`, a typed or question-box answer,
+no pane, a landing approved under another key.
+
 ## The relay block
 
 To pass on an approval the user gave, send the session this block, one action per block, the Quote verbatim:
@@ -28,15 +39,13 @@ before the auto-mode classifier sees it. Any other form may be refused by the cl
 Action as the act): don't reword it or call it again unasked, `hand_command` it (key KEY) so the user's Run press is the consent; the
 Run's outcome brings the block whole ([pane.md](pane.md), Handed-over commands, which also says what to do when the
 Run is refused). `session-status --approvals` lists the live pane answers with the hours left and
-their relays, and `--start` shows those still to act on. A typed or question-box answer's block you write yourself, with your
-`sessionId`, `cwd` and name: your entry in `claude agents --json`, matched on the name `ListAgents` shows for you
-right now (names change when a session is resumed). The session checks the block with `verify-approval.sh`
-([worker.md](worker.md), Relayed approvals). Its checks decide what you can relay: the Quote must be words the user
+their relays, and `--start` shows those still to act on. A typed or question-box answer: `session-status --relay KEY
+ACTION --quote -`, the user's exact words on stdin (a quoted heredoc), checked and printed the same way. The
+session's hook checks the block with `verify-approval.sh` as it arrives ([worker.md](worker.md), Relayed approvals). Its checks decide what you can relay: the Quote must be words the user
 gave you in one of the ways below, naming the task key or answering your last message, which named it. As a
 successor, words the user gave the coordinator you succeed count as yours (Source stays you): the check finds them in
-its transcript through your first prompt's `You succeed "NAME" (ID8)`, still within 24h. Relay them once you hold
-`NAME`: a relay sent as `NAME-next` fails when the worker reads it after your rename. Two relays
-it always rejects: one from a background coordinator (only an interactive one can relay), and one to a session whose
+its transcript through your first prompt's `You succeed "NAME" (ID8)`, still within 24h. Two relays it always
+rejects: one from a background coordinator (only an interactive one can relay), and one to a session whose
 cwd is neither your own cwd, inside it, nor a folder containing it (that session hands the user the command instead: [worker.md](worker.md), Handing the
 user a command).
 
@@ -70,6 +79,7 @@ user a command).
     refuses a post or a close with a comment that has none). No control characters in the question or options.
   - Pass `action`, the exact Action a relay of the yes carries (`merge OWNER/REPO#N (KEY)`, `post comment FILE on T
     (sha256 X)`): the answer line ends with `Action: <it>`, and `session-status --relay KEY` with no ACTION relays it.
+    Add `session` for an action a session runs: a Yes then grants it ([Grants](#grants)).
   - **A send's draft holds every word that goes out**: each message's exact text, an attachment's caption or body
     included (Teams won't send a file without one). Check it before you ask: text the session adds after the
     approval isn't covered, and is refused as not in the draft.
@@ -133,8 +143,9 @@ user a command).
   approval: <action>`. Ask the user about exactly that action; a send's action names every recipient, mention and
   subject, so show them with the body; for a post show the body file (`ask_approval` with `body_file`, `target`, and
   `kind` for a review finding; in plain text, its text). The Action is that line verbatim plus the task key in
-  parentheses (`merge app#271 (PROJ-5164)`), never the CLI command; pass it whole as ACTION to `session-status
-  --relay KEY ACTION`, which builds the block. Landing a task's own PR:
+  parentheses (`merge app#271 (PROJ-5164)`), never the CLI command; give it as the ask's `action`, with `session`
+  ([Grants](#grants)), and pass it whole as ACTION to `session-status --relay KEY ACTION`, which builds the block (or
+  the go note). Landing a task's own PR:
   `session-status --relay KEY 'merge OWNER/REPO#ID (<session name>)'`, KEY being the key the starting yes was given
   under (`--relay` adds `approved under` itself when that isn't the session's own). The grammar, what one relay
   allows and its time limit: [worker.md](worker.md#posting-and-merging), the one home.
