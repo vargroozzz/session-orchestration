@@ -1581,10 +1581,12 @@ setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$x" p-coordin
 as "$x" --await name --timeout 1 >/dev/null && { echo "--await name while the old one holds the name"; exit 1; }
 as "$o" --await ready | grep -q '^ready: "p-coordinator-next" (0b0b0b0b) has finished its Start. Now stop your watcher (TaskStop), forward to the inbox what you got meanwhile, run `'"$here/session-status"' --successor --done`, then, last, rename yourself' ||
   { echo "--await ready"; exit 1; }
-# A message meanwhile: the reply tool's backstop (--inbox-add) wakes the successor's wait; --start and --changes show it.
+# A message meanwhile (the reply tool's backstop, --inbox-add): the successor's wait goes on to its step and prints the
+# entries with its outcome (here the timeout); --start and --changes show them.
 [ "$(printf 'PROJ-1 · done\n# not a heading' | as "$z" --inbox-add "$o")" = "$root/replies/coordinator-inbox.md #1" ] &&
-  printf 'second' | as "$z" --inbox-add --from 'w (12345678), forwarded' >/dev/null && { out=$(as "$x" --await name --timeout 5); [ $? = 3 ]; } &&
-  grep -q '^NOT DONE: --await name woke on the inbox' <<<"$out" && grep -qx '## 1 · unread · [0-9-]* [0-9:]* · from "p-coordinator" (0a0a0a0a)' <<<"$out" &&
+  printf 'second' | as "$z" --inbox-add --from 'w (12345678), forwarded' >/dev/null && { out=$(as "$x" --await name --timeout 1); [ $? = 1 ]; } &&
+  grep -q '^--await name: nothing after 1s' <<<"$out" && grep -qxF "Inbox while you waited: act on each, then \`$here/session-status --inbox --read N\`:" <<<"$out" &&
+  grep -qx '## 1 · unread · [0-9-]* [0-9:]* · from "p-coordinator" (0a0a0a0a)' <<<"$out" &&
   grep -qx ' # not a heading' <<<"$out" && grep -qx '## 2 · unread · .* · from w (12345678), forwarded' <<<"$out" &&
   [ "$(run --start | grep -c '^## Coordinator inbox, unread')" = 1 ] && run --changes >/dev/null &&
   printf 'third' | as "$z" --inbox-add >/dev/null && run --changes | grep -q '^now:   \* 3 · unread · .* · from unknown$' &&
@@ -3273,8 +3275,9 @@ pane 0.05 'ABC-11: No, leave PR #5 open. Asked: Merge PR #5?' >> "$proj/$cid.jso
 rc=0; out=$(ap --relay ABC-11 x 2>&1) || rc=$?
 [ $rc = 1 ] && [[ $out == "ABC-11's newest pane answer is a No"* ]] || { echo "--relay, newest a No: $rc $out"; exit 1; }
 mkdir -p "$tmp/.cache/session-status/handover" && echo "$cid" > "$tmp/.cache/session-status/handover/coord.next"
-for n in coord-next Coordinator; do stub "$n"; rc=0; out=$(ap --relay ABC-11 x 2>&1) || rc=$?
-  [ $rc = 1 ] && [[ $out == *"name yet (coord-next)"* ]] || { echo "--relay as $n: $rc $out"; exit 1; }; done
+# A successor still named coord-next (or recorded in coord.next) relays too: the worker's check takes NAME-next.
+for n in coord-next Coordinator; do stub "$n"; out=$(ap --relay ABC-13 2>&1) && [[ $out == 'APPROVAL relayed from the user'* ]] ||
+  { echo "--relay as $n: $out"; exit 1; }; done
 # --start's trim, each rule: hidden an explain request (ABC-40), a task gone (ABC-41: its session ended, no worktree),
 # a start done since (ABC-42: its session started after the answer), one clicked before the handover note and not
 # named in it (ABC-43; this coordinator started after it), the newest a No (ABC-11); kept a start whose session is

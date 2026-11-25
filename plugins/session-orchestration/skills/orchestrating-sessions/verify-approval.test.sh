@@ -158,6 +158,13 @@ sc() { [ "$(sv "$1" "$2")" = "$3" ] || { echo "FAIL successor ($4): got '$(sv "$
 echo '{"type":"agent-name","agentName":"coord"}' >> "$proj/$cid.jsonl"
 first 'Act as a coordinator. You succeed "coord" (99999999): end your Start with the successor step.' > "$proj/$sid.jsonl"
 sc ABC-1 yes "verified, answering: Merge ABC-1?" "one hop"
+# Relayed as coord-next, checked once it holds coord: its typed first prompt names the one it succeeds.
+printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$sid\",\"name\":\"coord\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
+sc ABC-1 yes "verified, answering: Merge ABC-1?" "renamed since the relay"
+first 'Act as a coordinator.' > "$proj/$sid.jsonl"
+sc ABC-1 yes "rejected: sender isn't the source session" "a NAME-next sender, no successor prompt"
+first 'Act as a coordinator. You succeed "coord" (99999999): end your Start with the successor step.' > "$proj/$sid.jsonl"
+printf '#!/bin/sh\necho %s\n' "'[{\"sessionId\":\"$sid\",\"name\":\"coord-next\",\"cwd\":\"$root\",\"kind\":\"interactive\"}]'" > "$tmp/bin/claude"
 sc ABC-4 "Yes, deploy ABC-4" "$no ABC-4 in it or in the message it answers" "stale"
 { first 'Act as a coordinator. You succeed "coord" (99999999).'; echo '{"type":"agent-name","agentName":"coord"}'; } > "$proj/$mid.jsonl"
 first 'Act as a coordinator. You succeed "coord" (77777777).' > "$proj/$sid.jsonl"

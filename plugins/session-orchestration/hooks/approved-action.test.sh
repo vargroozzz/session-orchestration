@@ -1014,5 +1014,33 @@ CLAUDE_CODE_SESSION_ATTENDED=1 check "$fp main" ask "force-push to main, attende
 echo '{"type":"agent-name","agentName":"main"}' >> "$w"; export GH_STUB='OPEN ann'
 check "$fp claude-plugins-x" deny "after a rename, the old name's branch"
 unset GH_STUB GH_USER
+# A pane grant (register.tsx writeGrant): the user's Yes on an ask naming this session runs its action once, in a
+# transcript with no relay at all; by name or an 8+ hex prefix of the id, within a day.
+w=$tmp/granted.jsonl; jq -nc '{type: "agent-name", agentName: "app-fix"}' > "$w"
+gd=$home/.cache/session-status/grants; mkdir -p "$gd"; t0=$(date +%s)
+grant() { # $1 file, $2 session, $3 action, [$4 at, $5 kind]
+  jq -nc --arg s "$2" --arg a "$3" --argjson at "${4:-$t0}" --arg k "${5:-action}" \
+    '{kind: $k, session: $s, key: "app-fix", action: $a, quote: "Approval pane answer for app-fix: Yes. Asked: Go? Action: \($a)", at: $at}' > "$gd/$1"
+}
+grant act-a-1.json app-fix "merge acme/app#60 (app-fix)"
+check "gh pr merge 60 -R acme/app --rebase" allow "a pane grant, no relay in the transcript"
+reason=$(run_reason "gh pr merge 60 -R acme/app --rebase")
+[[ $reason == *"used once already"* ]] || { echo "FAIL (a pane grant, used once): $reason"; exit 1; }
+grant act-b-1.json abcdef12 "merge acme/app#61 (app-fix)"
+SID=abcdef12-0000-4000-8000-000000000000 check "gh pr merge 61 -R acme/app" allow "a pane grant to this session's id prefix"
+grant act-c-1.json other-task "merge acme/app#62 (other-task)"
+check "gh pr merge 62 -R acme/app" deny "a pane grant to another session"
+grant act-d-1.json abcdef1 "merge acme/app#63 (app-fix)"
+SID=abcdef12-0000-4000-8000-000000000000 check "gh pr merge 63 -R acme/app" deny "a pane grant to a 7-character id prefix"
+grant act-e-1.json app-fix "merge acme/app#64 (app-fix)" $(( t0 - 86500 ))
+check "gh pr merge 64 -R acme/app" deny "a pane grant older than a day"
+grant act-f-1.json app-fix "merge acme/app#65 (app-fix)" $(( t0 + 600 ))
+check "gh pr merge 65 -R acme/app" deny "a pane grant dated ahead"
+grant act-g-1.json app-fix "merge acme/app#66 (app-fix)" "$t0" permission
+check "gh pr merge 66 -R acme/app" deny "a permission grant is no action grant"
+grant act-h-1.json app-fix "post comment $tmp/body.txt on acme/app#67 (sha256 $(printf '%064d' 0))"
+check "gh pr comment 67 -R acme/app --body-file $tmp/body.txt" deny "a pane grant for another sha256"
+grant act-i-1.json app-fix "post comment $tmp/body.txt on acme/app#68 (sha256 $sha)"
+check "gh pr comment 68 -R acme/app --body-file $tmp/body.txt" allow "a pane grant for the body's sha256"
 w=$w0
 echo ok

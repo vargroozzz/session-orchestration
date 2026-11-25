@@ -1288,12 +1288,11 @@ if [ "${1:-}" = --await ]; then
   aw=$what nm=
   # Desktop archives a session's idle side sessions with it, and only the session that started one can detach it
   dk=; [[ ${CLAUDE_CODE_ENTRYPOINT:-} != claude-desktop* ]] || dk=" detach each session you started other than your successor, so archiving you leaves it (mcp__ccd_session_mgmt__list_sessions {\"linked\": true} lists them, then mcp__ccd_session_mgmt__detach_session; one that refuses: name it in an inbox entry for the user),"
+  # A successor's wait (name, done) ends only on its step; inbox entries that came meanwhile print with its outcome.
+  inbox_note() { local u; [ "$aw" = ready ] || [ "$aw" = renamed ] || ! u=$(inbox_unread) || [ -z "$u" ] ||
+    printf 'Inbox while you waited: act on each, then `%s --inbox --read N`:\n%s\n' "$SELF" "$u"; }
   while :; do
     if [ -z "$live" ]; then :   # this poll's listing failed: nothing is known, wait for the next
-    elif [ "$what" != ready ] && [ "$what" != renamed ] && u=$(inbox_unread) && [ -n "$u" ]; then
-      # exit 3 and a first line saying so: a successor took an exit-0 inbox wake for the step being done
-      echo "NOT DONE: --await $aw woke on the inbox, not on its step.${nm:+$nm First:} Act on each entry, mark it read (\`$SELF --inbox --read N\`), then arm \`$SELF --await $aw\` again (Bash, run_in_background):"
-      echo "$u"; exit 3
     else case $what in
       ready) s=$(cat "$HO_DIR/$n.ready" 2>/dev/null)
         if [ -n "$s" ] && [ "$(ho_name "$s")" = "$n-next" ]; then
@@ -1308,7 +1307,7 @@ if [ "${1:-}" = --await ]; then
         # then on to `done` in the same wait: the old one wrote its stamp before renaming (an older one's comes after)
         [ -n "$h" ] || { load_terminal; ho_retitle "$id" "$n"; what=done nm=" Now call name_session with name $n."; continue; } ;;
       done) o=$(cat "$HO_DIR/$n.done" 2>/dev/null); st=; [ -z "$o" ] || st=$(ho_field 1 "$o" 8)
-        if [ "$o" = "$id" ]; then echo "the done stamp names you (${id:0:8}), not the old coordinator: nothing closed.$nm"; exit 2
+        if [ "$o" = "$id" ]; then echo "the done stamp names you (${id:0:8}), not the old coordinator: nothing closed.$nm"; inbox_note; exit 2
         elif [ -n "$o" ] && [ "$st" != busy ] && [ "$st" != waiting ]; then
           # a background one (or one no longer listed) shows in the tab it was moved out of, not its own pid's
           t=; if [[ ${CLAUDE_CODE_ENTRYPOINT:-} == claude-desktop* ]]; then
@@ -1331,10 +1330,10 @@ if [ "${1:-}" = --await ]; then
           else msg="the old coordinator (${o:0:8}) has no terminal: left running; tell the user to close it"
           fi
           # NAME.next stays until name_session lands: --name-check knows a Desktop successor only by it (--successor clears it)
-          rm -f "$HO_DIR/$n.ready" "$HO_DIR/$n.done"; [ -n "$nm" ] || rm -f "$HO_DIR/$n.next"; echo "handover done: $msg.$nm"; exit 0
+          rm -f "$HO_DIR/$n.ready" "$HO_DIR/$n.done"; [ -n "$nm" ] || rm -f "$HO_DIR/$n.next"; echo "handover done: $msg.$nm"; inbox_note; exit 0
         fi ;;
     esac; fi
-    [ "$(date +%s)" -lt "$end" ] || { echo "--await $aw: nothing after ${tmo}s${nm:+ (\"$n\" is free: call name_session with name $n first)}; check the other coordinator (session-status --activity) and arm it again or hand over by hand"; exit 1; }
+    [ "$(date +%s)" -lt "$end" ] || { echo "--await $aw: nothing after ${tmo}s${nm:+ (\"$n\" is free: call name_session with name $n first)}; check the other coordinator (session-status --activity) and arm it again or hand over by hand"; inbox_note; exit 1; }
     sleep "$every"; ho_live 2>/dev/null || live=
   done
 fi
@@ -1368,8 +1367,8 @@ ended_free() {
 # chain_transcripts), newest first, with the hours left and the relays sent of each.
 # --relay KEY [ACTION]: the approval block (approvals.md) for KEY's newest live pane answer, checked first as the worker
 # will (verify-approval.sh, from this session's listed cwd), to send as is; exit 1 with why when there's none, it is a
-# No, the check fails, or this is a successor not holding the coordinator's name yet. Both run in the coordinator's
-# own session.
+# No, or the check fails. A Yes that granted its action on the pane prints the go note instead. --relay KEY ACTION
+# --quote -: the block for the user's own words on stdin. Both run in the coordinator's own session.
 # approval_answers AGE_S: approvals.jq's answers (one JSON line each) in this session's transcript chain, nothing
 # without one; fails when a transcript can't be read.
 approval_answers() {
@@ -1387,25 +1386,40 @@ if [ "${1:-}" = --approvals ] || [ "${1:-}" = --relay ]; then
         + (if .relays == [] then "not relayed" else "relayed: " + ([.relays[] | "\(.action) to \(.to)"] | join("; ")) end)' <<<"$ans"
     exit 0
   fi
-  key=${2:-} action=${3:-}
-  [ -n "$key" ] && [[ $action != *$'\n'* ]] || { echo "usage: session-status --relay KEY [ACTION] (one line; none: the ask's own Action)" >&2; exit 2; }
+  key=${2:-} action=${3:-} typed=
+  # --quote -: the user's own words (typed, or a question-box answer) on stdin, checked like a pane answer.
+  [ "${4:-}" != --quote ] || [ "${5:-}" != - ] || [ $# != 5 ] || [ -z "$action" ] || typed=1
+  [ -n "$key" ] && [[ $action != *$'\n'* ]] && { [ $# -le 3 ] || [ -n "$typed" ]; } ||
+    { echo "usage: session-status --relay KEY [ACTION] (one line; none: the ask's own Action), or --relay KEY ACTION --quote - (the user's exact words on stdin)" >&2; exit 2; }
+  if [ -n "$typed" ]; then q=$(cat); [ -n "$q" ] || { echo "--quote -: no quote on stdin" >&2; exit 2; }
+  else
+    pick=$(jq -c --arg k "$key" --argjson since $(( now - age_s )) 'select(.key == $k and .ts > $since)' <<<"$ans")
+    [ -n "$pick" ] || { echo "no pane answer for $key in the last $(( age_s / 3600 )) hours (--approvals lists them): ask on the pane, or relay the user's own words with --quote - (approvals.md)" >&2; exit 1; }
+    q=$(head -1 <<<"$pick" | jq -r .quote)
+    # The newest answer stands: a "No, …" option (approvals.md, Asking) leaves nothing to relay, not even an older yes.
+    [[ ${q#"Approval pane answer for $key: "} != [Nn][Oo][![:alnum:]]* ]] ||
+      { echo "$key's newest pane answer is a No, nothing to relay: $q" >&2; exit 1; }
+    # A Yes click on an ask with action and session wrote a grant (register.tsx writeGrant): that session's approval
+    # hook takes it itself, so what it is sent is a go note, not a quote to verify.
+    for f in "$HOME"/.cache/session-status/grants/act-*.json; do
+      [ -f "$f" ] && g=$(jq -r --arg q "$q" --arg k "$key" --arg a "$action" --argjson since $(( now - 86400 )) '
+        select(.kind == "action" and .quote == $q and .key == $k and ($a == "" or .action == $a) and (.at | type == "number") and .at >= $since)
+        | "Approved on the pane, granted to \(.session): \(.action). Run the same command again: your approval hook takes the grant (once)."' "$f" 2>/dev/null) &&
+        [ -n "$g" ] || continue
+      echo "$g"; exit 0
+    done
+    # No ACTION given: the ask's own, which its answer prompt ends with (ask_approval's action, after the question).
+    if [ -z "$action" ]; then
+      [[ $q == *" Asked: "*" Action: "?* ]] || { echo "$key's answer carries no Action (its ask had none, or the user typed their own words: relay what they approve): session-status --relay $key ACTION" >&2; exit 2; }
+      action=${q##* Action: }
+    fi
+    others=$(( $(wc -l <<<"$pick") - 1 ))
+    [ "$others" = 0 ] || echo "$key has $others older live answer(s) too: relaying the newest (--approvals lists them)" >&2
+  fi
+  # The relay names this session as its listing shows it: NAME-next too, for a successor (verify-approval.sh takes it).
   ho_live || exit 1
   name=$(ho_field 1 "$CLAUDE_CODE_SESSION_ID" 2) cwd=$(ho_field 1 "$CLAUDE_CODE_SESSION_ID" 6)
   [ -n "$name" ] || { echo "this session isn't listed (claude agents): no source to name" >&2; exit 1; }
-  # A successor named NAME-next, or recorded in NAME.next (a Desktop one), relays once it holds NAME.
-  n=$(ho_name "$CLAUDE_CODE_SESSION_ID")
-  [[ $n != *-next ]] || { echo "this session doesn't hold the coordinator's name yet ($n): relay once it does" >&2; exit 1; }
-  pick=$(jq -c --arg k "$key" --argjson since $(( now - age_s )) 'select(.key == $k and .ts > $since)' <<<"$ans")
-  [ -n "$pick" ] || { echo "no pane answer for $key in the last $(( age_s / 3600 )) hours (--approvals lists them): ask on the pane, or relay a typed answer by hand (approvals.md)" >&2; exit 1; }
-  q=$(head -1 <<<"$pick" | jq -r .quote)
-  # The newest answer stands: a "No, …" option (approvals.md, Asking) leaves nothing to relay, not even an older yes.
-  [[ ${q#"Approval pane answer for $key: "} != [Nn][Oo][![:alnum:]]* ]] ||
-    { echo "$key's newest pane answer is a No, nothing to relay: $q" >&2; exit 1; }
-  # No ACTION given: the ask's own, which its answer prompt ends with (ask_approval's action, after the question).
-  if [ -z "$action" ]; then
-    [[ $q == *" Asked: "*" Action: "?* ]] || { echo "$key's answer carries no Action (its ask had none, or the user typed their own words: relay what they approve): session-status --relay $key ACTION" >&2; exit 2; }
-    action=${q##* Action: }
-  fi
   # A landing's Action: "approved under" is --relay's to add, and words after the bracket (merge instructions) read as
   # the coordinator's own approval claim, which auto mode refuses and the hook doesn't take. Print the plain form.
   if [[ $action =~ ^[Mm][Ee][Rr][Gg][Ee][[:space:]]+([^[:space:]]+)[[:space:]]*\(([A-Za-z0-9][A-Za-z0-9._-]*) ]]; then
@@ -1415,8 +1429,6 @@ if [ "${1:-}" = --approvals ] || [ "${1:-}" = --relay ]; then
       echo "give the plain Action, with nothing after its bracket and no \"approved under\" (--relay adds that itself): session-status --relay $key 'merge $t ($n)'" >&2; exit 1
     fi
   fi
-  others=$(( $(wc -l <<<"$pick") - 1 ))
-  [ "$others" = 0 ] || echo "$key has $others older live answer(s) too: relaying the newest (--approvals lists them)" >&2
   # A landing asked under another key: `merge TARGET (<session name>)` becomes `(<session name>, approved under KEY)`
   # here, once the yes speaks of landing (the hook's rule), so the coordinator's command makes no approval claim itself.
   # Stays as is: a yes asked under the session's name without the project prefix, or an Action naming a tracker key

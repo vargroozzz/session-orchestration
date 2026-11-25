@@ -822,7 +822,20 @@ $relays}" || exit 1   # the predecessor's go first: older, and the loop below re
 done
 # A relay counts for this command when its Action names the target as a whole word, and the sha256 for a post or
 # "merge"/"approve" with no sha256 for a merge or bare approval (a gh review: its kind and "review" too); then the quote must verify, with the task key the Action names.
-tried= me=
+tried= me=$(jq -r 'select(.type == "agent-name") | .agentName // empty' "$tp" 2>/dev/null | tail -1) now=$(date +%s)
+# The user's Yes on the coordinator pane to an ask that names this session as the one that runs its action: the pane
+# wrote a grant (register.tsx writeGrant; coordinator-guard keeps sessions from writing one), good for a day, to this
+# session's name or an 8+ hex prefix of its id. Last line: tried first.
+for g in ~/.cache/session-status/grants/act-*.json; do
+  [ -f "$g" ] || continue
+  l=$(jq -c --arg me "$me" --arg sid "$sid" --argjson now "$now" --arg f "$g" '
+    select(.kind == "action" and ([.action, .quote, .session, .key] | all(type == "string")) and (.at | type == "number")
+      and .at >= $now - 86400 and .at <= $now + 5
+      and (.session as $s | ($s == $me and $me != "") or (($s | test("^[0-9a-f]{8}[0-9a-f-]*$")) and ($sid | startswith($s)))))
+    | {grant: 1, name: .session, quote, action, tp: $f}' "$g" 2>/dev/null) || continue
+  [ -z "$l" ] || relays=${relays:+$relays
+}$l
+done
 while IFS= read -r r; do
   [ -n "$r" ] || continue
   act=$(jq -r .action <<<"$r") alt= hint=
@@ -841,44 +854,47 @@ while IFS= read -r r; do
     [ "$kind" != prpost ] || [ -z "$host$fj" ] || ! grep -qiw review <<<"$nb" || continue
     [ "$kind" != review ] || { grep -qiE "(^|[^a-z-])$mode([^a-z-]|$)" <<<"$nb" && grep -qiw review <<<"$nb"; } || continue
   fi
-  # (A send's key from outside its action: a subject or id there may hold words like UTF-8.)
-  a=$act; [ "$kind" != send ] && [ "$kind" != create ] || a=${act/"$action"/}
-  key=$target; [ "$kind" = jirapost ] || key=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$a" | head -1)
-  # A merge is the task's landing, which approving the task covers: with session-name keys, an Action ending
-  # "(<this session's name>)" is verified with that name, so the user's yes to the task itself verifies. A yes given
-  # under another key whose answer started this session with its landing (a design task's pane ask): "(<this
-  # session's name>, approved under <that key>)", verified with that key.
-  # (A sentence's closing . after the bracket is allowed: it claims nothing.)
-  if [ -z "$key" ] && { [ "$kind" = merge ] || [ "$kind" = create ]; } && [[ $act =~ \(([A-Za-z0-9][A-Za-z0-9._-]*)(,[[:space:]]*approved[[:space:]]+under[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]*))?\)[[:space:]]*\.?[[:space:]]*$ ]]; then
-    nm=${BASH_REMATCH[1]} under=${BASH_REMATCH[3]}
-    [ -n "$me" ] || me=$(jq -r 'select(.type == "agent-name") | .agentName // empty' "$tp" 2>/dev/null | tail -1)
-    [ "$nm" = "$me" ] || hint=" (its Action names the session $nm, but this session is ${me:-unnamed})"
-    # Under another key, the yes itself must speak of the landing: a yes to start some task approves no merge.
-    if [ -n "$under" ] && ! jq -r .quote <<<"$r" | sed 's/ Asked:.*//' | grep -qiE '(^|[^a-z])(land|merg)'; then
-      tried=${tried:-"the quote approved under $under doesn't speak of landing or merging"}; fault not-landing relay; continue; fi
-    [ "$nm" != "$me" ] || key=${under:-$me}
-    # A coordinator may have asked under the name without its project prefix (the "<project>-" of its own
-    # "<project>-coordinator"): that key verifies the yes too, only as a pane answer asked under exactly it
-    # (a short name is often a plain word a typed yes merely mentions).
-    sn=$(jq -r .name <<<"$r"); pfx=${sn%-coordinator*}-
-    if [ "$nm" = "$me" ] && [ -z "$under" ] && [[ $sn == ?*-coordinator* && $me == "$pfx"?* ]] &&
-       [[ $(jq -r .quote <<<"$r") == "Approval pane answer for ${me#"$pfx"}:"* ]]; then alt=${me#"$pfx"}; fi
-  elif [ -z "$key" ] && [ "$kind" = merge ] && [[ $act =~ \([A-Za-z0-9][^\)]*\)[^\)]*[^[:space:].\)][^\)]*$ ]]; then
-    # A hand-written Action with words after its bracket (a merge instruction) isn't the landing form: say which is.
-    hint=" (its Action has text after the closing bracket: relay exactly \"merge $what (<session name>)\", or \"merge $what (<session name>, approved under KEY)\", with nothing after it: session-status --relay KEY writes that)"
+  # A pane grant is the user's click itself, written by the pane: no quote to verify.
+  if [ "$(jq -r '.grant // empty' <<<"$r")" = 1 ]; then v="verified: the user's Yes on the coordinator pane: $(jq -r .quote <<<"$r")"
+  else
+    # (A send's key from outside its action: a subject or id there may hold words like UTF-8.)
+    a=$act; [ "$kind" != send ] && [ "$kind" != create ] || a=${act/"$action"/}
+    key=$target; [ "$kind" = jirapost ] || key=$(grep -oE '[A-Z][A-Z0-9]+-[0-9]+' <<<"$a" | head -1)
+    # A merge is the task's landing, which approving the task covers: with session-name keys, an Action ending
+    # "(<this session's name>)" is verified with that name, so the user's yes to the task itself verifies. A yes given
+    # under another key whose answer started this session with its landing (a design task's pane ask): "(<this
+    # session's name>, approved under <that key>)", verified with that key.
+    # (A sentence's closing . after the bracket is allowed: it claims nothing.)
+    if [ -z "$key" ] && { [ "$kind" = merge ] || [ "$kind" = create ]; } && [[ $act =~ \(([A-Za-z0-9][A-Za-z0-9._-]*)(,[[:space:]]*approved[[:space:]]+under[[:space:]]+([A-Za-z0-9][A-Za-z0-9._-]*))?\)[[:space:]]*\.?[[:space:]]*$ ]]; then
+      nm=${BASH_REMATCH[1]} under=${BASH_REMATCH[3]}
+      [ "$nm" = "$me" ] || hint=" (its Action names the session $nm, but this session is ${me:-unnamed})"
+      # Under another key, the yes itself must speak of the landing: a yes to start some task approves no merge.
+      if [ -n "$under" ] && ! jq -r .quote <<<"$r" | sed 's/ Asked:.*//' | grep -qiE '(^|[^a-z])(land|merg)'; then
+        tried=${tried:-"the quote approved under $under doesn't speak of landing or merging"}; fault not-landing relay; continue; fi
+      [ "$nm" != "$me" ] || key=${under:-$me}
+      # A coordinator may have asked under the name without its project prefix (the "<project>-" of its own
+      # "<project>-coordinator"): that key verifies the yes too, only as a pane answer asked under exactly it
+      # (a short name is often a plain word a typed yes merely mentions).
+      sn=$(jq -r .name <<<"$r"); pfx=${sn%-coordinator*}-
+      if [ "$nm" = "$me" ] && [ -z "$under" ] && [[ $sn == ?*-coordinator* && $me == "$pfx"?* ]] &&
+         [[ $(jq -r .quote <<<"$r") == "Approval pane answer for ${me#"$pfx"}:"* ]]; then alt=${me#"$pfx"}; fi
+    elif [ -z "$key" ] && [ "$kind" = merge ] && [[ $act =~ \([A-Za-z0-9][^\)]*\)[^\)]*[^[:space:].\)][^\)]*$ ]]; then
+      # A hand-written Action with words after its bracket (a merge instruction) isn't the landing form: say which is.
+      hint=" (its Action has text after the closing bracket: relay exactly \"merge $what (<session name>)\", or \"merge $what (<session name>, approved under KEY)\", with nothing after it: session-status --relay KEY writes that)"
+    fi
+    # No tracker key (session-name keys): the user's words must name the target itself (REPO#ID; OWNER/ may precede).
+    [ -n "$key" ] || key=$short
+    [ -n "$key" ] || { tried=${tried:-"the matching relay's Action names no task key"}; fault no-key relay; continue; }
+    v1=
+    for k in "$key" ${alt:+"$alt"}; do
+      v=$(cd "$cwd" 2>/dev/null && jq -r .quote <<<"$r" |
+          bash "$here/../skills/orchestrating-sessions/verify-approval.sh" "$(jq -r .sid <<<"$r")" "$(jq -r .scwd <<<"$r")" "$(jq -r .name <<<"$r")" "$k" "$act")
+      [[ $v != verified* ]] || break
+      v1=${v1:-$v}
+    done
+    # Both keys failed: the deny gives the full key's reason.
+    [[ $v == verified* ]] || v=${v1:-$v}
   fi
-  # No tracker key (session-name keys): the user's words must name the target itself (REPO#ID; OWNER/ may precede).
-  [ -n "$key" ] || key=$short
-  [ -n "$key" ] || { tried=${tried:-"the matching relay's Action names no task key"}; fault no-key relay; continue; }
-  v1=
-  for k in "$key" ${alt:+"$alt"}; do
-    v=$(cd "$cwd" 2>/dev/null && jq -r .quote <<<"$r" |
-        bash "$here/../skills/orchestrating-sessions/verify-approval.sh" "$(jq -r .sid <<<"$r")" "$(jq -r .scwd <<<"$r")" "$(jq -r .name <<<"$r")" "$k" "$act")
-    [[ $v != verified* ]] || break
-    v1=${v1:-$v}
-  done
-  # Both keys failed: the deny gives the full key's reason.
-  [[ $v == verified* ]] || v=${v1:-$v}
   # One use per relay: a rerun (the CLI timed out after the server took it) needs a new approval.
   # ponytail: used up when allowed, not when the command succeeds; the deny says to check before asking again. A gh
   # merge whose PR is still open with no auto-merge queued (gh refused it: --auto on a clean PR) didn't use it, while
