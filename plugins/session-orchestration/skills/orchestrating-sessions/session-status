@@ -1502,29 +1502,34 @@ live_bg() {
 }
 # limit_reset_at TRANSCRIPT: the resetsAt (epoch s) of Claude Code's 5-hour limit row ("You've hit your 5-hour limit",
 # quotaLimits rejected for five_hour) when that row is the transcript's last message; fails otherwise. Each message sent
-# while the limit holds gets such a row of its own, with the same resetsAt.
+# while the limit holds gets such a row of its own, with the same resetsAt, so only non-message rows (queue operations,
+# turn_duration) follow the last one.
+# shortcut: the last 200 lines; a limit row buried under more non-message rows reads as resumed. Widen it if one is missed.
 limit_reset_at() {
-  local t; t=$(tail -n 50 "$1" 2>/dev/null) && [[ $t == *'"five_hour"'* ]] || return 1   # most transcripts: no jq
+  local t; t=$(tail -n 200 "$1" 2>/dev/null) && [[ $t == *'"five_hour"'* ]] || return 1   # most transcripts: no jq
   jq -Rnr '[inputs | fromjson? | select(.type == "user" or .type == "assistant")] | last // empty | .quotaLimits // empty
     | select(.status == "rejected" and .rateLimitType == "five_hour") | .resetsAt | numbers' <<<"$t" 2>/dev/null | grep .
 }
 # limit_check: a live background session stopped by the 5-hour limit (its last message the limit row, reset within the
-# last day) gets one resume queued in $ENC.launches for resetsAt + 1 minute: --launch --due sends it (resume_fire).
-# Once per limit hit: $ENC.limit-resets keeps each ID<TAB>RESETSAT queued, so the rows of later messages, and later
-# ticks, queue nothing more. Not the caller: it can't message itself.
+# last day) gets one resume queued in $ENC.launches for resetsAt + 1 minute, named resume:NAME:ID8 (names repeat):
+# --launch --due sends it (resume_fire). Once per limit hit: $ENC.limit-resets keeps each ID<TAB>RESETSAT queued (the
+# last day's), checked and written under its lock, so the rows of later messages, later ticks and a second watcher
+# (a successor's, overlapping) queue nothing more. Not the caller: it can't message itself. Run by --launch --due, so
+# by every unscoped watcher tick (a fork of this script, ~0.2 s, once a minute).
 LIMIT_TEXT='The 5-hour limit reset: continue. A message that came while you waited got only the limit row as its answer: it is above, act on it too.'
 limit_check() {
   local seen pid id name dir t r
-  seen=$(fwd_file limit-resets)
+  seen=$(fwd_file limit-resets); mkdir -p "${seen%/*}"
   while IFS=$'\t' read -r pid id _ _ name _ dir; do
     [ "$id" != "${CLAUDE_CODE_SESSION_ID:-}" ] || continue
     t=("$dir"/projects/*/"$id".jsonl); [ -f "${t[0]}" ] || continue
     r=$(limit_reset_at "${t[0]}") && [ "$r" -gt $(( $(date +%s) - 86400 )) ] || continue
-    ! grep -qxF "$id"$'\t'"$r" "$seen" 2>/dev/null || continue
-    jq -cn --argjson r "$r" --arg id "$id" --arg n "$name" --arg f "${t[0]}" --arg text "$LIMIT_TEXT" \
-      '{due: ($r + 60), name: ("resume:" + $n), kind: "resume", send: $id, session: $n, reset: $r, file: $f, text: $text,
-        label: "after its 5-hour limit resets"}' | locked_append "$(fwd_file launches)"
-    printf '%s\t%s\n' "$id" "$r" | locked_append "$seen"
+    ( inbox_lock "$seen"; ! grep -qxF "$id"$'\t'"$r" "$seen" 2>/dev/null || exit 0
+      jq -cn --argjson r "$r" --arg id "$id" --arg n "$name" --arg f "${t[0]}" --arg text "$LIMIT_TEXT" \
+        '{due: ($r + 60), name: "resume:\($n):\($id[:8])", kind: "resume", send: $id, session: $n, reset: $r, file: $f,
+          text: $text, label: "after its 5-hour limit resets"}' | locked_append "$(fwd_file launches)"
+      { awk -F'\t' -v t=$(( $(date +%s) - 86400 )) '$2 > t' "$seen" 2>/dev/null; printf '%s\t%s\n' "$id" "$r"; } > "$seen.$$" &&
+        mv "$seen.$$" "$seen" )
   done < <(live_bg 0)
 }
 idle_check() {
@@ -1545,6 +1550,8 @@ idle_check() {
     line=$id$'\t'$upd
     if ! grep -qxF "$line" "$seen" 2>/dev/null; then
       t=("$dir"/projects/*/"$id".jsonl); [ -f "${t[0]}" ] || continue   # no transcript yet: next tick
+      # stopped by the 5-hour limit: not news, its resume is queued (limit_check)
+      if limit_reset_at "${t[0]}" >/dev/null; then keep+=$line$'\n'; continue; fi
       how=$(jq -rRn --argjson since "$started" -f "$(dirname "$SELF")/session-idle.jq" < "${t[0]}" 2>/dev/null) || continue
       [ "$how" != idle ] || out+=("Idle: $name (${id:0:8}): $(last_text "${t[0]}")")
     fi
@@ -1718,13 +1725,20 @@ launch_fire() {
 resume_fire() {
   local id n f r text line out rc
   IFS=$'\037' read -r id n f r text <<<"$(jq -r '[.send, .session, .file, .reset, .text] | map(tostring) | join("\u001f")' <<<"$1")"
+  # --now before the reset would only earn another limit row, and limit_check queues a hit once: keep it queued
+  [ "$r" -lt "$(date +%s)" ] || { locked_append "$(fwd_file launches)" <<<"$1"
+    echo "\"$n\" (${id:0:8}): its limit resets at $(epochfmt "$r" '%m-%d %H:%M'); kept queued, nothing sent"; return 1; }
   [ "$(limit_reset_at "$f")" = "$r" ] || { echo "\"$n\" (${id:0:8}): resumed already since its limit row: nothing sent" >&2; return 0; }
+  # stopped while it waited (the user, the watcher's finished-task stop): a stop wins, never a resume
+  live_bg 0 | cut -f2 | grep -qxF "$id" || { echo "\"$n\" (${id:0:8}): stopped since its limit row: nothing sent" >&2; return 0; }
   line="\"$n\" (${id:0:8}) 5-hour limit reset"
   out=$(SESSION_STATUS_WAIT_S=0 "$SELF" --send-when-idle "$id" "$text" </dev/null 2>/dev/null); rc=$?
   out=$(tail -1 <<<"$out"); out=${out:-exit $rc}
   if [ "$rc" = 0 ] && [[ $out != send:* ]]; then printf 'ok\t%s\t%s\n' "$line" "$out" | locked_append "$(fwd_file forwarded)"
   elif [ "$rc" = 0 ] || [[ $out == *"still busy"* ]]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$id" "$n" "$line" "$text" | locked_append "$(fwd_file outbox)"
+  # 3 (on a prompt), 4 (too big), 5 (superseded): the reason names the next step; sending the text wouldn't do
+  elif [[ $rc == [345] ]]; then echo "Limit resume: $line, not sent: $out"; return 1
   else echo "Limit resume: $line, not sent: $out. Send it yourself: $text"; return 1; fi
 }
 if [ "${1:-}" = --launch ]; then

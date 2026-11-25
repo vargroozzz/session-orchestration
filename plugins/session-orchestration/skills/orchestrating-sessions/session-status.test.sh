@@ -3298,17 +3298,24 @@ limit() { printf '{"type":"assistant","quotaLimits":{"status":"rejected","rateLi
 accounts_claude; setacct cfg "$(sess "$lid" stuck busy "$live")"
 sf 19 s stuck bg busy; r=$(( $(date +%s) + 3600 )); limit "$r"
 due() { CLAUDE_CODE_SESSION_ID=$(uid l) run --launch --due 2>/dev/null; }
-out=$(due) && [ -z "$out" ] && [ "$(jq -r '"\(.name) \(.due) \(.send)"' "$e.launches")" = "resume:stuck $(( r + 60 )) $lid" ] &&
-  [[ $(run --launch --list) == "resume:stuck · resume · "*" · after its 5-hour limit resets" ]] || { echo "limit resume not queued: $out $(cat "$e.launches")"; exit 1; }
+out=$(due) && [ -z "$out" ] && [ "$(jq -r '"\(.name) \(.due) \(.send)"' "$e.launches")" = "resume:stuck:ssssssss $(( r + 60 )) $lid" ] &&
+  [[ $(run --launch --list) == "resume:stuck:ssssssss · resume · "*" · after its 5-hour limit resets" ]] || { echo "limit resume not queued: $out $(cat "$e.launches")"; exit 1; }
 turn 3 'a message during the wait' >> "$proj/$lid.jsonl"; limit "$r"
 [ -z "$(due)" ] && [ "$(grep -c . "$e.launches")" = 1 ] || { echo "limit resume queued twice: $(cat "$e.launches")"; exit 1; }
-jq -c '.due = 1000' "$e.launches" > "$e.l" && mv "$e.l" "$e.launches"
-out=$(due) && [ -z "$out" ] && [ ! -s "$e.launches" ] && [ "$(cut -f2,3,4 "$e.outbox")" = "$(printf '%s\tstuck\t"stuck" (ssssssss) 5-hour limit reset' "$lid")" ] &&
-  [[ $(cut -f5 "$e.outbox") == 'The 5-hour limit reset: continue. '* ]] && [ -z "$(due)" ] && [ ! -s "$e.launches" ] || { echo "limit resume not sent: $out $(cat "$e.outbox")"; exit 1; }
-# a new hit (another reset) queues again; resumed before it came due (a reply after the row): nothing sent
-: > "$e.outbox"; limit $(( r + 7200 )); due >/dev/null && [ "$(jq -r .reset "$e.launches")" = $(( r + 7200 )) ] &&
-  done_ 5 >> "$proj/$lid.jsonl" && jq -c '.due = 1000' "$e.launches" > "$e.l" && mv "$e.l" "$e.launches" &&
-  [ -z "$(due)" ] && [ ! -s "$e.launches" ] && [ ! -s "$e.outbox" ] || { echo "a resumed session got the limit resume: $(cat "$e.outbox")"; exit 1; }
+# --now before the reset: refused, kept queued; the stopped-by-limit session isn't an Idle: line either
+rc=0; out=$(run --launch --now resume:stuck:ssssssss) || rc=$?
+[ "$rc" = 1 ] && [[ $out == *'kept queued, nothing sent' ]] && [ "$(grep -c . "$e.launches")" = 1 ] && [ ! -s "$e.outbox" ] || { echo "--now before the reset: $rc $out"; exit 1; }
+# a hit whose reset has passed: queued and, due at once, sent through the outbox in the same run, waking no one
+p=$(( $(date +%s) - 120 )); limit "$p"
+out=$(due) && [ -z "$out" ] && [ "$(jq -r .reset "$e.launches")" = "$r" ] && [ "$(cut -f2,3,4 "$e.outbox")" = "$(printf '%s\tstuck\t"stuck" (ssssssss) 5-hour limit reset' "$lid")" ] &&
+  [[ $(cut -f5 "$e.outbox") == 'The 5-hour limit reset: continue. '* ]] && [ -z "$(due)" ] && [ "$(grep -c . "$e.outbox")" = 1 ] || { echo "limit resume not sent: $out $(cat "$e.outbox")"; exit 1; }
+# resumed before it came due (a reply after the row), or stopped meanwhile (no live process): nothing sent
+: > "$e.outbox"; : > "$e.launches"; p=$(( p - 60 )); limit "$p"; done_ 5 >> "$proj/$lid.jsonl"
+jq -cn --argjson r "$p" --arg id "$lid" --arg f "$proj/$lid.jsonl" '{due: 1000, name: "resume:stuck:ssssssss", kind: "resume", send: $id, session: "stuck", reset: $r, file: $f, text: "T"}' > "$e.launches"
+[ -z "$(due)" ] && [ ! -s "$e.launches" ] && [ ! -s "$e.outbox" ] || { echo "a resumed session got the limit resume: $(cat "$e.outbox")"; exit 1; }
+limit "$p"; jq -cn --argjson r "$p" --arg id "$lid" --arg f "$proj/$lid.jsonl" '{due: 1000, name: "resume:stuck:ssssssss", kind: "resume", send: $id, session: "stuck", reset: $r, file: $f, text: "T"}' > "$e.launches"
+rm "$tmp/cfg/sessions/19.json"
+[ -z "$(due)" ] && [ ! -s "$e.launches" ] && [ ! -s "$e.outbox" ] || { echo "a stopped session got the limit resume: $(cat "$e.outbox")"; exit 1; }
 kill "$live"
 fi
 
