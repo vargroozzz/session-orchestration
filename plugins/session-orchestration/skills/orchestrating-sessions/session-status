@@ -1371,23 +1371,33 @@ if [ "${1:-}" = --start ]; then
   else printf '\n## Handover\n(none%s)\n' "${h:+: no $h}"; fi
   # Only the live answers that still need an action (--approvals lists them all), each rule on data at hand: not
   # relayed; the newest on its key (a later answer supersedes it); not a No nor a request to explain ("What's this?",
-  # "Explain"); its task not gone (a session named KEY, none of them live, and no status row with a worktree); not a
-  # start done since (it speaks of starting, and a session named KEY started after it); and, clicked before the
-  # handover note, named in that note or the handoff file (the last coordinator saw it, handover.md). At most 5.
+  # "Explain"); its task not gone (it speaks of the task's worktree, branch, start or landing, a session of this
+  # project is named KEY, none of them live, and no status row has its worktree; not judged under a filtered --start,
+  # whose rows leave other tasks out); not a start done since (it speaks of starting, and a session named KEY started
+  # after it); and, clicked before both the handover note and this session's start (a predecessor's), named in that
+  # note or the handoff file as a word (the last coordinator saw it, handover.md). At most 5.
   if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] && age_s=$(( ${MAX_AGE_H:-24} * 3600 )) && ans=$(approval_answers "$age_s" 2>/dev/null) && [ -n "$ans" ]; then
     hm=0 named=$pend; if [ -n "$h" ] && [ -f "$h" ]; then hm=$(mtime "$h"); named+=$'\n'$(cat "$h"); fi
-    ap=$(jq -rn --argjson now "$(date +%s)" --argjson age "$age_s" --argjson ho "$hm" --arg named "$named" \
-        --arg sess "$(awk -F'\t' '{ print $2 "\t" $9 "\t" $5 }' <<<"$all")" --arg wts "$(awk '/ wt /{ print $1 }' "$TMP/rows")" '
-      def answer: .quote | sub("^Approval pane answer for [^:]+: "; "") | sub(" Asked: [\\s\\S]*$"; "");
-      ($sess | split("\n") | map(split("\t") | select(length == 3) | {n: .[0], live: (.[1] != ""), at: (.[2] | tonumber? // 0)})) as $s
+    # this session's start: its transcript's first timestamp (a tab or Desktop coordinator may not be listed)
+    me=$(jq -rn 'first(inputs | .timestamp? | strings) | sub("\\.[0-9]+Z$"; "Z") | fromdate' "$(ended_transcript "$CLAUDE_CODE_SESSION_ID")" 2>/dev/null)
+    # NAME, live (a process, or a live state as list_sessions keeps one without --all), started; this project's only
+    sess=$(awk -F'\t' -v r="$ROOT" '$6 == r || index($6, r "/") == 1 {
+      print $2 "\t" ($9 != "" || ($3 !~ /^(done|failed|stopped)$/ && !($7 == "background" && $3 == "blocked"))) "\t" $5 }' <<<"$all")
+    ap=$(jq -rn --argjson now "$(date +%s)" --argjson age "$age_s" --argjson ho "$hm" --argjson me "${me:-0}" --arg named "$named" \
+        --arg sess "$sess" --arg wts "$(awk '/ wt /{ print $1 }' "$TMP/rows")" --argjson filtered "$#" '
+      def body: .quote | sub("^Approval pane answer for [^:]+: "; "");
+      def answer: body | sub(" Asked: [\\s\\S]*$"; "");
+      ($sess | split("\n") | map(split("\t") | select(length == 3) | {n: .[0], live: (.[1] == "1"), at: (.[2] | tonumber? // 0)})) as $s
       | ($wts | split("\n")) as $w
       | [inputs | select(.ts > $now - $age)] as $live
       | [$live | group_by(.key)[] | max_by(.ts) | select(.relays == [])
          | select(answer | test("^(no|explain|what|why|how)([^a-z]|$)|\\?\\W*$"; "i") | not)
          | .key as $k | .ts as $t | [$s[] | select(.n == $k)] as $m
-         | select($m != [] and ($m | any(.live) | not) and ($w | index([$k]) | not) | not)
-         | select((.quote | test("(^|[^a-z])start"; "i")) and ($m | any(.at > $t)) | not)
-         | select(.ts > $ho or ($named | contains($k)))] | sort_by(-.ts) as $keep
+         | select($filtered == 0 and (body | test("worktree|branch|(^|[^a-z])(start|resume|merg|land)"; "i"))
+             and $m != [] and ($m | any(.live) | not) and ($w | index([$k]) | not) | not)
+         | select((body | test("(^|[^a-z])start"; "i")) and ($m | any(.at > $t)) | not)
+         | select(.ts > $ho or .ts > $me or ($named | test("(^|[^A-Za-z0-9])" + ($k | gsub("(?<c>[.+*?()\\[\\]{}|^$\\\\])"; "\\\(.c)")) + "([^0-9]|$)")))]
+      | sort_by(-.ts) as $keep
       | select($keep != [])
       | ($keep[:5][] | "\(.quote | sub("^Approval pane answer for "; "") | gsub("\\s+"; " ") | if length > 200 then .[:200] + "…" else . end) · \((.ts + $age - $now) / 3600 | floor)h left"),
         ([($keep | length) - 5, ($live | length) - ($keep | length)] as [$more, $hid]
