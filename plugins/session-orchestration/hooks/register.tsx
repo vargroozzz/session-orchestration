@@ -1006,7 +1006,7 @@ const REPLY_SCHEMA = {
     text: { type: 'string', minLength: 1, description: 'The message: your report, answer or question' },
     to: { type: 'string', description: 'A received message\'s `from`, or a session name. Left out: this project\'s coordinator' },
     report: { type: 'string', description: 'Your status report in full (markdown). Written first to <KEY>.md in the replies folder (key, else this session\'s name), replacing the report at its top and keeping its `## Handoff` (a `# ` section it drops, such as a deliverable, moves to <KEY>-archive.md), so you never write that file by hand; text can then be the short message. Not written: nothing is sent' },
-    done: { type: 'string', enum: DONE_KINDS, description: 'Only on the report that says the task is done; the reply is sent once what this kind needs holds, else it comes back with what is missing. pr: the worktree is clean, its commits are on the remote, the board shows a PR for key with no failing checks or conflict. pushed: clean and pushed, no PR (a branch someone else releases). report: no code; every file path the text names exists, and each .html it names is opened for the user, once (the text gains `opened: yes`, or `opened: no (PATHS)`)' },
+    done: { type: 'string', enum: DONE_KINDS, description: 'Only on the report that says the task is done; the reply is sent once what this kind needs holds, else it comes back with what is missing. pr: the worktree is clean, its commits are on the remote, the board shows a PR for key with no failing checks or conflict. pushed: clean and pushed, no PR (a branch someone else releases). report: no code; every file path the text names exists, and each .html it names, made by retro.py html (its generator mark) when a same-name .md is beside it, is opened for the user, once (the text gains `opened: yes`, or `opened: no (PATHS)`)' },
     key: { type: 'string', description: 'Your task key: with done pr, the key whose PR the board shows; with report, the file is <key>.md' },
     worktree: { type: 'string', description: 'With done pr or pushed: the task\'s worktree (absolute path), when it isn\'t this session\'s cwd' },
     artifact: {
@@ -1865,6 +1865,18 @@ export const register: Register = on => {
       const gaps = await doneGaps($, done, key, report ? `${text}\n${report}` : text, wt, cwd)
       if (gaps.length) return { deny: `reply: not sent, done ${done} doesn't hold yet: ${gaps.join('; ')}. Fix that and reply again (worker.md, Done).` }
     }
+    // A report's HTML pages its text names (not the report body's: that may list source files), opened below.
+    const pages = done === 'report' ? [...new Set([...text.matchAll(/(?<![\w.~/:-])(~?\/[\w.~/-]*\.html)(?![\w.-])/g)].map(m => m[1] ?? ''))] : []
+    const pageFile = (p: string) => (p.startsWith('~/') ? homePath($, p.slice(2)) : Promise.resolve(p))
+    // A page rendered from a .md beside it is a report: only retro.py html's carry its mark, and another renderer's
+    // (pandoc) lost dark mode. One with no .md (a source file the text cites, a hand-made page) isn't checked.
+    const unmarked: string[] = []
+    for (const p of pages) {
+      const f = await pageFile(p)
+      if (!(await $.fs.read(f.replace(/\.html$/, '.md')).then(() => true, () => false))) continue
+      if (!(await $.fs.read(f).catch(() => '')).includes('<meta name=generator content=retro.py>')) unmarked.push(p)
+    }
+    if (unmarked.length) return { deny: `reply: not sent, ${unmarked.join(', ')} wasn't made by retro.py html (no generator mark, or made before it had one): re-render each from the .md beside it with \`python3 -I ${$.plugin.root}/skills/retro/retro.py html IN.md OUT.html\` and reply again (worker.md, Done).` }
     const toName = typeof to === 'string' ? to.trim() : ''
     const id = await $.session.id()
     let filed = ''
@@ -1884,13 +1896,12 @@ export const register: Register = on => {
       if (!msg.includes(url)) msg = `${msg}\nPage: ${url}`
       filed = ' Page recorded.'
     }
-    // A report's HTML pages its text names open here, once per version (a stamp per path and content), so neither the
-    // worker nor the coordinator opens them. Not the report body's: that may list source files.
+    // The pages open here, once per version (a stamp per path and content), so neither the worker nor the coordinator
+    // opens them.
     if (done === 'report') {
-      const pages = [...new Set([...text.matchAll(/(?<![\w.~/:-])(~?\/[\w.~/-]*\.html)(?![\w.-])/g)].map(m => m[1] ?? ''))]
       const failed: string[] = []
       for (const p of pages) {
-        const f = p.startsWith('~/') ? homePath($, p.slice(2)) : Promise.resolve(p)
+        const f = pageFile(p)
         const stamp = `${await stampDir($)}/opened/${await hex16(`${await f}\n${await $.fs.read(await f).catch(() => '')}`)}`
         if (await $.fs.read(stamp).then(() => true, () => false)) continue
         // shortcut: macOS open, else xdg-open; on Windows (Git Bash) it fails as opened: no, add `start` if needed there.

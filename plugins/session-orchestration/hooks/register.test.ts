@@ -1446,13 +1446,22 @@ test('reply done report opens each HTML page it names once, and says whether it 
   const sent: string[] = []
   on('session.send', async (_, e) => { sent.push(e.text); return { isDelivered: true } })
   const reply = (text: string) => $.tool.call({ tool: 'mcp__session-orchestration__reply', text, done: 'report' })
+  const mark = '<meta name=generator content=retro.py>'
+  // A page with its .md beside it and another renderer's head (pandoc's, or none) is refused before anything opens or
+  // is sent; one with no .md (a cited source file) isn't checked.
+  for (const p of ['/home/u/r', '/h/x/s']) files.set(`${p}.md`, '# R')
+  files.set('/home/u/r.html', '<meta name="generator" content="pandoc">')
+  files.set('/h/x/s.html', '')
+  expect((await reply('audit done: /home/u/r.html and ~/x/s.html, see /home/u/repo/index.html')).deny).toContain('/home/u/r.html, ~/x/s.html wasn\'t made by retro.py html (no generator mark')
+  expect([opened.length, sent.length]).toEqual([0, 0])
+  for (const p of ['/home/u/r.html', '/h/x/s.html']) files.set(p, mark)
   await reply('audit done: /home/u/r.html and ~/x/s.html, notes /home/u/n.md')
   expect(opened).toEqual(['/home/u/r.html', '/h/x/s.html'])
   expect(sent.at(-1)).toBe('audit done: /home/u/r.html and ~/x/s.html, notes /home/u/n.md\nopened: yes')
   await reply('again: /home/u/r.html')
   expect(opened.length).toBe(2)
   expect(sent.at(-1)).toBe('again: /home/u/r.html\nopened: yes')
-  files.set('/home/u/r.html', '<p>v2</p>') // rewritten: a new version opens again
+  files.set('/home/u/r.html', `${mark}<p>v2</p>`) // rewritten: a new version opens again
   await reply('v2: /home/u/r.html, old /home/u/r.html.bak')
   expect(opened.slice(2)).toEqual(['/home/u/r.html'])
   openRc = 1

@@ -43,7 +43,9 @@ same way a hook's exit 2 sends you back. The kinds:
 - `pr` (with `key`): the task's worktree has no uncommitted files, every commit of its branch is on the remote,
   and the board (`session-status KEY`) shows a PR for the key; an open one without `CI-FAILED` or a conflict.
 - `pushed`: clean and pushed, no PR (a branch someone else lands, e.g. by a release command you hand over).
-- `report`: research or a report, no code: every file path the text names (`/…` or `~/…` with an extension) exists.
+- `report`: research or a report, no code: every file path the text names (`/…` or `~/…` with an extension) exists,
+  and each `.html` the text names with a same-name `.md` beside it carries `retro.py html`'s generator mark (A report
+  for the user to read, below).
 
 **A report page.** When `session-status --config features.report_artifacts` prints anything and you finish a
 research, retro, design or review report, follow `../../features/report-artifacts.md`: run its check, publish the
@@ -68,7 +70,10 @@ threads again. When you write
 a new handoff, move the older one and anything past (drafts, settled decisions, logs) to `<TASK>-archive.md` beside
 it, newest first, and name that file in the handoff.
 
-**A report for the user to read** (an HTML file): name its path in the reply's text; `done: report` opens it once.
+**A report for the user to read** (an HTML file): write the `.md`, then render it with
+`python3 -I <plugin root>/skills/retro/retro.py html IN.md OUT.html`, the one renderer for a report page: it follows
+the reader's light or dark mode. Never pandoc, a hand-written page or an added colour: those read dark on dark.
+Name its path in the reply's text; `done: report` opens it once.
 A report sent another way: `open` it yourself, once.
 
 **A report you send unasked:** only when you're done, blocked, a decision waits on the user, or a `handoff ready`
