@@ -22,6 +22,7 @@ changes. It only measures and proposes; the user approves.
 | `retro.schedule` | `<day> HH:MM`, local time, day `mon`…`sun` (e.g. `mon 12:00`) | unset: by hand only |
 | `retro.account` | the Claude config dir a scheduled run starts under (`~` expanded) | the current account |
 | `retro.sections` | JSON list of section names: `units`, `context`, `waste`, `spend`, `feedback`, `coordinator`, `memory`, `protocol`, `features`, `sizing` | unset: every section of the scope |
+| `retro.groups` | JSON object, `{"project"\|"plugin": {GROUP: [section names]}}`: a scope's section groups (`retro.py sections --groups SCOPE`); a section no group lists is the writer's; the group name `writer` is taken | unset: the default groups in `retro.py`'s `GROUPS` |
 | `plan.models.retro` | `model/effort` a retro run starts on (`session-status --kind retro NAME`) | `fable/xhigh` under an account `fable.accounts` lists, else `opus/xhigh` |
 | `plan.models.research` | `model/effort` for a research task (`--kind research`): a question answered from sources outside the project | `opus/high` |
 | `plan.advisor.<kind>` | `fable` \| `opus` \| `sonnet`: the advisor trial's arm for that kind (`--kind` adds `--advisor A` where it pairs); `kinds` reports it as its own row (`build+fable`) | unset: off |

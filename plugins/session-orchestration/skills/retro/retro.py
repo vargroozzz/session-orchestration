@@ -76,6 +76,8 @@ usage: python3 -I retro.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args] [--project
                                   and capped at 220 chars; 3 a session, 30 in all (session-status --search)
   sections SCOPE [NAME…]          the report sections a SCOPE run (project or plugin) writes, one per line, in order:
                                   NAMEs (config retro.sections) keep only those; one the scope lacks is named on stderr
+  sections --groups SCOPE [NAME…] the same sections as a group plan, one `GROUP: SECTION…` line per group with any
+                                  (config retro.groups, else GROUPS), then `writer: SECTION…` for those no group lists
   html IN.md OUT.html             Markdown report -> self-contained HTML
 
 Transcripts: <account>/projects/*/*.jsonl for every account dir ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*),
@@ -2617,24 +2619,50 @@ SECTIONS = {"units": BOTH, "context": BOTH, "waste": BOTH, "spend": PLUG, "feedb
             "protocol": PLUG, "features": PLUG, "sizing": PLUG}
 
 
-def sections(scope="", *names):
+# Default section groups per scope (config retro.groups overrides a scope's): each group is one session's work.
+GROUPS = {"project": {"units": ["units", "context", "coordinator"], "waste": ["waste"], "feedback": ["feedback", "memory"]},
+          "plugin": {"units": ["units", "context"], "waste": ["waste"], "spend": ["spend"], "protocol": ["protocol"],
+                     "features": ["features", "sizing"]}}
+
+
+def lib(fn, warn=False):
+    """Run a lib.sh shell snippet (with $1 = lib.sh) from the cwd, its stdout stripped; warn passes its stderr on."""
+    import subprocess
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib.sh")
+    return subprocess.run(["bash", "-c", '. "$1" && ' + fn, "_", path], stdout=subprocess.PIPE, stderr=None if warn else subprocess.DEVNULL,
+                          text=True, timeout=30).stdout.strip()
+
+
+def sections(*args):
+    groups = "--groups" in args
+    scope, *names = [a for a in args if a != "--groups"] or [""]
     if scope not in ("project", "plugin"):
-        sys.exit("usage: retro.py sections project|plugin [NAME…]")
+        sys.exit("usage: retro.py sections [--groups] project|plugin [NAME…]")
     if scope == "plugin":   # plugin scope has one home, as lib.sh config retro.scope says
-        import subprocess
-        lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib.sh")
-        pr = subprocess.run(["bash", "-c", '. "$1" && pr=$(plugin_root) && [ "$pr" != "$(find_root)" ] && echo "$pr"', "_", lib],
-                            capture_output=True, text=True, timeout=30).stdout.strip()
+        pr = lib('pr=$(plugin_root) && [ "$pr" != "$(find_root)" ] && echo "$pr"')
         if pr:
             print(f"warning: plugin scope runs only from feedback.repo_dir's root ({pr}): project", file=sys.stderr)
             scope = "project"
     for n in names:
         if scope not in SECTIONS.get(n, set()):
             print(f"skipped: {n} (not a {scope} section)", file=sys.stderr)
-    for n, scopes in SECTIONS.items():
-        if scope in scopes and (not names or n in names):
-            print(n)
-
+    run = [n for n, scopes in SECTIONS.items() if scope in scopes and (not names or n in names)]
+    if not groups:
+        print("\n".join(run))
+        return
+    # The group plan: config retro.groups' groups for the scope (else GROUPS), each narrowed to the sections this run
+    # writes, empty ones dropped; the sections no group lists are the writer's (plugin feedback by default), so none is lost.
+    cfg = lib("config retro.groups", warn=True)   # a bad value's warning reaches the run
+    plan = (json.loads(cfg) if cfg else {}).get(scope) or GROUPS[scope]
+    seen = set()
+    for g, secs in plan.items():
+        secs = [n for n in secs if n in run and n not in seen]
+        seen.update(secs)
+        if secs:
+            print(f"{g}: {' '.join(secs)}")
+    rest = [n for n in run if n not in seen]
+    if rest:
+        print(f"writer: {' '.join(rest)}")
 
 CMDS = {"sessions": sessions, "events": events, "context": context, "units": units, "waits": waits, "bgtasks": bgtasks, "replies": replies,
         "triggers": triggers, "usage": usage, "chunks": chunks, "kinds": kinds, "trial": trial, "handoff": handoff, "start": start, "loads": loads, "search": search,

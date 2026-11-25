@@ -184,8 +184,8 @@ mkdir -p "$T/other-proj/.claude" && echo '{}' > "$T/other-proj/.claude/coordinat
 printf '# x\n- in other-proj\n' > "$dirty"
 grep -qF ': names a local name:' <<<"$("$FB" scrub "$dirty")" || fail "scrub missed a project a case was added in"
 # Fixed-set config values are common words, not names; a free string beside them still is, adapter or not.
-echo '{"telemetry":"local","pane":{"sections":{"idle":"line"}},"start":{"kinds":{"feedback_apply":"at_once"}},"trusted":["zorbleco"],"plan":{"models":{"build":"opus/medium"}}}' > "$T/other-proj/.claude/coordination.local.json"
-printf '# x\n- status: local line at_once opus/medium\n' > "$dirty"
+echo '{"telemetry":"local","pane":{"sections":{"idle":"line"}},"start":{"kinds":{"feedback_apply":"at_once"}},"trusted":["zorbleco"],"plan":{"models":{"build":"opus/medium"}},"retro":{"groups":{"plugin":{"x":["spend"]}}}}' > "$T/other-proj/.claude/coordination.local.json"
+printf '# x\n- status: local line at_once opus/medium spend\n' > "$dirty"
 "$FB" scrub "$dirty" >/dev/null || fail "scrub flagged a fixed-set config value"
 printf "# x\n- from zorbleco\n" > "$dirty"
 grep -qF ': names a local name:' <<<"$("$FB" scrub "$dirty")" || fail "scrub missed a free config string"

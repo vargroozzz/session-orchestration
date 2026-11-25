@@ -331,6 +331,8 @@ detect_host() {
 #                                                                       default the current one
 #   retro.sections      JSON list of section names (units context waste spend feedback coordinator memory protocol features
 #                       sizing), printed one per line (person only)     default empty: every section of the scope
+#   retro.groups        JSON {"project"|"plugin": {GROUP: [section names]}}: a retro run's section groups, printed as
+#                       compact JSON (person only)          default empty: retro.py's GROUPS (retro.py sections --groups)
 #   terminal            plain | ghostty | your own module's name (find_module terminals NAME): where the pane's
 #                       Attach in tab and Logs in split open             default plain
 #   messages            none | msgraph | your own module's name (find_module messages NAME): the chat and mail
@@ -482,7 +484,7 @@ config() {
   local key=${1:-} v ok=
   case $key in
     tracker|host|key_pattern|approvals.delegate|approvals.pr_create|features.accounts|features.accounts_weekly_switch|features.review_inbox|features.notify|start.mode|start.kinds.feedback_apply|start.sidebar|terminal|messages|feedback.mode|feedback.send|feedback.repo_dir|feedback.project_dir|telemetry|pending.file|history.dirs|fable.accounts) ;;
-    features.retro|features.remote|features.answers|retro.scope|retro.schedule|retro.account|retro.sections) ;;
+    features.retro|features.remote|features.answers|retro.scope|retro.schedule|retro.account|retro.sections|retro.groups) ;;
     features.docs_watch|docs_watch.files|docs_watch.pattern) ;;
     plan.enabled|plan.max_parallel|plan.models.design|plan.models.build|plan.models.mechanical|plan.models.review|plan.models.release|plan.models.scan|plan.models.coordinator|plan.models.retro|plan.models.research) ;;
     plan.advisor.design|plan.advisor.build|plan.advisor.mechanical|plan.advisor.review|plan.advisor.release|plan.advisor.scan|plan.advisor.coordinator|plan.advisor.retro|plan.advisor.research) ;;
@@ -490,7 +492,7 @@ config() {
     pane.sections) pane_sections; return 0 ;;
     coordinator.purpose) coord_purpose; return 0 ;;
     features.report_artifacts|report_artifacts.account) report_artifacts_cfg "$key"; return 0 ;;
-    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote features.answers retro.scope retro.schedule retro.account retro.sections features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.send feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections features.report_artifacts report_artifacts.account)" >&2; return 2 ;;
+    *) echo "unknown config key: ${key:-(none)} (one of tracker host key_pattern approvals.delegate approvals.pr_create features.accounts features.accounts_weekly_switch features.review_inbox features.notify start.mode start.kinds.feedback_apply start.sidebar features.retro features.remote features.answers retro.scope retro.schedule retro.account retro.sections retro.groups features.docs_watch docs_watch.files docs_watch.pattern terminal messages feedback.mode feedback.send feedback.repo_dir feedback.project_dir telemetry pending.file history.dirs fable.accounts coordinator.purpose plan.enabled plan.max_parallel plan.models.{design,build,mechanical,review,release,scan,coordinator,retro,research} plan.advisor.{design,build,mechanical,review,release,scan,coordinator,retro,research} handoff.at.{chunk,task,coordinator} handoff.hard_after handoff.stop_room compact.window pane.sections features.report_artifacts report_artifacts.account)" >&2; return 2 ;;
   esac
   v=$(coord_json | jq -r --arg k "$key" 'getpath($k | split(".")) | if . == null then empty else tostring end')
   [ -n "$v" ] && case $key in
@@ -505,6 +507,10 @@ config() {
     retro.schedule) [[ $v =~ ^(mon|tue|wed|thu|fri|sat|sun)\ ([01][0-9]|2[0-3]):[0-5][0-9]$ ]] && ok=1 ;;
     retro.account) [[ $v == '~'/* ]] && v=$HOME/${v#'~/'}; [[ $v == /* ]] && [ -d "$v" ] && ok=1 ;;   # absolute: the launcher runs from elsewhere
     retro.sections) local l; l=$(jq -r 'if type == "array" and length > 0 and all(.[]; IN("units", "context", "waste", "spend", "feedback", "coordinator", "memory", "protocol", "features", "sizing")) then .[] else error end' <<<"$v" 2>/dev/null) && v=$l && ok=1 ;;
+    retro.groups) local l; l=$(jq -c 'if type == "object" and length > 0 and all(to_entries[]; (.key | IN("project", "plugin"))
+        and (.value | type == "object" and length > 0 and all(to_entries[]; (.key | test("^[a-z0-9_-]+$")) and .key != "writer"
+          and (.value | type == "array" and length > 0 and all(.[]; IN("units", "context", "waste", "spend", "feedback", "coordinator", "memory", "protocol", "features", "sizing"))))))
+      then . else error end' <<<"$v" 2>/dev/null) && v=$l && ok=1 ;;
     features.review_inbox) case $v in false) ok=1 ;;
       true) case $(config host 2>/dev/null) in bitbucket|forgejo) ok=1 ;; esac; [ -n "$ok" ] ||
               { echo "warning: features.review_inbox needs host=bitbucket or forgejo (GitHub support is a TODO): off" >&2; echo false; return 0; } ;;
@@ -539,7 +545,7 @@ config() {
     docs_watch.pattern) echo "$DOCS_WATCH_PATTERN" ;;
     approvals.delegate|features.*|start.sidebar) echo false ;; terminal) echo plain ;; messages) echo none ;;
     start.mode) echo read_only ;; start.kinds.feedback_apply) config start.mode ;;
-    feedback.mode) echo auto ;; feedback.send) echo ask ;; feedback.repo_dir|feedback.project_dir|pending.file|history.dirs|fable.accounts|retro.schedule|retro.sections|plan.advisor.*) ;;
+    feedback.mode) echo auto ;; feedback.send) echo ask ;; feedback.repo_dir|feedback.project_dir|pending.file|history.dirs|fable.accounts|retro.schedule|retro.sections|retro.groups|plan.advisor.*) ;;
     retro.scope) echo project ;; retro.account) echo "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ;; telemetry) [ -n "$v" ] && echo off || echo full ;;   # a mistyped value opts out
     plan.enabled) echo true ;; plan.max_parallel) echo 3 ;;
     plan.models.*) case ${key#plan.models.} in design|review) v=opus/xhigh ;; build|coordinator) v=opus/medium ;;
