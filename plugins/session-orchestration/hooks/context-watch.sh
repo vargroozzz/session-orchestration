@@ -42,8 +42,9 @@ emit() { jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName:
 # A relayed approval (approvals.md's block) in a peer message: each block checked now as the approval hook will
 # (verify-approval.sh; the sender is the from-name of the tag it came in, the key as approved-action.sh takes it: a
 # tracker key in the Action, else its "(<this session's name>[, approved under KEY])", else REPO#N, else this session's
-# name), one line each: `relay verified: ACTION` or `relay rejected: REASON (ACTION)`. Inline: hooks.json gives
-# UserPromptSubmit 60 s; any other prompt pays one string test. The reply card waits for the next firing.
+# name), one line each: `relay verified: ACTION` (then what the script adds) or `relay rejected: REASON (ACTION)`.
+# Inline: hooks.json gives UserPromptSubmit 60 s; any other prompt pays one string test. The reply card waits for the
+# next firing.
 if [ -z "${CW_DETACHED:-}" ] && [ "$ev" = UserPromptSubmit ] && [[ $input == *'<cross-session-message from='*'APPROVAL relayed from the user'* ]]; then
   me=$(grep -F '"agent-name"' "$tp" | tail -1 | jq -r '.agentName // empty' 2>/dev/null) out=
   while IFS= read -r b; do
@@ -53,8 +54,9 @@ if [ -z "${CW_DETACHED:-}" ] && [ "$ev" = UserPromptSubmit ] && [[ $input == *'<
        [ "${BASH_REMATCH[1]}" = "$me" ]; then k=${BASH_REMATCH[3]:-$me}; fi
     [ -n "$k" ] || [[ ! $a =~ ([A-Za-z0-9._-]+#[0-9]+) ]] || k=${BASH_REMATCH[1]}
     v=$(cd "$cwd" 2>/dev/null && jq -r .quote <<<"$b" |
-        bash "$here/../skills/orchestrating-sessions/verify-approval.sh" "$bsid" "$scwd" "$from" "${k:-$me}" "$a" | head -1)
-    if [[ $v == verified* ]]; then out+="relay verified: $a"$'\n'
+        bash "$here/../skills/orchestrating-sessions/verify-approval.sh" "$bsid" "$scwd" "$from" "${k:-$me}" "$a")
+    # what the script adds (answering:, the user's note, a handed command to withdraw) is the worker's to judge
+    if [[ $v == verified* ]]; then out+="relay verified: $a${v#verified}"$'\n'
     else v=${v:-verify-approval.sh failed}; out+="relay rejected: ${v#rejected: } ($a)"$'\n'; fi
   done < <(jq -c '.prompt // "" | [scan("<cross-session-message ([^>]*)>([\\s\\S]*?)</cross-session-message>")][]
     | (.[0] | capture("from-name=\"(?<n>[^\"]*)\"").n // "") as $n
