@@ -170,8 +170,9 @@ joined() {
   if [ -e "$d/writer.started" ]; then [ -n "${2:-}" ] || echo "writer \"$wn\" started already ($(cat "$d/writer.started"))"
   elif grep -qE $'\t(running|unknown) ' <<<"$st"; then
     [ -n "${2:-}" ] || echo "writer waits for: $(awk -F'\t' '$2 ~ /^(running|unknown) / { printf "%s%s %s", n++ ? ", " : "", $1, $2 }' <<<"$st")"
+  # claimed by an exclusive create, not under the lock alone: on Ubuntu CI two joins' mkdir of join.lock both succeeded
+  elif ! (set -C; : > "$d/writer.started") 2>/dev/null; then [ -n "${2:-}" ] || echo "writer \"$wn\" started already ($(cat "$d/writer.started"))"
   else
-    : > "$d/writer.started"
     if start "$wn" "$(task "$(jq -r .scope <<<"$j")" "write the report" "$d")"; then echo "${sid:-no id}" > "$d/writer.started"
     else rm -f "$d/writer.started"; return 1; fi
   fi
