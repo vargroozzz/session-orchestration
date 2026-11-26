@@ -133,8 +133,9 @@ report lists the headings in that order too. A `retro-run` start splits them: on
    whether its waste count moved. A baseline `rnd-run-<N>`'s "Other tools" proposals: landed or not only.
 5. Write `<R>/retro-<scope>-<N>.md`: scope, window and totals (a fallen-back scope's warning line first), a heading
    per section this run writes with its yardstick rows (last run beside this one), landed / not landed, at most 5
-   new ranked proposals (problem, evidence with session ids, change, target, gain, risk), and a "Next run" section
-   with the baselines to compare against.
+   new ranked proposals (problem, evidence with session ids, change, target, gain, risk, and `Section: NAME`, the
+   section whose numbers it moves, which the next run's section checks it by), and a "Next run" section with the
+   baselines to compare against. A section's heading is its name, capitalized (`## Units`).
    - Project scope: the proposals are project fixes (doc, script, setting, memory). A finding whose fix is in the
      plugin itself becomes a plugin feedback case instead (`../orchestrating-sessions/feedback add`, in the plugin's
      terms; [feedback.md](../orchestrating-sessions/feedback.md)), named in the report by its title: the plugin run
@@ -158,7 +159,7 @@ report lists the headings in that order too. A `retro-run` start splits them: on
 ## Done when
 
 `retro-<scope>-<N>.md` and `.html` exist for each scope this run took, every section `retro.py sections` printed
-has its rows filled (or "no data" and why) and no other section appears, a plugin run has its "Other tools: last
+(a split run: `run.json`'s) has its rows filled or the line `no data: WHY` and no other section appears, a plugin run has its "Other tools: last
 scanned" line, and the coordinator message is sent or skipped for a stated reason (never skipped when a page was published).
 That is the writer's and a by-hand run's; a section session is done when `sections/G.md` and `G.status` exist and its
 `retro-run --join` ran.
@@ -174,18 +175,34 @@ its name and `sections`), then starts one session per group and, once every grou
 (`python3 -I retro.py --until <until> <command> …`; anywhere else it is ignored) and its
 data in DIR. Write `DIR/sections/G.md`, in report order: each section's heading and yardstick rows (last run beside
 this one); last run's proposals in its area, landed (with the commit) or not; up to 3 candidate proposals (problem,
-evidence with session ids, change, target, gain, risk); its "Next run" baseline lines; feedback drafts as the exact
-`feedback add` arguments, not run. It sends no message, writes no report and files no case. Last, write
+evidence with session ids, change, target, gain, risk, `Section: NAME`); its "Next run" baseline lines; feedback
+drafts, one line each, `feedback add CATEGORY 'TITLE' --where … --found … --evidence …` as it would run (one-line
+evidence), never run. It sends no message, writes no report and files no case. Last, write
 `DIR/sections/G.status` (`done`, `done: cut at mark` or `failed: WHY`) and run `retro-run --join DIR` (next to this
 file), then end the turn. At the context mark the hook says to cut it short: write `G.md` from what it has, what's left
 as one candidate (a research task), the status `done: cut at mark`, then the join; no handover.
 
 **Writer** (first prompt `Session task: retro run, scope S, write the report, run DIR`): its N and baseline are
-`run.json`'s `n` and `baseline` (the report is `retro-<scope>-<n>.md`, whatever the Numbering rule would give now). Read `run.json`, every
-`sections/*.md` and `*.status`, and the baseline report. Measure `run.json`'s `writer.sections` itself (steps 2 to 4,
-`--until` as above), then steps 3's Other tools line to 6 from the section files: the ranked proposals come from their
-candidates, the feedback drafts are filed in step 5. A group whose status is `failed: WHY`, or which has none (its
-session ended without one: name the session id from `run.json`), gets `no data: WHY` under each of its headings.
+`run.json`'s `n` and `baseline` (the report is `retro-<scope>-<n>.md`, whatever the Numbering rule would give now).
+It reads the section files, not their TSVs, and does steps 5 and 6 from them:
+
+1. `python3 -I retro.py writer DIR` prints each group's state, the headings that get `no data: WHY` (every section of
+   a group whose status is `failed: WHY`, or that ended without a status or `sections/G.md`, its session id named),
+   and the sections' feedback drafts, numbered, exact repeats dropped. Copy those no-data lines into the report as
+   printed; a `done: cut at mark` group's file is used as it is, its leftover a candidate like any other.
+2. Read `run.json`, every `sections/G.md` the command didn't mark no data, and the baseline's ranked proposals and
+   "Next run" lines. Measure `run.json`'s `writer.sections` itself (steps 2 to 4, `--until` as above), plus step 3's
+   Other tools line in plugin scope.
+3. Landed or not (step 4): take each section's verdicts on last run's proposals. A baseline proposal no section
+   claimed (an old one with no `Section:`, or one whose section had no data) goes under "not checked", not "not
+   landed".
+4. Rank at most 5 proposals across every section's candidates (up to 3 each), by gain for the cost and risk, never
+   by section order; two sections' candidates for one change merge into one, both sections named. Each keeps its
+   `Section:`.
+5. File cases (step 5's rules: plugin scope, the ranked ones; project scope, the plugin-fix drafts) with
+   `python3 -I retro.py writer DIR --file K…`: a draft whose open case already exists gets `feedback seen` on it
+   instead of a new file, so a rerun or two sections drafting one case file it once. Name each case by its title.
+6. Write the report and its `.html` and send step 6's one message, `reply` key `retro-<scope>`.
 
 `retro-run --join DIR` starts the writer once: under `DIR/join.lock`, when no group is running and `writer.started`
 doesn't exist yet. It prints `writer waits for: …`, `writer "NAME" started already` or the writer's start line. A

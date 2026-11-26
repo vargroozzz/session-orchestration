@@ -728,4 +728,30 @@ grep -q $'^quality\t#5\ttask\t1\t0\t1\t#8$' <<<"$out" && grep -q $'^quality\t#7\
 out=$(retro merges "$tmp/q" "$tmp/q/prs.json" 7 o/r 2>&1)
 grep -q $'^quality\t#7\thost\t-\t-\t0\t#9$' <<<"$out" && grep -q 'task n=2: first-try green 0/0' <<<"$out" ||
   fail "merges: quality without RUNS_JSON leaves CI unmeasured" "$out"
+
+# writer: a split run whose units group is done (two drafts: one already an open case, one also drafted by spend), whose
+# waste failed and whose feedback session ended with no status; the real feedback CLI files into a fresh case store.
+w=$tmp/w/retro/project-4 fs=$tmp/w/state; mkdir -p "$w/sections" "$tmp/w/proj/.claude"
+echo '{"scope":"project","n":4,"groups":{"units":{"sections":["units","context"],"name":"retro-project-x-units","id":"aaaa1111-2"},
+  "waste":{"sections":["waste"],"name":"retro-project-x-waste","id":"bbbb2222-3"},"spend":{"sections":["spend"],"name":"s","id":"c"},
+  "feedback":{"sections":["feedback","memory"],"name":"retro-project-x-feedback","id":"dddd4444-5"}}}' > "$w/run.json"
+printf '%s\n' '## Units' 'rows' '- `feedback add bugfixes "reply drops the held flag" --where skills/x/reply:3 --found "worker; done" --evidence "s1"`' \
+  "../orchestrating-sessions/feedback add features 'retro spend table lacks gh' --where skills/retro/retro.py:9 --found 'retro; spend' --evidence s2" > "$w/sections/units.md"
+echo done > "$w/sections/units.status"; echo 'failed: no events.tsv (retro.py events exited 1)' > "$w/sections/waste.status"
+grep feedback "$w/sections/units.md" | tail -1 > "$w/sections/spend.md"; echo 'done: cut at mark' > "$w/sections/spend.status"
+fb() { (cd "$tmp/w/proj" && HOME=$home XDG_STATE_HOME=$fs "$here/../orchestrating-sessions/feedback" "$@"); }
+old=$(fb add bugfixes 'reply drops the held flag' --where skills/x/reply:3 --found 'worker; done' --evidence s0)
+wr() { (cd "$tmp/w/proj" && HOME=$home XDG_STATE_HOME=$fs python3 -I "$here/retro.py" writer "$w" "$@"); }
+out=$(wr 2>&1)
+grep -qx 'waste: failed: no events.tsv (retro.py events exited 1)' <<<"$out" && grep -qx 'feedback: missing' <<<"$out" &&
+  grep -A1 -x '## Waste' <<<"$out" | grep -qx 'no data: no events.tsv (retro.py events exited 1)' &&
+  grep -A1 -x '## Memory' <<<"$out" | grep -qx 'no data: section session retro-project-x-feedback (dddd4444) ended without a result' &&
+  ! grep -qx '## Units' <<<"$out" && ! grep -qx '## Spend' <<<"$out" && [ "$(grep -c '^draft ' <<<"$out")" = 2 ] ||
+  fail "writer: states, no-data headings of the failed and missing groups, drafts once each" "$out"
+out=$(wr --file 2>&1)
+grep -qx "seen 1 $old" <<<"$out" && grep -q '^filed 2 .*/features/.*-retro-spend-table-lacks-gh.md$' <<<"$out" &&
+  [ "$(find "$fs" -name '*.md' | wc -l | tr -d ' ')" = 2 ] || fail "writer --file: no duplicate case (the open one seen, the new one filed once)" "$out"
+out=$(wr --file 2 2>&1)
+grep -q '^seen 2 .*retro-spend-table-lacks-gh.md$' <<<"$out" && [ "$(find "$fs" -name '*.md' | wc -l | tr -d ' ')" = 2 ] ||
+  fail "writer --file K: a rerun files nothing new" "$out"
 echo ok

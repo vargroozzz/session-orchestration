@@ -85,6 +85,12 @@ usage: python3 -I retro.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args] [--project
                                   NAMEs (config retro.sections) keep only those; one the scope lacks is named on stderr
   sections --groups SCOPE [NAME…] the same sections as a group plan, one `GROUP: SECTION…` line per group with any
                                   (config retro.groups, else GROUPS), then `writer: SECTION…` for those no group lists
+  writer DIR [--file [K…]]        a split run's writer, from DIR's run.json and sections/: each group's state, then
+                                  `## Section` + `no data: WHY` for every section of a failed group or a missing one
+                                  (no status or no sections/G.md: names its session id), then the feedback drafts
+                                  (`feedback add …` lines in sections/*.md), numbered, exact repeats dropped. --file
+                                  files drafts K… (all with none) by ../orchestrating-sessions/feedback: one whose open
+                                  case exists gets `feedback seen` on it instead; prints `filed|seen K PATH`
   html IN.md OUT.html             Markdown report -> self-contained HTML
 
 Transcripts: <account>/projects/*/*.jsonl for every account dir ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*),
@@ -2721,9 +2727,63 @@ def sections(*args):
     if rest:
         print(f"writer: {' '.join(rest)}")
 
+def writer(d="", *args):
+    """A split run's writer: the groups' states, the no-data headings, and the feedback drafts, filed with --file."""
+    import shlex, subprocess
+    if not d or (args and args[0] != "--file") or not os.path.isfile(os.path.join(d, "run.json")):
+        sys.exit("usage: retro.py writer DIR [--file [K…]]  (DIR: a split run's folder, with run.json)")
+    run = json.load(open(os.path.join(d, "run.json")))
+    drafts = []
+    for g, v in (run.get("groups") or {}).items():
+        st = os.path.join(d, "sections", g + ".status")
+        md = os.path.join(d, "sections", g + ".md")
+        state = open(st).read().strip().splitlines()[0] if os.path.isfile(st) and os.path.getsize(st) else ""
+        sid = (v.get("id") or "no id")[:8]
+        why = (state[len("failed:"):].strip() if state.startswith("failed")
+               else "" if state.startswith("done") and os.path.isfile(md)
+               else f"section session {v.get('name', g)} ({sid}) wrote no sections/{g}.md" if state.startswith("done")
+               else f"section session {v.get('name', g)} ({sid}) ended without a result")
+        print(f"{g}: {state or 'missing'}")
+        for s in v.get("sections", []):
+            if why:
+                print(f"## {s.capitalize()}\nno data: {why}")
+        if not why:
+            for line in open(md):
+                m = re.search(r"(?:^|[\s`/])feedback add (.+)", line)
+                if m:
+                    try:
+                        a = shlex.split(m.group(1).strip().rstrip("`"))
+                    except ValueError as e:
+                        print(f"draft skipped ({g}): {e}: {clip(line.strip())}", file=sys.stderr)
+                        continue
+                    if a not in [x for _, x in drafts]:   # two sections drafting the same case file it once
+                        drafts.append((g, a))
+    for k, (g, a) in enumerate(drafts, 1):
+        print(f"draft {k} ({g}): feedback add {shlex.join(a)}")
+    if not args:
+        return
+    fb = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "orchestrating-sessions", "feedback")
+    pick = [int(k) for k in args[1:]] or range(1, len(drafts) + 1)
+    rc = 0
+    for k in pick:
+        if not 1 <= k <= len(drafts):
+            sys.exit(f"no draft {k} (1–{len(drafts)})")
+        p = subprocess.run([fb, "add", *drafts[k - 1][1]], stdout=subprocess.PIPE, text=True)
+        if p.returncode == 0:
+            print(f"filed {k} {p.stdout.strip()}")
+            continue
+        # exit 3: an open case is the same one (feedback add lists it first); it counts there, not as a new file
+        m = re.search(r"^\s+(\S+\.md) — ", p.stdout, re.M) if p.returncode == 3 else None
+        if m and subprocess.run([fb, "seen", m.group(1)]).returncode == 0:
+            print(f"seen {k} {m.group(1)}")
+        else:
+            print(f"failed {k}: {clip(p.stdout.strip())}"); rc = 1
+    sys.exit(rc)
+
+
 CMDS = {"sessions": sessions, "events": events, "context": context, "units": units, "waits": waits, "bgtasks": bgtasks, "replies": replies,
         "triggers": triggers, "usage": usage, "chunks": chunks, "kinds": kinds, "trial": trial, "handoff": handoff, "start": start, "loads": loads, "search": search,
-        "sections": sections, "html": md2html, "waste": waste, "merges": merges, "spend": spend}
+        "sections": sections, "writer": writer, "html": md2html, "waste": waste, "merges": merges, "spend": spend}
 
 if __name__ == "__main__":
     a = sys.argv[1:]
