@@ -106,4 +106,35 @@ mkdir -p flat && printf '# Memory\n\n- 2026-01-01 X: a flat entry\n' > flat/memo
 "$M" docs/mem --topic misc.md a b 2>/dev/null; [ $? = 2 ] || fail "misc.md as a --topic"
 "$M" docs/mem --topic ../x.md a b 2>/dev/null; [ $? = 2 ] || fail "a path as a --topic"
 
+# unused memory: an entry past --stale with no assistant line citing it in the window is listed (archive past
+# --archive); a recent citation, a new entry, a user line and a word every session has don't count.
+U=$here/unused; mkdir -p um/memory tr
+printf '# Memory\n\n- 2026-01-01 T0: index entry `cited.sh` here\n' > um/memory.md
+printf '%s\n' '# Memory: misc' '- 2026-01-01 T1: run `foo-bar.sh "x"` first' '- 2026-01-01 T2: the dev_db resets nightly' \
+  '- 2026-01-25 T3: plain words only here' '- 2026-02-10 T4: new entry x_y' '- 2026-01-01 T5: uses x_common' \
+  '- 2026-01-01 T6: [team] the `café→bar` map' '- 2026-01-01 T7: the `edit_only` rule' > um/memory/misc.md
+printf '%s\n' '{"message":{"role":"assistant","content":"ran foo-bar.sh \"x\" and cited.sh"}}' \
+  '{"message":{"role":"user","content":"dev_db"}}' \
+  '{"message":{"role":"assistant","content":[{"type":"text","text":"the café→bar map"}]}}' \
+  '{"message":{"role":"assistant","content":[{"type":"tool_use","input":{"file_path":"/m/memory/misc.md","old_string":"edit_only"}}]}}' > tr/s1.jsonl
+for i in 2 3 4 5 6 7 8 9; do echo '{"message":{"role":"assistant","content":"x_common"}}' > tr/s$i.jsonl; done
+echo '{"message":{"role":"assistant","content":"plain words only here"}}' > tr/old.jsonl
+touch -t 202602100000 tr/s*.jsonl; touch -t 202512010000 tr/old.jsonl
+out=$("$U" memory um/memory.md --today 2026-02-15 --transcripts "$T/app/tr/*.jsonl" | cut -f1-3)
+[ "$out" = $'archive\t45\t'"$T/app/um/memory/misc.md:3"$'\narchive\t45\t'"$T/app/um/memory/misc.md:8"$'\nstale\t21\t'"$T/app/um/memory/misc.md:4" ] ||
+  fail "unused memory: $out"
+"$U" memory um/memory.md --today 2026-02-15 --transcripts "$T/app/none/*.jsonl" >/dev/null 2>&1; [ $? = 1 ] || fail "no transcripts"
+[ "$("$U" cited dev_db foo-bar.sh --days 10 --today 2026-02-15 --transcripts "$T/app/tr/*.jsonl")" = $'0\t-\tdev_db\n1\t5\tfoo-bar.sh' ] ||
+  fail "unused cited: $("$U" cited dev_db foo-bar.sh --days 10 --today 2026-02-15 --transcripts "$T/app/tr/*.jsonl")"
+# archive and restore: a line to archive/NAME and back to the end, a folder to archive/ and back; nothing is lost.
+l='- 2026-01-01 T2: the dev_db resets nightly'
+[ "$("$U" archive um/memory/misc.md "$l")" = "$T/app/um/memory/archive/misc.md" ] && ! grep -qxF -- "$l" um/memory/misc.md &&
+  grep -qxF -- "$l" um/memory/archive/misc.md && [ "$(wc -l < um/memory/misc.md | tr -d ' ')" = 7 ] || fail "archive line"
+"$U" restore um/memory/misc.md "$l" >/dev/null && [ "$(tail -1 um/memory/misc.md)" = "$l" ] && [ ! -s um/memory/archive/misc.md ] ||
+  fail "restore line"
+"$U" archive um/memory/misc.md 'no such line' 2>/dev/null; [ $? = 1 ] || fail "archive a missing line"
+mkdir -p drafts/one && echo x > drafts/one/SKILL.md && "$U" archive drafts/one >/dev/null && [ -f drafts/archive/one/SKILL.md ] &&
+  [ ! -e drafts/one ] && "$U" restore drafts/one >/dev/null && [ -f drafts/one/SKILL.md ] || fail "archive and restore a folder"
+mkdir -p drafts/archive/one && "$U" archive drafts/one 2>/dev/null; [ $? = 2 ] && [ -d drafts/one ] || fail "archive over an archived one"
+
 [ "$fails" = 0 ] && echo ok || { echo "$fails failed"; exit 1; }

@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""Usage: unused memory INDEX [--stale DAYS] [--archive DAYS]
+                       memory entries no session cited in DAYS (default 14; past --archive, default 30, the line says
+                       archive), most unused first: stale|archive, days unused, FILE:LINE, the entry, the words it was
+                       matched on (tabs)
+       unused cited PHRASE...   for each PHRASE: the sessions that cited it in --days (default 30), the days since the
+                       last one (- for none), the phrase (tabs)
+       unused archive FILE [LINE]   LINE (a line of FILE, exactly) moves to the end of ARCHIVE/NAME; no LINE: FILE (a
+                       file or folder) moves to ARCHIVE/NAME. ARCHIVE: the archive/ folder beside FILE. Never deletes.
+       unused restore FILE [LINE]   undoes archive: the line back to the end of FILE, or FILE back in place
+Options for memory and cited: --transcripts GLOB (default: the one in INDEX's grep line, else
+${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<git main checkout, encoded>*/*.jsonl), --today YYYY-MM-DD.
+
+No LLM call: a session cited an entry when an assistant line of its transcript holds one of the entry's words, as
+the index's graduation count greps them: its `code spans` and identifier-like words (with _ . / or -), else the first
+four words of its rule; not a tool call that edits the memory files, and not a word most sessions use (an entry with
+only those isn't listed). A session's time is its transcript's mtime. Shared by the graduate pass (stale memory
+entries) and anything else archived when unused.
+"""
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime
+
+# A word in more than this share of the window's sessions is too common to say a session cited one entry.
+COMMON_SHARE = 0.25
+COMMON_MIN_SESSIONS = 8   # below this many sessions in the window, no word counts as common
+ENTRY = re.compile(r"^- (\d{4}-\d{2}-\d{2}) (\S+?): (.*)")
+IDENT = re.compile(r"[A-Za-z0-9~][\w.~/-]*[_./-][\w./-]*\w")
+
+
+def die(msg, code=2):
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def opts(args, names):
+    """Pops --name VALUE pairs out of args; returns (values, the rest)."""
+    vals, rest, i = {}, [], 0
+    while i < len(args):
+        a = args[i]
+        if a in names:
+            if i + 1 >= len(args) or not args[i + 1]:
+                die(f"{a} needs a value")
+            vals[a] = args[i + 1]
+            i += 2
+        elif a.startswith("--"):
+            die(f"unknown option: {a}")
+        else:
+            rest.append(a)
+            i += 1
+    return vals, rest
+
+
+def conf_dir():
+    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+
+
+def default_glob(cwd="."):
+    git = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                         capture_output=True, text=True, cwd=cwd)
+    c = git.stdout.strip()
+    root = c[:-5] if git.returncode == 0 and c.endswith("/.git") else os.path.abspath(cwd)
+    return os.path.join(conf_dir(), "projects", re.sub(r"[^A-Za-z0-9]", "-", root) + "*", "*.jsonl")
+
+
+def words(rule):
+    """An entry's words to match a citation on: code spans and identifier-like words, else its first four words."""
+    rule = re.sub(r"^\[team\] ", "", rule)
+    spans = [s.strip() for s in re.findall(r"`([^`]+)`", rule) if len(s.strip()) >= 4]
+    idents = [w for w in IDENT.findall(re.sub(r"`[^`]*`", " ", rule)) if len(w) >= 5 and not re.fullmatch(r"[\d./-]+", w)]
+    ws = list(dict.fromkeys(spans + idents))
+    return ws or [" ".join(rule.split()[:4])]
+
+
+def said(line, skip):
+    """An assistant line's text, thinking and tool inputs, without a tool call whose input names one of skip (an edit
+    of the memory files carries their entries, and isn't a citation)."""
+    try:
+        c = json.loads(line).get("message", {}).get("content")
+    except (ValueError, AttributeError):
+        return ""
+    if isinstance(c, str):
+        return c
+    out = []
+    for b in c if isinstance(c, list) else []:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") == "tool_use":
+            t = json.dumps(b.get("input"), ensure_ascii=False)
+            if not any(k in t for k in skip):
+                out.append(t)
+        else:
+            out.append(str(b.get("text") or b.get("thinking") or ""))
+    return "\n".join(out)
+
+
+def scan(pattern, phrases, since, skip=()):
+    """{phrase: [mtime of each session whose assistant lines hold it]} over transcripts modified after since, and the
+    number of those transcripts."""
+    # A transcript is JSON: a phrase is first looked for as it is written there (a " is \", a \ is \\), then in the
+    # parsed message.
+    enc = {p: json.dumps(p, ensure_ascii=False)[1:-1] for p in phrases}
+    hits, n = {p: [] for p in phrases}, 0
+    for f in glob.glob(os.path.expanduser(pattern)):
+        try:
+            m = os.path.getmtime(f)
+            if m < since:
+                continue
+            n += 1
+            left, found = set(enc), set()
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if '"role":"assistant"' not in line:
+                        continue
+                    ps = [p for p in left if enc[p] in line]
+                    if not ps:
+                        continue
+                    text = said(line, skip)
+                    for p in ps:
+                        if p in text:
+                            found.add(p)
+                            left.discard(p)
+                    if not left:
+                        break
+        except OSError:
+            continue
+        for p in found:
+            hits[p].append(m)
+    return hits, n
+
+
+def index_glob(index):
+    """The transcripts glob in the index's graduation grep, under CLAUDE_CONFIG_DIR when that is set."""
+    with open(index, encoding="utf-8") as fh:
+        m = re.search(r"grep -l '[^']*' (\S+\.jsonl)", fh.read())
+    if not m:
+        return None
+    g = m.group(1)
+    return conf_dir() + g[len("~/.claude"):] if g.startswith("~/.claude/") else g
+
+
+def entries(index):
+    """(file, line number, line, date, rule) for each entry of the index and its memory/*.md topic files."""
+    d = os.path.dirname(os.path.abspath(index))
+    for f in [index] + sorted(glob.glob(os.path.join(d, "memory", "*.md"))):
+        with open(f, encoding="utf-8") as fh:
+            for i, line in enumerate(fh, 1):
+                m = ENTRY.match(line.rstrip("\n"))
+                if m:
+                    try:
+                        when = datetime.strptime(m.group(1), "%Y-%m-%d").timestamp()
+                    except ValueError:
+                        continue
+                    yield f, i, line.rstrip("\n"), when, m.group(3)
+
+
+def days(since, now):
+    return int((now - since) // 86400)
+
+
+def memory(args, now):
+    o, rest = opts(args, {"--stale", "--archive", "--transcripts"})
+    if len(rest) != 1 or not os.path.isfile(rest[0]):
+        die("usage: unused memory INDEX [--stale DAYS] [--archive DAYS] [--transcripts GLOB]")
+    index = rest[0]
+    try:
+        stale, arch = int(o.get("--stale", 14)), int(o.get("--archive", 30))
+    except ValueError:
+        die("--stale and --archive take a number of days")
+    es = [(f, i, line, when, words(rule)) for f, i, line, when, rule in entries(index)]
+    es = [e for e in es if days(e[3], now) >= stale]   # a newer entry hasn't had the time to be cited
+    pattern = o.get("--transcripts") or index_glob(index) or default_glob(os.path.dirname(os.path.abspath(index)))
+    skip = ("memory.md", "/memory/", os.path.dirname(os.path.abspath(index)))
+    hits, n = scan(pattern, {w for e in es for w in e[4]}, now - max(stale, arch) * 86400, skip)
+    if not n and es:
+        die(f"no transcript in the last {max(stale, arch)} days matches {pattern}: pass --transcripts GLOB", 1)
+    common = {w for w, ms in hits.items() if n >= COMMON_MIN_SESSIONS and len(ms) > n * COMMON_SHARE}
+    rows = []
+    for f, i, line, when, ws in es:
+        ws = [w for w in ws if w not in common]
+        if not ws:   # every word is one most sessions use: no telling whether they cite this entry
+            continue
+        last = max([when] + [m for w in ws for m in hits[w]])
+        u = days(last, now)
+        if u >= stale:
+            rows.append((u, "archive" if u >= arch else "stale", f"{f}:{i}", line, ", ".join(ws)))
+    for u, verdict, where, line, ws in sorted(rows, key=lambda r: -r[0]):
+        print(f"{verdict}\t{u}\t{where}\t{line}\t{ws}")
+
+
+def cited(args, now):
+    o, rest = opts(args, {"--days", "--transcripts"})
+    if not rest:
+        die("usage: unused cited PHRASE... [--days N] [--transcripts GLOB]")
+    try:
+        window = int(o.get("--days", 30))
+    except ValueError:
+        die("--days takes a number of days")
+    hits, _ = scan(o.get("--transcripts") or default_glob(), rest, now - window * 86400)
+    for p in rest:
+        print(f"{len(hits[p])}\t{days(max(hits[p]), now) if hits[p] else '-'}\t{p}")
+
+
+def remove_line(f, line):
+    """Drops the first line of f equal to line; False when f has none. Re-reads when f grew meanwhile (another
+    session's append), and carries over one that lands during the replace, so no append is lost."""
+    for _ in range(5):
+        st = os.stat(f)
+        with open(f, encoding="utf-8") as fh:
+            lines = fh.readlines()
+        k = next((i for i, l in enumerate(lines) if l.rstrip("\n") == line), None)
+        if k is None:
+            return False
+        del lines[k]
+        tmp = f"{f}.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        shutil.copymode(f, tmp)
+        with open(f, "rb") as old:
+            if os.fstat(old.fileno()).st_size == st.st_size:
+                os.replace(tmp, f)
+                # An append that reached the old file between the check and the replace: carried over.
+                old.seek(st.st_size)
+                late = old.read()
+                if late:
+                    with open(f, "ab") as fh:
+                        fh.write(late)
+                return True
+        os.remove(tmp)
+    die(f"{f} keeps changing: try again")
+
+
+def append_line(f, line):
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    with open(f, "a+", encoding="utf-8") as fh:
+        fh.seek(0, 2)
+        if fh.tell():
+            fh.seek(fh.tell() - 1)
+            if fh.read(1) != "\n":
+                fh.write("\n")
+        fh.write(line + "\n")
+
+
+def move(args, back):
+    if len(args) not in (1, 2):
+        die(f"usage: unused {'restore' if back else 'archive'} FILE [LINE]")
+    path = os.path.abspath(args[0].rstrip("/"))
+    arch = os.path.join(os.path.dirname(path), "archive", os.path.basename(path))
+    src, dst = (arch, path) if back else (path, arch)
+    if len(args) == 2:
+        line = args[1]
+        if "\n" in line:
+            die("LINE is one line")
+        if not os.path.isfile(src):
+            die(f"no {src}")
+        with open(src, encoding="utf-8") as fh:
+            if line not in (l.rstrip("\n") for l in fh):
+                die(f"{src} has no such line", 1)
+        append_line(dst, line)   # first, so a failure leaves a copy rather than none
+        remove_line(src, line)
+    else:
+        if not os.path.exists(src):
+            die(f"no {src}")
+        if os.path.exists(dst):
+            die(f"{dst} exists: not overwritten")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        os.rename(src, dst)
+    print(dst)
+
+
+def main():
+    a, now = sys.argv[1:], time.time()
+    if "--today" in a:
+        k = a.index("--today")
+        try:
+            now = datetime.strptime(a[k + 1], "%Y-%m-%d").timestamp()
+        except (IndexError, ValueError):
+            die("--today YYYY-MM-DD")
+        del a[k:k + 2]
+    cmd, rest = (a[0], a[1:]) if a else ("", [])
+    if cmd == "memory":
+        memory(rest, now)
+    elif cmd == "cited":
+        cited(rest, now)
+    elif cmd in ("archive", "restore"):
+        move(rest, cmd == "restore")
+    else:
+        die(__doc__.split("\nNo LLM")[0])
+
+
+main()

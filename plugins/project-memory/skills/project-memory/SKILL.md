@@ -48,7 +48,8 @@ they've proved themselves. On the user's ask (with session-orchestration, the co
 delete an entry that is wrong, superseded, about a task state that has since resolved, or already in a `CLAUDE.md`,
 a doc or a skill; merge two about the same trap. A flat file past a screen or so gets split into topics: build the
 topic files and the new index as copies, re-check for lines appended meanwhile, and swap the index in with one `mv`,
-so no session's append is lost. Moving entries into the docs is the [graduate](../graduate/SKILL.md) pass.
+so no session's append is lost. Moving entries into the docs, and finding and archiving the ones nobody cites, is the
+[graduate](../graduate/SKILL.md) pass.
 
 ## Project cases (friction)
 

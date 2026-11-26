@@ -12,7 +12,9 @@ where each one goes, applies what the user approves, and empties what it resolve
 
 - **Memory**: the index the project's `CLAUDE.md` names (`Project memory: …`) and every topic file. The index's
   Graduation section states the thresholds (default: 7+ days old and still true, or cited by 3+ sessions) and how to
-  count citations (a `grep -l` over the project's transcripts).
+  count citations (a `grep -l` over the project's transcripts). Then the other way round, with no LLM call:
+  `unused memory INDEX` (beside the project-memory skill) lists each entry no session cited in 14 days (`stale`), or
+  in 30 (`archive`), with the words it was matched on; check those words before you trust a `stale`.
 - **Project cases**: `cases list` (beside the project-memory skill; with session-orchestration, `feedback list
   --project`). Each line: times seen, status, path, title.
 - **Deferred tasks** ([defer-task](../defer-task/SKILL.md)): every file in `bugfixes/`, `features/` and
@@ -39,20 +41,23 @@ Memory
  1. graduate  memory/deploys.md "dev DB resets at 02:00 UTC" (12 days, 4 sessions) → docs/dev-env.md, Databases
  2. drop      memory/misc.md "PROJ-12 waits on review" (resolved)
  3. merge     memory/deploys.md lines 4 and 9 (the same trap)
+ 4. archive   memory/misc.md "the CI cache key is the lockfile hash" (unused 34 days)
 Project cases
- 4. fix       2 cases, "sign-in expires hourly" (seen 5×) → scripts/login.sh refreshes the token first
+ 5. fix       2 cases, "sign-in expires hourly" (seen 5×) → scripts/login.sh refreshes the token first
 Deferred tasks
- 5. ticket    bugfixes/2026-10-28-retry-loop.md → Jira PROJ, Bug "Retry loop never backs off"
- 6. fix       refactorings/2026-10-30-dup-parser.md → in this pass (small: one function)
- 7. drop      features/2026-09-02-dark-mode.md (done in 4f2c1a0)
+ 6. ticket    bugfixes/2026-10-28-retry-loop.md → Jira PROJ, Bug "Retry loop never backs off"
+ 7. fix       refactorings/2026-10-30-dup-parser.md → in this pass (small: one function)
+ 8. drop      features/2026-09-02-dark-mode.md (done in 4f2c1a0)
 Skill drafts
- 8. skill     cut-release (seen 3×, last 2026-10-29) → .claude/skills/cut-release/
- 9. drop      preview-deploy (seen once; docs/deploy.md covers it) → archived
+ 9. skill     cut-release (seen 3×, last 2026-10-29) → .claude/skills/cut-release/
+10. drop      preview-deploy (seen once; docs/deploy.md covers it) → archived
 ```
 
 - **graduate** names the doc and section that owns the situation (a `CLAUDE.md`, a doc, a skill); a topic past ~15
   entries can become its own doc. **drop**: wrong, superseded, about a resolved task state, or already in a doc.
-  **merge**: two entries about the same trap.
+  **merge**: two entries about the same trap. **archive**: an `unused memory` line that is still true but nobody reads
+  (a `stale` one is "drop?" unless you graduate it): it moves to the `archive/` folder beside its file, out of every
+  session's reading, never deleted.
 - **fix** (cases): group the open cases into patterns; one fix per pattern (a doc, script or setting), naming the
   cases it closes.
 - **Deferred tasks**, one of three each:
@@ -73,6 +78,8 @@ Only the numbers the user approved; ask again for anything new you find on the w
 - **Graduate and fix**: edit the docs, scripts or settings as the project's rules say (a branch and PR where the
   project works that way; the release checks its `CLAUDE.md` names). Delete a graduated entry from memory only once
   its doc change is in (merged, or committed where the project commits directly).
+- **Archive**: `unused archive TOPIC_FILE 'LINE'` (the entry's whole line); `unused restore TOPIC_FILE 'LINE'` puts it
+  back at the end, on the user's ask.
 - **Drop and merge**: edit the memory files. Other sessions append meanwhile: edit only the lines you named, never
   rewrite a whole file from an old copy.
 - **Cases**: `cases mark FILE fixed '<what changed>'` for each case the fix closes, `cases mark FILE dropped` for a

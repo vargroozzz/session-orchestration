@@ -7,8 +7,9 @@ What one Claude Code session learns, the next one knows. Works in any project, w
   trigger. Sessions read the index when they start a task, read only the topics that match, and append one line per
   decision or pitfall another task would need. `memory-init` sets it up.
 - **`/graduate`** (`graduate` skill): proposes, item by item, moving proven memory entries into the docs that own
-  them, dropping stale ones, turning open project cases into fixes, resolving deferred tasks (ticket it, fix it or
-  drop it) and making skill drafts skills, then applies what you approve.
+  them, dropping stale ones (`unused` lists the entries no session cited in 14 days, no LLM call; archived ones stay
+  restorable), turning open project cases into fixes, resolving deferred tasks (ticket it, fix it or drop it) and
+  making skill drafts skills, then applies what you approve.
 - **Project cases** (`cases`): friction the project caused a session (a host's sign-in, a misleading doc, a script
   that fails on a case it should handle), filed the moment it happens, deduplicated and counted, kept outside the
   repo in `~/.local/state` until a fix lands.
@@ -37,7 +38,7 @@ Then ask a session to "set up project memory": it proposes a folder and topics, 
 
 ## Requirements
 
-bash, git, jq; macOS or Linux.
+bash, git, jq, python3; macOS or Linux.
 
 ## License
 
