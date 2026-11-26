@@ -28,6 +28,26 @@ check "$(g c1 Bash "$(jq -nc '{command: "claude --bg --resume 0123abcd '"'"'APPR
 check "$(g c1 Bash "$(jq -nc '{command: "/p/session-status --send-when-idle 0123abcd '"'"'APPROVAL relayed from the user'"'"'"}')")" deny 'a relay in a --send-when-idle text'
 check "$(g c1 Bash '{"command":"grep -n \"APPROVAL relayed from the user\" notes.md"}')" allow 'a relay block quoted, no resume'
 check "$(g c1 Bash '{"command":"grep -rn \"APPROVAL relayed from the user\" /x"}')" allow 'a relay block searched with grep -r'
+# a plain --relay is allowed outright ("allow" from the hook itself, not its silence)
+gr() { jq -nc --arg s "$1" --arg c "$root/src" --arg cmd "$2" '{session_id: $s, tool_name: "Bash", tool_input: {command: $cmd}, cwd: $c}' |
+  HOME=$tmp XDG_CACHE_HOME=$tmp/.cache XDG_CONFIG_HOME=$tmp/.config bash "$here/coordinator-guard.sh" | jq -r '.hookSpecificOutput.permissionDecision // empty' | grep . || echo none; }
+ssp=$(cd "$here/../skills/orchestrating-sessions" && pwd)/session-status
+check "$(gr c1 "$ssp --relay PROJ-1 'merge o/r#5 (PROJ-1-fix)'")" allow 'a plain relay'
+check "$(gr c1 "  $ssp --relay PROJ-1")" allow 'a plain relay, no ACTION'
+check "$(gr c1 "$ssp --relay PROJ-1 \"don't wait\"")" allow 'a plain relay, ACTION in double quotes'
+check "$(gr c1 "$ssp --relay PROJ-1 'go' && rm -rf /x")" none 'a chained relay'
+check "$(gr c1 "$ssp --relay PROJ-1 'go' | tee /x")" none 'a piped relay'
+check "$(gr c1 "$ssp --relay PROJ-1 'go' > /x")" none 'a redirected relay'
+check "$(gr c1 "$ssp --relay PROJ-1 \"\$(rm -rf /x)\"")" none 'a substitution in ACTION'
+check "$(gr c1 "$ssp --relay PROJ-1 'go'"$'\n'"rm -rf /x")" none 'a relay then a second line'
+check "$(gr c1 "$ssp --relay \$(id) go")" none 'a substitution in KEY'
+check "$(gr c1 "$ssp --relay PROJ-1"$'\n'"/tmp/x")" none 'a one-word command on the next line'
+check "$(gr c1 "$ssp --relay"$'\n'"reboot")" none 'a command in place of KEY'
+check "$(gr c1 "$ssp --relay PROJ-1 go"$'\n'"/tmp/x")" none 'a one-word command after ACTION'
+check "$(gr c1 "/p/session-status --relay PROJ-1 'go'")" none 'another session-status'
+check "$(gr c1 "$ssp --approvals")" none 'another session-status flag'
+check "$(gr w1 "$ssp --relay PROJ-1 'go'")" none 'a relay from a task session'
+check "$(gr nokind "$ssp --relay PROJ-1 'go'")" none 'a relay from an unclassified session'
 check "$(g w1 Bash "$(jq -nc '{command: "claude --bg -n K-2-x '"'"'Work on K-2: x.'"'"'"}')")" deny 'a task session starting a session'
 check "$(g w1 Bash '{"command":"nohup claude --bg --resume 0123abcd \"go on\""}')" deny 'a task session resuming one'
 check "$(g w1 Bash '{"command":"grep -n \"claude --bg\" notes.md"}')" allow 'a task session quoting a start'
