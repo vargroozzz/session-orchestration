@@ -32,6 +32,8 @@ feedback add bugfixes 'session-status exits 1 when the adapter prints nothing' \
 - Exit 3 lists open cases that look the same. If one is, `feedback seen FILE` adds today to its `seen:` line (that
   count ranks it); otherwise rerun with `--new`.
 - Don't fix the plugin from a task session. The fix goes upstream as below.
+- A plugin lesson the graduate pass finds in project memory or `CLAUDE.local.md` is filed the same way, `--found
+  'graduate; a memory entry'`, its evidence counts only (project-memory's `graduate` skill, Plugin).
 
 A case file:
 
