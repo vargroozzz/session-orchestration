@@ -53,7 +53,7 @@ rows() {
       "$d/SKILL.md" "$(fm description "$d/SKILL.md")"
   done
 }
-archive() { [ ! -e "$A/$1" ] || die "$A/$1 exists"; mkdir -p "$A" && mv "$DIR/$1" "$A/$1" || die "can't archive $1"; }
+archive() { "$here/unused" archive "$DIR/$1" >/dev/null || exit 2; }   # the archive/ beside it, as for memory entries
 scrub() { # NAME: `path:line:text` per hit; returns 2 on a deny pattern grep can't read, so nothing passes unchecked
   local lit deny f
   # Whole words, any case. A name part under 2 letters would hit every "a".
@@ -89,8 +89,7 @@ list)
 archive) has "${2:-}"; archive "$2" ;;
 restore)
   ok "${2:-}"; [ -d "$A/$2" ] || die "no archived draft $2 (skill-drafts list --archived)"
-  [ ! -e "$DIR/$2" ] || die "$DIR/$2 exists"
-  mv "$A/$2" "$DIR/$2" && echo "$TODAY restored" >> "$DIR/$2/seen" ;;
+  "$here/unused" restore "$DIR/$2" >/dev/null && echo "$TODAY restored" >> "$DIR/$2/seen" ;;
 sweep)
   days=30
   [ "${2:-}" = --days ] && { days=${3:-}; [[ $days =~ ^[0-9]+$ ]] || die "--days needs a number"; }
