@@ -545,13 +545,16 @@ inbox_unread() {   # the unread entries, heading and text, oldest first
   awk '/^## [0-9]+ · / { on = index($0, " · unread · ") > 0 } on' "$f"
 }
 # Held reports (the reply tool's hold: nothing needed from the coordinator now) wait in the inbox, their heading ending
-# ` · held`, while the coordinator's unscoped watcher runs: it touches WATCHING at each tick and drops it on exit, and
-# an add touches HOLD_WAKE, which ends its nap so it confirms and wakes once with all of them (--watch).
+# ` · held`, while the coordinator's unscoped watcher runs: it touches WATCHING at each tick, and an add (checking it
+# under the inbox lock) touches HOLD_WAKE, after which the watcher wakes once with all of them, CONFIRM_S later
+# (--watch's nap). Every other wake of it carries them too. Not in --changes: only that watcher delivers them.
 WATCHING=~/.cache/session-status/$ENC.watching HOLD_WAKE=~/.cache/session-status/$ENC.hold-wake
-# held_out: a wake's held entries in full, marked read: the wake delivered them, as a direct message would have.
+# held_out: a wake's held entries in full, marked read (the wake delivered them, as a direct message would have), and
+# WATCHING dropped under the same lock, so an add after this goes at once instead of waiting for no watcher.
 held_out() {
-  local f t; f=$(inbox_file) && [ -f "$f" ] || return 0
-  t=$( inbox_lock "$f"; awk '/^## [0-9]+ · / { on = index($0, " · unread · ") > 0 && / · held$/ } on' "$f"
+  local f t; f=$(inbox_file) && [ -f "$f" ] || { rm -f "$WATCHING"; return 0; }
+  t=$( inbox_lock "$f"; rm -f "$WATCHING"
+    awk '/^## [0-9]+ · / { on = index($0, " · unread · ") > 0 && / · held$/; sub(/ · unread · /, " · read · ") } on' "$f"
     awk '/^## [0-9]+ · unread · .* · held$/ { sub(/ · unread · /, " · read · ") } { print }' "$f" > "$f.$$" && mv "$f.$$" "$f" )
   [ -z "$t" ] || printf '\nHeld reports (sent together; already marked read):\n%s\n' "$t"
 }
