@@ -167,9 +167,11 @@ follow-up for a task that already has a session goes to that session in any mode
   A session whose work is unclear is proposed.
 - **Propose first** (`propose`, "ask before starting"): when the user gives you work that needs new sessions, queue one
   `ask_approval` per session you'd start, on the pane (the task key or a 3–5 word name, what it does, its done-when, its
-  kind and why, with the brief in `details`; the ask also approves landing its PR). Say in chat only that they're
-  queued, then stop and wait. A yes starts that session; a no or an amendment changes it. Never start one the user
-  hasn't approved.
+  kind and why, with the brief in `details`; the ask also approves landing its PR). Give it `session`, the name you'll
+  start it under, and no `action`: a Yes click then grants that session the landing of its own PR, so its merge needs
+  no relay ([approvals.md](approvals.md#grants)); its brief says it was started on the pane's Yes. Say in chat only
+  that they're queued, then stop and wait. A yes starts that session; a no or an amendment changes it. Never start
+  one the user hasn't approved.
 - **Start at once** (`at_once`, "start without asking", "just go"): start each as you'd have proposed it, then tell
   the user in one line per session.
 

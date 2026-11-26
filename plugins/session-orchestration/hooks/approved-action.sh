@@ -482,7 +482,7 @@ while IFS= read -r t; do toks+=("$t"); done <<<"$tokstr"
 # Walk the tokens: each CLI call (up to |, ;, &&, ||) is read as SUB TARGET [flags]; a gh call (gh where a command
 # starts) as GROUP VERB TARGET with its flags anywhere.
 groups=' agent-task alias api attestation auth browse cache codespace completion config copilot extension gist gpg-key help issue label org pr preview project release repo ruleset run search secret ssh-key status variable version workflow '
-calls=0 ghcalls=0 apiw= kind= target= repo= bodyfile= body= help= host= mode= modes=0 fj= cm= crk= crf= crt= crx=() crn= bbc=
+calls=0 ghcalls=0 apiw= kind= target= repo= bodyfile= body= help= host= mode= modes=0 fj= cm= crk= crf= crt= crx=() crn= bbc= mfl=
 i=0 st=1
 while [ "$i" -lt "${#toks[@]}" ]; do
   t=${toks[$i]}; i=$((i + 1)); prev=; [ "$i" -lt 2 ] || prev=${toks[$((i - 2))]}
@@ -637,7 +637,8 @@ while [ "$i" -lt "${#toks[@]}" ]; do
   [ -z "${pos[0]:-}" ] || [[ $groups == *" ${pos[0]} "* ]] ||
     attended "Blocked: \"gh ${pos[0]}\" isn't a gh command the approval hook knows (an alias?). Run the gh command it stands for, as one plain command."
   case "${pos[*]:0:2}" in
-    'pr merge') k=merge ;;
+    # mfl: its flags but -R/--repo, sorted (a land grant takes only --auto --rebase)
+    'pr merge') k=merge mfl=$(printf '%s\n' ${args[@]+"${args[@]}"} | grep -E '^-' | grep -vE '^(-R|--repo)(=.*)?$' | LC_ALL=C sort | tr '\n' ' ') ;;
     'pr comment'|'issue comment') k=prpost ;;
     'pr review') k=review ;;
     # create's flags aren't the others' (-a assignee, -r reviewer, -f fill, -B base): its words are read again.
@@ -854,6 +855,42 @@ for g in ~/.cache/session-status/grants/act-*.json; do
   relays=${relays:+$relays
 }$l
 done
+# A land grant (register.tsx writeGrant): the user's Yes to the start ask that named this session, its answer ending
+# "Starts: <session>". It covers only this session's own PR, as gh pr merge N -R OWNER/REPO --auto --rebase alone (or
+# --rebase alone: gh refuses --auto on a PR already clean, and the retry rule below lets that rerun), once, within a
+# day: matched like an action grant, but any pane Yes of `by`'s with its quote backs it (a later answer for the key
+# leaves it), and never one in a background coordinator's transcript (it has no pane to click). Own PR: same repo, its
+# head the cwd's branch or the session's name (a worktree added by hand leaves the cwd on the main checkout).
+land_backed() { # $1 the grant, as JSON
+  local by bt
+  by=$(jq -r '.by // ""' <<<"$1")
+  [[ $by =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  for bt in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$by".jsonl; do [ -f "$bt" ] && break; done
+  [ -f "$bt" ] && ! grep -qF '"sessionKind":"bg"' "$bt" || return 1
+  grep -F "Approval pane answer for $(jq -r .key <<<"$1"): " "$bt" 2>/dev/null |
+    jq -en --argjson g "$1" --argjson since $(( now - 86400 )) "$pane_def"'
+      ("Approval pane answer for \($g.key): ") as $p
+      | any(pane_texts($since) | .t; . == $g.quote) and ($g.quote | endswith(" Starts: \($g.name)"))
+        and ($g.quote[($p | length):] | test("^yes\\b"; "i"))' >/dev/null 2>&1
+}
+ltried=
+if [ "$kind" = merge ] && [ "$host" = gh ] && { [ "${mfl:-}" = '--auto --rebase ' ] || [ "${mfl:-}" = '--rebase ' ]; }; then
+  head_ref= br=$(git -C "$cwd" branch --show-current 2>/dev/null)
+  for g in ~/.cache/session-status/grants/land-*.json; do
+    [ -f "$g" ] || continue
+    l=$(jq -c --arg me "$me" --arg sid "$sid" --argjson now "$now" --arg f "$g" --arg a "$action" '
+      select(.kind == "land" and ([.quote, .session, .key] | all(type == "string")) and (.at | type == "number")
+        and .at >= $now - 86400 and .at <= $now + 5
+        and (.session as $s | ($s == $me and $me != "") or (($s | test("^[0-9a-f]{8}[0-9a-f-]*$")) and ($sid | startswith($s)))))
+      | {grant: 1, land: 1, name: .session, quote, action: $a, key, by, tp: $f}' "$g" 2>/dev/null) || continue
+    [ -n "$l" ] && land_backed "$l" || continue
+    [ -n "$head_ref" ] || head_ref=$(gh pr view "$target" -R "$repo" --json headRefName,isCrossRepository -q 'select(.isCrossRepository | not) | .headRefName' 2>/dev/null) || head_ref=
+    [ -n "$head_ref" ] && { [ "$head_ref" = "$br" ] || [ "$head_ref" = "$(jq -r .name <<<"$l")" ]; } ||
+      { ltried="the land grant covers only this session's own PR, from its branch ($(jq -r .name <<<"$l") or ${br:-none here}); the head of $what is ${head_ref:-in another repository, or unknown}"; continue; }
+    relays=${relays:+$relays
+}$l
+  done
+fi
 while IFS= read -r r; do
   [ -n "$r" ] || continue
   act=$(jq -r .action <<<"$r") alt= hint=
@@ -917,7 +954,9 @@ while IFS= read -r r; do
   # ponytail: used up when allowed, not when the command succeeds; the deny says to check before asking again. A gh
   # merge whose PR is still open with no auto-merge queued (gh refused it: --auto on a clean PR) didn't use it, while
   # the PR's head is the one the first run saw (the used stamp holds it): new commits need a new approval.
-  used=~/.cache/session-status/approved/$(printf '%s|%s|%s' "$(jq -r .tp <<<"$r")" "$action" "$(jq -c "del(.tp)" <<<"$r")" | shasum -a 256 | cut -c1-32)
+  # A land grant is used once whatever the PR: its stamp leaves out the action.
+  ua=$action uj=$(jq -c "del(.tp)" <<<"$r"); [ "$(jq -r '.land // empty' <<<"$r")" != 1 ] || ua=land uj=land
+  used=~/.cache/session-status/approved/$(printf '%s|%s|%s' "$(jq -r .tp <<<"$r")" "$ua" "$uj" | shasum -a 256 | cut -c1-32)
   case "$v" in
     verified*) pr=; [ "$kind" != merge ] || [ "$host" != gh ] || pr=$(gh pr view "$target" -R "$repo" --json state,autoMergeRequest,headRefOid 2>/dev/null) || pr=
                [ ! -e "$used" ] || jq -e --arg h "$(cat "$used")" '$h != "" and .headRefOid == $h and .state == "OPEN" and .autoMergeRequest == null' <<<"${pr:-null}" >/dev/null 2>&1 ||
@@ -933,4 +972,5 @@ while IFS= read -r r; do
   esac
   tried=${tried:-${v:-verify-approval.sh failed}$hint}; fault unverified relay   # relays run newest first: the newest one's reason is the deny's
 done < <(awk '{ l[NR] = $0 } END { for (i = NR; i > 0; i--) print l[i] }' <<<"$relays")   # newest first (no tail -r on Linux)
+tried=${tried:-$ltried}   # a relay's reason first
 ask_for "$action${tried:+ (the relay found: $tried)}" "$action" "$what"

@@ -120,10 +120,11 @@ export async function readBody($: EngineInterface, path: string): Promise<AskBod
 }
 // The prompt a click submits, and the Quote a relay carries. The clicked option comes first, so text in the
 // question can't pose as the answer; the ask's action ends it, for session-status --relay to read, only after one of
-// the ask's own options (words typed in may limit it: the coordinator relays what they approve). Keep in sync
+// the ask's own options (words typed in may limit it: the coordinator relays what they approve); a start ask's
+// (session, no action) ends `Starts: <session>`, which binds its land grant to that session. Keep in sync
 // with approvals.md and worker.md.
 export const answerText = (a: Ask, option: string) =>
-  `Approval pane answer for ${a.key}: ${oneLine(option)}. Asked: ${oneLine(a.question)}${a.action && a.options.includes(option) ? ` Action: ${oneLine(a.action)}` : ''}`
+  `Approval pane answer for ${a.key}: ${oneLine(option)}. Asked: ${oneLine(a.question)}${!a.options.includes(option) ? '' : a.action ? ` Action: ${oneLine(a.action)}` : a.session ? ` Starts: ${a.session}` : ''}`
 // The asks an "Approve all merges" press answers, each with its yes: the whole question is the hook's merge action
 // (`merge app#271`, a `(KEY)` and `?` allowed), exactly one option starts "Yes", and nothing more needs reading
 // (no details), nor rechecking (OLD, stale). Anything else waits for its own click.
@@ -967,7 +968,7 @@ const ASK_SCHEMA = {
     kind: { type: 'string', enum: KINDS, description: 'Optional, with body_file only: a PR review finding\'s kind: issue (the code is wrong), suggestion (it works but could be better), question (scope or intent the author or PO decides). The pane shows it as a badge and sorts issues first.' },
     body_file: { type: 'string', description: 'Optional absolute path of a comment body file, prepared before asking. The pane reads it now and shows its text (as markdown) and sha256; the question must name this sha256; any other sha256 it names must be that of a file it names by absolute path (a Teams send\'s attachment).' },
     action: { type: 'string', description: 'Optional, one line: the exact Action a relay of the yes carries (approvals.md), e.g. "merge acme/app#45 (PROJ-123)" or "post comment /abs/body.md on acme/app#45 (sha256 X)". The answer prompt ends with "Action: <it>" and session-status --relay KEY, with no ACTION, takes it from there, so nobody retypes it. A post, or a close with a comment, needs body_file (draft the body first).' },
-    session: { type: 'string', description: 'Optional, with action only: the session that runs the action, by its name as its messages show it (from-name), or its id. The pane shows "Runs in: <it>", and a click on one of the options starting "Yes" grants that session this action (approvals.md, Grants): its approval hook takes the grant once, within 24h, so session-status --relay KEY prints a go note to send it instead of the relay block. A typed answer grants nothing.' },
+    session: { type: 'string', description: 'Optional: the session that runs the action, by its name as its messages show it (from-name), or its id. The pane shows "Runs in: <it>", and a click on one of the options starting "Yes" grants that session this action (approvals.md, Grants): its approval hook takes the grant once, within 24h, so session-status --relay KEY prints a go note to send it instead of the relay block. Without action (a start ask, sessions.md): the name the session will be started under; the Yes grants it the landing of its own PR (gh pr merge N --auto --rebase on its branch, once, within 24h), so its merge needs no relay. A typed answer grants nothing.' },
     still_applies: { type: 'string', description: 'Optional GitHub PR, OWNER/REPO#N (e.g. "acme/app#45"): the ask applies while that PR is open. Every full session-status run (the pane\'s refresh, Start, the sweep, --stale) looks it up (10 s cap) and its Stale section flags the ask once the PR is merged or closed, so an old ask is rechecked by machine, not by hand. For a PR no board row shows: a row\'s PR named in the question is flagged already.' },
   },
   required: ['key', 'question', 'options'],
@@ -1297,13 +1298,17 @@ export const GRANTS_DIR = '.cache/session-status/grants'
 // same rule as answerText's Action (one of the ask's own options), and the option starts "Yes": a typed answer or a
 // No grants nothing. Returns its path, or undefined when it wrote none (a failed write leaves the relay block).
 // `by`: this coordinator's session id, whose transcript the hook reads for the answer (a grant no answer backs takes nothing).
+// An ask with session and no action is a start ask: its Yes writes a land grant instead (land-*.json, kind land), which
+// that session's hook takes once for `gh pr merge N --auto --rebase` on its own branch; voidGrants leaves it.
 async function writeGrant($: EngineInterface, a: Ask, option: string) {
-  if (!a.action || !a.session || !a.options.includes(option) || !/^yes\b/i.test(option.trim())) return undefined
+  if (!a.session || !a.options.includes(option) || !/^yes\b/i.test(option.trim())) return undefined
   const by = await $.session.id().catch(() => '')
   if (!by) return undefined
   const at = Math.floor((await $.clock.now()) / 1000)
-  const f = `${await homePath($, GRANTS_DIR)}/act-${a.id.replace(/[^A-Za-z0-9_-]/g, '')}-${at}.json`
-  const grant = { kind: 'action', session: a.session, key: a.key, action: oneLine(a.action), quote: answerText(a, option), at, by }
+  const f = `${await homePath($, GRANTS_DIR)}/${a.action ? 'act' : 'land'}-${a.id.replace(/[^A-Za-z0-9_-]/g, '')}-${at}.json`
+  const grant = a.action
+    ? { kind: 'action', session: a.session, key: a.key, action: oneLine(a.action), quote: answerText(a, option), at, by }
+    : { kind: 'land', session: a.session, key: a.key, quote: answerText(a, option), at, by }
   return $.fs.write(f, JSON.stringify(grant)).then(() => f, () => undefined)
 }
 // A grant whose answer wasn't sent: removed, so the session can't act on a Yes the coordinator never got.
@@ -2125,8 +2130,8 @@ export const register: Register = on => {
     if (action !== undefined && (typeof action !== 'string' || !action.trim() || /\n/.test(action) || clean(action) !== action)) {
       return { deny: 'ask_approval: action is one non-empty line, with no control or bidi characters.' }
     }
-    if (session !== undefined && (!isSessionRef(session) || action === undefined)) {
-      return { deny: 'ask_approval: session goes with action, and is the name (or id) of the session that runs it: letters, digits, ".", "_" and "-" only.' }
+    if (session !== undefined && !isSessionRef(session)) {
+      return { deny: 'ask_approval: session is the name (or id) of the session that runs the action, or that a start ask starts: letters, digits, ".", "_" and "-" only.' }
     }
     // A yes to a post without its body leaves the worker nothing to post: it takes a second ask (approvals.md).
     const posts = (s: string) => /^\s*post\s+comment\b/i.test(s) || /\bclose\b[^\n]*\bwith(?:\s+[\w-]+){0,3}?\s+comment\b/i.test(s)
@@ -2368,7 +2373,7 @@ export const register: Register = on => {
       const sent: Ask[] = [], failed: string[] = []
       for (const [a, y] of claimed) {
         await voidGrants($, a.key)
-        const grant = await writeGrant($, a, y)
+        const grant = a.action ? await writeGrant($, a, y) : undefined // a merge ask's yes is no start ask's land grant
         const r = await $.prompt.submit({ text: answerText(a, y), asUser: true })
           .catch((e: unknown) => ({ drop: e instanceof Error ? e.message : String(e) }))
         if (r.drop === undefined) sent.push(a)
@@ -2913,7 +2918,7 @@ export const register: Register = on => {
               <Text bold wrap="wrap">{draw(kindBadge(a))}{clean(a.question)}</Text>
               {a.target && <Text wrap="wrap"><Text dimColor>target </Text>{a.target}</Text>}
               {a.action && <Text wrap="wrap"><Text dimColor>action </Text>{a.action}</Text>}
-              {a.action && a.session && <Text wrap="wrap"><Text dimColor>Runs in: </Text>{a.session}</Text>}
+              {a.session && <Text wrap="wrap"><Text dimColor>{a.action ? 'Runs in: ' : 'Starts, may land its PR: '}</Text>{a.session}</Text>}
               {a.body && <Text dimColor wrap="wrap">body {clean(a.body.path)} · sha256 {a.body.sha256}</Text>}
               {a.body && (
                 <Box flexDirection="column" borderStyle="single" borderColor="inactive" paddingX={1}>

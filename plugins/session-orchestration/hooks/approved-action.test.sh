@@ -1020,7 +1020,7 @@ unset GH_STUB GH_USER
 w=$tmp/granted.jsonl; jq -nc '{type: "agent-name", agentName: "app-fix"}' > "$w"
 gd=$home/.cache/session-status/grants; mkdir -p "$gd"; t0=$(date +%s)
 cby=cccccccc-0000-4000-8000-000000000000; ct=$home/.claude/projects/-coord/$cby.jsonl; mkdir -p "${ct%/*}"
-pane_row() { jq -nc --arg q "$1" '{type: "user", origin: {kind: "plugin", name: "session-orchestration"}, timestamp: (now | todate), message: {content: $q}}' >> "$ct"; }
+pane_row() { jq -nc --arg q "$1" '{type: "user", origin: {kind: "plugin", name: "session-orchestration"}, timestamp: (now | todate), message: {content: $q}}' >> "${2:-$ct}"; }
 grant() { # $1 file, $2 session, $3 action, [$4 at, $5 kind, $6 by ('' none), $7 nopane: no pane row for its quote]
   local q="Approval pane answer for app-fix: Yes. Asked: Go? Action: $3"
   jq -nc --arg s "$2" --arg a "$3" --arg q "$q" --argjson at "${4:-$t0}" --arg k "${5:-action}" --arg by "${6-$cby}" \
@@ -1059,5 +1059,37 @@ check "gh pr merge 72 -R acme/app" deny "a pane grant whose Yes a newer pane ans
 grant act-n-1.json app-fix "merge acme/app#73 (app-fix)"
 jq -c '.action = "merge acme/app#74 (app-fix)"' "$gd/act-n-1.json" > "$tmp/g.json" && mv "$tmp/g.json" "$gd/act-n-1.json"
 check "gh pr merge 74 -R acme/app" deny "a grant pairing a real Yes with another action"
+# A land grant (register.tsx writeGrant, a start ask's Yes): this session's own PR lands with gh pr merge N --auto
+# --rebase (or --rebase), once, with no relay. Own PR: gh's headRefName ($GH_STUB, as -q prints it) is the session's
+# name (app-fix) or the cwd's branch (wt-branch).
+git init -q "$root" && git -C "$root" checkout -q -b wt-branch
+land() { # $1 file, [$2 by, $3 nopane, $4 the by transcript, $5 the quote's end]
+  local q="Approval pane answer for land-key: Yes, start it. Asked: Start app-fix (${1%%-1.json})?${5- Starts: app-fix}"   # its own quote
+  rm -f "$gd"/land-*
+  jq -nc --arg q "$q" --argjson at "$t0" --arg by "${2-$cby}" '{kind: "land", session: "app-fix", key: "land-key", quote: $q, at: $at, by: $by}' > "$gd/$1"
+  [ "${3-}" = nopane ] || pane_row "$q" "${4-}"
+}
+land land-e-1.json "$cby" '' '' " Action: merge acme/app#79 (land-key)"
+GH_STUB=app-fix check "gh pr merge 79 -R acme/app --auto --rebase" deny "a land grant quoting a Yes that started no session (no Starts: app-fix)"
+land land-f-1.json
+GH_STUB=wt-branch check "gh pr merge 78 -R acme/app --rebase" allow "a land grant, the cwd's branch, plain --rebase (a clean PR)"
+land land-a-1.json
+export GH_STUB=app-fix
+check "gh pr merge 80 -R acme/app --merge" deny "a land grant takes no other merge method"
+check "gh pr merge 80 -R acme/app --auto --rebase --delete-branch" deny "a land grant takes no other flag"
+GH_STUB=other-branch check "gh pr merge 81 -R acme/app --auto --rebase" deny "a land grant, another branch's PR"
+pane_row "Approval pane answer for land-key: No. Asked: Merge now?"
+check "gh pr merge 80 -R acme/app --auto --rebase" allow "a land grant, the session's own PR, a later No for its key"
+check "gh pr merge 80 -R acme/app --auto --rebase" deny "a land grant used twice"
+check "gh pr merge 82 -R acme/app --auto --rebase" deny "a used land grant, another own-branch PR"
+land land-b-1.json "$cby" nopane
+check "gh pr merge 83 -R acme/app --auto --rebase" deny "a land grant whose by transcript lacks the pane answer"
+bgby=bbbbbbbb-0000-4000-8000-000000000000; bgt=${ct%/*}/$bgby.jsonl
+jq -nc '{type: "user", sessionKind: "bg", message: {content: "Act as a coordinator"}}' > "$bgt"
+land land-c-1.json "$bgby" '' "$bgt"
+check "gh pr merge 84 -R acme/app --auto --rebase" deny "a background coordinator's land grant"
+land land-d-1.json
+check "gh pr merge 85 -R acme/app --auto --rebase" allow "a fresh land grant from an interactive coordinator"
+unset GH_STUB; rm -rf "$root/.git"
 w=$w0
 echo ok

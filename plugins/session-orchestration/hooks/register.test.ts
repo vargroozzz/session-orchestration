@@ -326,8 +326,7 @@ test('a Yes click on an ask with action and session writes its grant before the 
   let said = ''
   on('tool.call', { tool: 'AskUserQuestion' }, async (_, e) => ({ result: { questions: e.questions, answers: Object.fromEntries(e.questions.map(q => [q.question, said])) } }))
   const ask = (key: string, extra = {}) => $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key, question: `Land ${key}?`, options: ['Yes, merge it', 'No'], action: `merge acme/app#2 (${key})`, ...extra })
-  expect((await ask('PROJ-0', { session: 'a b' })).deny).toMatch(/session goes with action/)
-  expect((await $.tool.call({ tool: 'mcp__session-orchestration__ask_approval', key: 'PROJ-0', question: 'q', options: ['Yes', 'No'], session: 'PROJ-0' })).deny).toMatch(/session goes with action/)
+  expect((await ask('PROJ-0', { session: 'a b' })).deny).toMatch(/session is the name/)
   await $.tool.call({ tool: 'mcp__session-orchestration__open_pane' })
   // one ask waiting at a time, as the single-ask test answers it
   const click = async (key: string, button: string, extra = {}) => {
@@ -358,6 +357,19 @@ test('a Yes click on an ask with action and session writes its grant before the 
   drop = 'busy'
   await click('PROJ-5', 'ask-7-0', { session: '0a0a0a0a' })
   expect(order).toEqual([expect.stringMatching(/^grant \/h\/.cache\/session-status\/grants\/act-7-1000\.json /), 'rm /h/.cache/session-status/grants/act-7-1000.json'])
+  // A start ask (session, no action): its Yes writes a land grant, which a later answer for the key leaves.
+  drop = ''
+  const start = { tool: 'mcp__session-orchestration__ask_approval' as const, key: 'PROJ-8', question: 'Start PROJ-8-fix?', options: ['Yes, start it', 'No'], session: 'PROJ-8-fix' }
+  for (const button of ['ask-7-1', 'ask-8-0', 'ask-9-1']) { // the dropped ask's No first: one ask waits at a time
+    if (button !== 'ask-7-1') await $.tool.call(start)
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
+    await ui.press({ key: button })
+    await ui.unmount()
+    if (button === 'ask-7-1') order.length = 0
+  }
+  const lq = 'Approval pane answer for PROJ-8: Yes, start it. Asked: Start PROJ-8-fix? Starts: PROJ-8-fix'
+  expect(order[0]).toBe(`grant ${dir}/land-8-1000.json ${JSON.stringify({ kind: 'land', session: 'PROJ-8-fix', key: 'PROJ-8', quote: lq, at: 1000, by: 'sess-c' })}`)
+  expect([...grants.keys()]).toEqual([`${dir}/act-1-1000.json`, `${dir}/land-8-1000.json`])
 })
 
 const STATUS = `PROJ-4157  Code Review    app#76 OPEN no-human-approval  | wt dirty:0 unpushed:0 | sess:— | Race to settle
