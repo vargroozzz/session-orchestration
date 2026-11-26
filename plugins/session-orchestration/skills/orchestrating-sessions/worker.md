@@ -15,7 +15,9 @@ it returns who got it or where it was queued. No such tool (the plugin's module 
 - **A question:** the answer, at most 5 lines.
 
 Code, diffs, logs and file contents go in a file (the folder the project's `CLAUDE.md` names for it, if any): reply
-with its path.
+with its path. Write that file, and any code, with Write or Edit (or reply's `report`), never through a heredoc into
+python3 or another interpreter: the approval hook reads a command whole and refuses one that names `gh` beside an
+interpreter.
 
 Between accepting a task and reporting on it, keep working. Don't end a turn by announcing the next step, offering to
 continue, or listing decisions that don't block the rest. End the turn when the task is done (send the status

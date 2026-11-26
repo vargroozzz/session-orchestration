@@ -181,6 +181,9 @@ user's call: ask before removing it.
 - **Nor is a session's progress.** Tell the user what finished, what's blocked and what waits on them; a progress
   update a session sends anyway stays with you.
 - **Check a session's wording against the project docs before repeating it** to the user.
+- **Run `gh` alone, or piped only into jq, grep, head, tail, wc, cut, tr, uniq or cat.** The approval hook refuses a
+  pipe into sed, awk or xargs, since that could run gh's output: a permission prompt for the user when you are
+  attended, a denial otherwise.
 - **A report page a reply names** (an HTML file): on `opened: yes` it is open; on `opened: no`, or no `opened:`
   line, open it yourself. Either way give the user its path.
 - **With `features.answers` on, an answer to the user's question also goes to a file** (not a status summary, not a
