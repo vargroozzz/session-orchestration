@@ -40,7 +40,7 @@ and no heading.
 
 | Section | `project` scope | `plugin` scope |
 |---------|-----------------|----------------|
-| `units` | $ and tokens per merged PR, finished ticket, review posted; time to done | the same over all projects, default commands only |
+| `units` | $ and tokens per merged PR, finished ticket, review posted; time to done; quality per merged PR (first-try CI green, changes requested, follow-ups) per kind | the same over all projects, default commands only |
 | `context` | base context, average per request, requests over 200K, resume forks | the same over all projects |
 | `waste` | refusals, retries, `!` handoffs, wrong relayed claims, lost reports, long waits | the same over all projects; the hook's split hints counted apart |
 | `spend` | no | where the week's spend goes by account, project, session, kind, model and trigger; rebuilds of big contexts, wakes, test runs, gh calls, handovers |
