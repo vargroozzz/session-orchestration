@@ -3,11 +3,12 @@
 # first prompt, as gastown's `gt prime` does, so Start needs no --start in the background, no wait for it and no
 # memory reads (orchestrating-sessions SKILL.md, Start).
 # - Fires only on a session's first prompt (no assistant line in its transcript yet) whose first line is `Act as a
-#   coordinator` (a successor's too), or `Coordinate KEY: …` (a sub-coordinator: the header alone, no --start).
-# - Part 1 runs `session-status --start` (env START_INJECT_BUDGET seconds, 120; past it the run is killed and the text
-#   says to run it as today) and writes the whole text to start-<sid>.md in the cache folder; parts 2 and 3 wait for
-#   that file. Text: a header, the project memory index and its coordinator.md topic (CLAUDE.md's `Project memory`
-#   line), then --start's output.
+#   coordinator` (a successor's too), or `Coordinate KEY: …` (a sub-coordinator: the header alone, no --start). Not
+#   in a project with its own status command (adapter status-names): its Start runs that, as before.
+# - Part 1 runs `session-status --start` (env START_INJECT_BUDGET seconds, 120; past it the run goes on, never killed
+#   mid-migration, and the text says how to wait for it) and writes the whole text to start-<sid>.md in the cache
+#   folder (files there over 3 days old are deleted); parts 2 and 3 wait for that file. Text: a header, --start's
+#   output, then the project memory index and its coordinator.md topic (CLAUDE.md's `Project memory` line).
 # - Claude Code saves an additionalContext over 10,000 characters to a file and shows a preview, so each part carries
 #   one piece of at most 9,500 bytes, cut at line ends; part 3 points to the file when the text needs more pieces.
 # Self-test: bash start-inject.test.sh
@@ -31,28 +32,35 @@ if [[ $first =~ ^[[:space:]]*Coordinate\  ]]; then
   exit 0
 fi
 [[ $first == 'Act as a coordinator'* ]] || exit 0
+# a project with its own status command (adapter status-names) runs Start as before: the hook can't call it
+. "$here/../lib.sh"; a=$(adapter_path . 2>/dev/null)
+[ -z "$a" ] || [ -z "$("$a" status-names 2>/dev/null)" ] || exit 0
 if [ "$part" = 1 ]; then
-  mkdir -p "$d"; budget=${START_INJECT_BUDGET:-120} out=$d/start-$sid.out
-  set -m   # its own process group, so a run past the budget is stopped with its children
-  (CLAUDE_CODE_SESSION_ID=$sid bash "$ss" --start > "$out" 2>&1; echo "$?" > "$out.rc") & pid=$!; set +m
+  mkdir -p "$d"; rm -f "$f"; budget=${START_INJECT_BUDGET:-120} out=$d/start-$sid.$$.out   # per run: a retried prompt never reads an older run's files
+  find "$d" -maxdepth 1 -name 'start-*' -mtime +3 -delete 2>/dev/null
+  set -m   # its own process group: a run past the budget (or the hook's end) goes on; --start may be migrating files
+  (CLAUDE_CODE_SESSION_ID=$sid bash "$ss" --start > "$out" 2>&1; echo "$?" > "$out.rc.tmp"; mv -f "$out.rc.tmp" "$out.rc") </dev/null & set +m
   i=0; while [ ! -e "$out.rc" ] && (( i < budget * 2 )); do sleep 0.5; i=$((i + 1)); done
-  . "$here/../lib.sh"; root=$(find_root)
-  mem=$(sed -nE 's/.*Project memory[^`]*`([^`]+)`.*/\1/p' "$root/CLAUDE.md" "$root/CLAUDE.local.md" 2>/dev/null | head -1)
+  root=$(find_root)
+  mem=$(sed -nE 's/.*Project memory[^`]*`([^`]+)`.*/\1/p' "$root/CLAUDE.md" "$root/CLAUDE.local.md" "$root/.claude/CLAUDE.md" 2>/dev/null | head -1)
   mem=${mem/#\~/$HOME}; case $mem in ''|/*) ;; *) mem=$root/$mem ;; esac
   {
     echo "# Start context (session-orchestration hook)"
     echo "Injected at your first prompt so your Start needs no --start run and no memory reads (SKILL.md, Start). In your first batch: load the orchestrating-sessions skill, ToolSearch mcp__session-orchestration__open_pane, and Read the project's coordinator doc if its CLAUDE.md names one. Then go on from Start step 2 with the output below."
     if [ -e "$out.rc" ]; then rc=$(cat "$out.rc")
-      printf '\n## session-status --start (run by the hook%s)\n' "$([ "$rc" = 0 ] || echo ", exit $rc")"; cat "$out"
-    else { kill -- -"$pid"; kill "$pid"; wait "$pid"; } 2>/dev/null
-      printf '\n## session-status --start\n(not finished in %s s, so stopped: run it yourself as Start step 1 says, in the background)\n' "$budget"
+      printf '\n## session-status --start (run by the hook%s)\n' "$([ "$rc" = 0 ] || echo ", exit $rc")"; cat "$out"; rm -f "$out" "$out.rc"
+    else
+      printf '\n## session-status --start\n(still running after %s s, writing %s: in your first batch, wait for it as Bash run_in_background: `while [ ! -e %s.rc ]; do sleep 2; done; cat %s`, and use its output as Start step 3 says)\n' "$budget" "$out" "$out" "$out"
     fi
+    if [ -z "$mem" ]; then printf '\n(no `Project memory` line in CLAUDE.md: read the memory files yourself, if the project has any)\n'; fi
     for m in "$mem" "${mem%/*}/memory/coordinator.md"; do
       [ -n "$mem" ] && [ -f "$m" ] && printf '\n## %s\n%s\n' "$m" "$(cat "$m")"
     done
-  } > "$f.$$"; mv -f "$f.$$" "$f"; rm -f "$out" "$out.rc"
+  } > "$f.$$"; mv -f "$f.$$" "$f"
 else
-  i=0; while [ ! -s "$f" ] && (( i < 280 )); do sleep 0.5; i=$((i + 1)); done; [ -s "$f" ] || exit 0
+  # only a text written since this prompt (a second's grace: part 1 may beat this part's start), not an earlier try's
+  t0=$(( $(date +%s) - 1 )); fresh() { local m; [ -s "$f" ] && m=$(mtime "$f" 2>/dev/null) && (( m >= t0 )); }
+  i=0; while ! fresh && (( i < 280 )); do sleep 0.5; i=$((i + 1)); done; fresh || exit 0
 fi
 # piece N of the text, at most lim bytes, cut at line ends (a longer line cut at lim); stderr: the count and the line
 # piece N starts at
