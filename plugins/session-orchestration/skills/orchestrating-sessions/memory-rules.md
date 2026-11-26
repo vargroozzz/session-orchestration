@@ -58,8 +58,8 @@ Sessions append to it; you prune it.
 - **Graduation** moves an entry into the project doc that owns its situation once it has proved itself: old enough
   and still true, or cited by several sessions. The index states the project's thresholds and who runs it (e.g. the
   weekly retro proposes, a followups session applies). It edits a doc, so it's a session's job, not yours: the
-  session runs project-memory's `graduate` skill (`/graduate`), which also resolves open project cases and
-  deferred task files (in the folder `cases tasks` prints).
+  session runs project-memory's `graduate` skill (`/graduate`), which also resolves open project cases,
+  deferred task files (in the folder `cases tasks` prints) and skill drafts (`skill-drafts list`).
 - **A retro only measures and proposes** (the `retro` skill). When the user approves some of its proposals, start a
   fresh followups session for them (`session-status --launch retro-<scope>-<N>-followups --kind build --brief-file
   FILE`, from the report's name `retro-<scope>-<N>`; FILE's brief: that report in the replies folder plus the approved numbers, reporting in

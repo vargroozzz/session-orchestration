@@ -11,8 +11,8 @@ What you get:
   their sessions, PRs and pending decisions, and approvals as buttons;
 - a hook that lets a PR merge or a comment post through only with your approval (see [Hooks](#hooks));
 - through [project-memory](../project-memory/README.md), installed with it: project memory read by every session,
-  a `/graduate` pass into the docs, project friction cases, deferred tasks, and guards that keep background
-  sessions from stalling on a prompt nobody can answer;
+  a `/graduate` pass into the docs, project friction cases, deferred tasks, reviewed skill drafts, and guards that
+  keep background sessions from stalling on a prompt nobody can answer;
 - optional: a review inbox for proposed PR comments, a `retro` skill that measures how efficiently the sessions work, and a `research` skill that answers a question from outside sources and scans similar tools for ideas (`/research other-tools`; web searches with no personal details).
 
 **GitHub works out of the box** (tracker `github`, `gh`). Jira, Bitbucket and Forgejo need your own adapter and CLI
