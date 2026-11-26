@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Self-test for cases and memory-init, under a temp HOME and XDG_STATE_HOME. Prints "ok" or the failures.
+# Self-test for cases, skill-drafts and memory-init, under a temp HOME and XDG_STATE_HOME. Prints "ok" or the failures.
 set -u
 here=$(cd "$(dirname "$0")" && pwd); C=$here/cases M=$here/memory-init
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; T=$(cd "$T" && pwd -P)
@@ -46,6 +46,36 @@ mkdir -p "$T/ws/.claude" "$T/ws/repo" && echo '{}' > "$T/ws/.claude/coordination
 # ... also from a worktree outside it (the main checkout's set-up folder); root names it.
 (cd "$T/ws/repo" && git init -q && git commit -q --allow-empty -m x && git worktree add -q "$T/wt2" 2>/dev/null) || fail "worktree 2 setup"
 [ "$(cd "$T/wt2" && "$C" root)" = "$T/ws" ] || fail "worktree of a set-up repo: $(cd "$T/wt2" && "$C" root)"
+
+# skill-drafts: a draft lands beside the tasks folder, named by its frontmatter; a taken or bad name is refused;
+# sightings count; sweep archives the unused and restore brings one back; a scrub hit blocks promote, which copies the
+# draft without its seen file and archives it.
+unset SCRUB_DENY; export XDG_CONFIG_HOME=$T/config   # no real deny pattern
+SD=$here/skill-drafts D=$XDG_STATE_HOME/session-orchestration/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$T/app")/skill-drafts
+printf -- '---\nname: cut-release\ndescription: Use when cutting a release\n---\n\n1. Tag it.\n2. Push the tag.\n3. Announce it.\n' > "$T/d.md"
+p=$("$SD" add "$T/d.md" PROJ-1) && [ "$p" = "$D/cut-release/SKILL.md" ] && cmp -s "$T/d.md" "$p" || fail "drafts add: $p"
+"$SD" add "$T/d.md" PROJ-2 2>/dev/null; [ $? = 3 ] || fail "drafts add, a taken name"
+printf -- '---\nname: ../x\ndescription: d\n---\n' > "$T/bad.md"; "$SD" add "$T/bad.md" PROJ-2 2>/dev/null; [ $? = 2 ] || fail "drafts add, a path as a name"
+printf -- '---\nname: folded\ndescription: >-\n  d\n---\n' > "$T/bad.md"; "$SD" add "$T/bad.md" PROJ-2 2>/dev/null; [ $? = 2 ] || fail "drafts add, a folded description"
+"$SD" seen cut-release PROJ-2 && "$SD" seen cut-release PROJ-2
+[ "$("$SD" list)" = "2"$'\t'"$today"$'\t'"$p"$'\t''Use when cutting a release' ] || fail "drafts list: $("$SD" list)"
+printf -- '---\nname: old-one\ndescription: x\n---\n' > "$T/o.md" && "$SD" add "$T/o.md" PROJ-3 >/dev/null && echo '2026-01-01 PROJ-3' > "$D/old-one/seen"
+[ "$("$SD" sweep)" = old-one ] && [ "$("$SD" list | cut -f3)" = "$p" ] && [ "$("$SD" list --archived | cut -f3)" = "$D/archive/old-one/SKILL.md" ] ||
+  fail "drafts sweep: $("$SD" list --archived)"
+"$SD" restore old-one && [ -f "$D/old-one/SKILL.md" ] && [ -z "$("$SD" sweep)" ] && [ "$("$SD" list | grep old-one | cut -f1)" = 1 ] ||
+  fail "drafts restore: $("$SD" list)"
+# A draft with no sighting: - for its last seen, and sweep archives that one (a / in its description is no path).
+printf -- '---\nname: never-seen\ndescription: deploys/staging steps\n---\n' > "$T/n.md" && "$SD" add "$T/n.md" PROJ-4 >/dev/null && : > "$D/never-seen/seen"
+[ "$("$SD" list | grep never-seen | cut -f1,2)" = "0"$'\t''-' ] && [ "$("$SD" sweep 2>&1)" = never-seen ] && [ -d "$D/archive/never-seen" ] ||
+  fail "sweep, a draft never seen: $("$SD" list --archived)"
+echo "Run it from $HOME/app." >> "$p"
+"$SD" promote cut-release "$T/app/.claude/skills" >/dev/null 2>&1; [ $? = 1 ] && [ ! -e "$T/app/.claude/skills" ] || fail "promote past a scrub hit"
+sed -i.bak '$d' "$p" && rm -f "$p.bak"
+echo 'Ask Acme first.' >> "$D/old-one/SKILL.md"; SCRUB_DENY='acme' "$SD" scrub old-one >/dev/null; [ $? = 1 ] || fail "scrub, SCRUB_DENY"
+# A deny pattern grep can't read fails the scrub, and promote with it.
+SCRUB_DENY='hi(' "$SD" promote cut-release "$T/app/.claude/skills" >/dev/null 2>&1; [ $? = 2 ] && [ ! -e "$T/app/.claude/skills" ] || fail "promote, a bad deny pattern"
+s=$("$SD" promote cut-release "$T/app/.claude/skills") && [ "$s" = "$T/app/.claude/skills/cut-release/SKILL.md" ] && cmp -s "$T/d.md" "$s" &&
+  [ ! -e "$T/app/.claude/skills/cut-release/seen" ] && [ ! -e "$D/cut-release" ] && grep -q 'promoted to' "$D/archive/cut-release/seen" || fail "promote: $s"
 
 # memory-init: the index with a row per topic and misc last, a topic file each; a dry run writes nothing; existing
 # files are kept.

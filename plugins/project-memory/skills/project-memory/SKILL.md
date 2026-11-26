@@ -1,6 +1,6 @@
 ---
 name: project-memory
-description: A project's shared memory across sessions, and its friction cases. Use when CLAUDE.md names a project memory file (read it at task start, append what another task needs), on "remember this" about the project, to set it up, or the moment the project (hosts, sign-ins, docs, scripts, setup) cost you a workaround, round trip, whole-tree search or the user's help, on any task, coding or not.
+description: A project's shared memory across sessions, its friction cases and skill drafts. Use when CLAUDE.md names a project memory file (read it at task start, append what another task needs), on "remember this" about the project, to set it up, the moment the project (hosts, sign-ins, docs, scripts, setup) cost you a workaround, round trip, whole-tree search or the user's help, on any task, coding or not, or when a procedure of 3+ steps no skill covers comes up a second time (a skill draft).
 ---
 
 # Project memory
@@ -93,3 +93,24 @@ into fixes.
 An out-of-scope bug, feature or refactor you notice goes to the tasks folder `cases tasks` prints
 ([defer-task](../defer-task/SKILL.md));
 the graduate pass sweeps them too.
+
+## Skill drafts
+
+A procedure sessions keep repeating becomes a skill only on the user's yes. Until then it is a draft in the project's
+state folder (`skill-drafts dir`, beside the tasks folder), never in the repo, so no session loads it.
+
+Write a draft when a procedure of three or more steps that no skill or doc covers comes up a second time:
+
+- you ran it twice in this task (the same steps for a second item, or again after a fix), or
+- an earlier session left its trace: memory entries that are its steps, a case about it, a doc that gives only part, or
+- your memory append makes a topic's entries the steps of one procedure.
+
+First `skill-drafts list`: if a draft already covers it, record the sighting with `skill-drafts seen NAME TASK`, and
+Edit its SKILL.md where its steps were wrong or missing. Otherwise write a SKILL.md in your scratch folder (frontmatter
+`name:` lowercase-and-hyphens, a `description:` saying when to use it, then the steps as they worked, in the project's
+own terms) and run `skill-drafts add FILE TASK`. Leave out one task's keys and any names: approval's scrub catches
+only your home path, login, host, git name and email.
+
+`skill-drafts` is beside this file; alone, it prints its usage. The [graduate](../graduate/SKILL.md) pass archives
+drafts no one saw for 30 days (`skill-drafts sweep`; `restore` brings one back, nothing is deleted), shows the rest for
+the user's yes, and on a yes runs `skill-drafts promote`, which refuses a draft its scrub flags.
