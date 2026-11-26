@@ -1600,16 +1600,20 @@ rmdir "$ib.lock"; rm -f "$ib.held"
 as "$x" --inbox --read all >/dev/null
 # Held reports (the reply tool's hold): refused (exit 4) while no coordinator watcher runs; while one does, they end its
 # long nap and reach it in one wake with their text, marked read, and it drops its running mark on exit.
+# o, the project's coordinator (proj-coordinator), runs the watcher: held only for it (session-status --coordinator)
+setacct cfg "$(sess "$o" proj-coordinator idle 1 interactive)"; echo '{"type":"assistant","input":{"command":"session-status --watch"}}' > "$proj/$o.jsonl"
 rc=0; printf 'early' | as "$z" --inbox-add --hold "$z" >/dev/null 2>&1 || rc=$?
 [ "$rc" = 4 ] && [ "$(grep -c '^## ' "$ib")" = 16 ] || { echo "--inbox-add --hold with no watcher: $rc"; exit 1; }
 as "$x" --changes >/dev/null; s=$SECONDS
 (SESSION_STATUS_CONFIRM_S=2 SESSION_STATUS_TICK_S=1 as "$x" --watch --every 600 > "$tmp/wout" 2>&1) & w=$!
 for _ in $(seq 100); do compgen -G "$tmp/.cache/session-status/*.watching" >/dev/null && break; sleep 0.1; done
 printf 'PROJ-1 · b · idle' | as "$z" --inbox-add --hold "$z" >/dev/null && printf 'PROJ-2 · c · done\n# not a heading' | as "$z" --inbox-add --hold >/dev/null &&
-  wait "$w" && [ $((SECONDS - s)) -lt 60 ] && grep -q '^now:   \* 17 · unread · .* · held$' "$tmp/wout" && grep -q '^Held reports (sent together; already marked read):$' "$tmp/wout" &&
+  wait "$w" && [ $((SECONDS - s)) -lt 60 ] && grep -q '^Held reports (sent together; already marked read):$' "$tmp/wout" &&
+  grep -q '^## 17 · read · .* · held$' "$tmp/wout" && ! grep -q '^now:.* · held$' "$tmp/wout" && [ "$(as "$x" --changes | grep -c held)" = 0 ] &&
   grep -qx 'PROJ-1 · b · idle' "$tmp/wout" && grep -qx ' # not a heading' "$tmp/wout" && [ "$(grep -c '^## [0-9]* · unread · ' "$ib")" = 0 ] &&
   [ "$(grep -c ' · read · .* · held$' "$ib")" = 2 ] && ! compgen -G "$tmp/.cache/session-status/*.watching" >/dev/null ||
   { echo "held reports under --watch"; cat "$tmp/wout"; exit 1; }
+rm "$proj/$o.jsonl"
 # --report-file (the reply tool's report): the top of <replies>/<NAME>.md, its `## Handoff` and what follows kept.
 setacct cfg "$(sess "$o" p-coordinator idle 1 interactive),$(sess "$z" p-fix-thing-prev-2 idle 1)"
 rf=$root/replies/p-fix-thing.md

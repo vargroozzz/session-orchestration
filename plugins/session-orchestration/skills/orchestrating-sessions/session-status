@@ -636,15 +636,16 @@ coord_me() {
 }
 if [ "${1:-}" = --inbox-add ]; then
   shift; from= to=
-  usage="usage: session-status --inbox-add [--from WHO] [SENDER_ID] < TEXT | --inbox-add --root DIR < TEXT"
+  usage="usage: session-status --inbox-add [--from WHO] [--hold] [SENDER_ID] < TEXT | --inbox-add --root DIR < TEXT"
   case ${1:-} in
     --from) from=${2:-}; shift 2 ;;
     --root) to=${2:-}; [ -n "$to" ] && [ $# = 2 ] || { echo "$usage" >&2; exit 2; }; shift 2 ;;
   esac
   hold=; [ "${1:-}" != --hold ] || { hold=1; shift; }
   body=$(cat); [ -n "${body//[[:space:]]/}" ] && [ "${1:-}" != --root ] || { echo "$usage" >&2; exit 2; }
-  # no watcher ticked in 5 minutes (none armed, or the coordinator is mid-turn): the sender sends it now instead
-  [ -z "$hold" ] || { [ -f "$WATCHING" ] && [ $(( $(date +%s) - $(mtime_named "$WATCHING" | cut -d' ' -f1) )) -lt 300 ]; } ||
+  # held only for the project's own coordinator (a live sub-coordinator of the sender's key gets it at once) while its watcher ticked in the last 5 min
+  fresh() { [ -f "$WATCHING" ] && [ $(( $(date +%s) - $(mtime_named "$WATCHING" | cut -d' ' -f1) )) -lt 300 ]; }
+  [ -z "$hold" ] || { fresh && [[ $(CLAUDE_CODE_SESSION_ID=${1:-${CLAUDE_CODE_SESSION_ID:-}} "$SELF" --coordinator 2>/dev/null | head -1) =~ ^($CNRE)$ ]]; } ||
     { echo "no coordinator watcher running: send it now" >&2; exit 4; }
   if [ -n "$to" ]; then
     # --root DIR: another project's coordinator inbox, under any account (features/accounts.md, Messaging another
@@ -670,6 +671,7 @@ if [ "${1:-}" = --inbox-add ]; then
     n=$(list_sessions | awk -F'\t' -v s="$1" '$1 == s { print $2; exit }'); from="${n:+\"$n\" }(${1:0:8})"
   fi
   mkdir -p "${f%/*}"; inbox_lock "$f"
+  [ -z "$hold" ] || fresh || { echo "no coordinator watcher running: send it now" >&2; exit 4; }   # re-checked under the lock held_out takes
   [ -f "$f" ] || printf '# Coordinator inbox\n\nMessages no live coordinator took. The next coordinator reads the unread ones (session-status --start, --inbox) and marks each read once acted on: session-status --inbox --read N.\n' > "$f"
   k=$(( $(awk '/^## [0-9]+ · / { n = $2 } END { print n + 0 }' "$f") + 1 ))
   # a `#` line in the text would read as a heading: indented
@@ -1685,8 +1687,10 @@ nap() {
     # watcher at every tick.
     if [ -z "${IDLE_SCOPE:-}" ]; then
       out=$("$SELF" --launch --due); [ -z "$out" ] || { usage wake wake "$(grep -c . <<<"$out")"; echo "$out"; held_out; exit 0; }
-      # a held report ends a long nap, not the confirm one: reports held meanwhile join the same wake
-      touch "$WATCHING"; [ -n "$seen" ] || [ ! -f "$HOLD_WAKE" ] || { rm -f "$HOLD_WAKE"; return 0; }
+      # a held report wakes the watcher CONFIRM_S after the first, so reports held meanwhile join it
+      touch "$WATCHING"; [ ! -f "$HOLD_WAKE" ] || { rm -f "$HOLD_WAKE"; held_due=${held_due:-$(( $(date +%s) + confirm ))}; }
+      if [ -n "${held_due:-}" ] && [ "$(date +%s)" -ge "$held_due" ]; then held_due=; out=$(held_out)
+        [ -z "$out" ] || { usage wake wake 1; echo "${out#$'\n'}"; exit 0; }; touch "$WATCHING"; fi
     fi
     if [ -z "${IDLE_SCOPE:-}" ] && [ "$(date +%s)" -ge "$link_next" ] && compgen -G "$LINKS/*.json" >/dev/null; then
       link_next=$(( $(date +%s) + LINK_POLL_S )); [ -z "$("$SELF" --link fetch 2>/dev/null)" ] || return 0
@@ -1712,6 +1716,8 @@ if [ "${1:-}" = --watch ]; then
   # the coordinator's watcher: the reply tool holds reports for it only while it runs (held_out)
   if [ -z "$IDLE_SCOPE" ]; then
     mkdir -p "${WATCHING%/*}"; touch "$WATCHING"; rm -f "$HOLD_WAKE"; trap 'r=$?; rm -f "$WATCHING"; exit_fault $r' EXIT
+    # leftovers of a killed watcher go at the first tick
+    grep -q '^## [0-9]* · unread · .* · held$' "$(inbox_file)" 2>/dev/null && held_due=$(date +%s)
   fi
   while :; do
     if [ -n "$seen" ]; then out=$(SESSION_STATUS_FORWARD=1 "$SELF" --changes "$@"); else out=$(SESSION_STATUS_PEEK=1 "$SELF" --changes "$@"); fi; rc=$?
@@ -2014,10 +2020,8 @@ if [ "${1:-}" = --changes ]; then
   fi
   # The coordinator inbox's unread headings (a message no live coordinator took): one appearing is news.
   u=$(inbox_unread | grep '^## ' | cut -c4-)
-  h=$(grep ' · held$' <<<"$u"); u=$(grep -v ' · held$' <<<"$u")
+  u=$(grep -v ' · held$' <<<"$u")
   [ -z "$u" ] || { new+=$'\nInbox (act on each, then mark it read: session-status --inbox --read N):'; while IFS= read -r l; do new+=$'\n  * '"$l"; done <<<"$u"; }
-  # held reports: their text follows the watcher's wake (held_out)
-  [ -z "$h" ] || { new+=$'\nHeld:'; while IFS= read -r l; do new+=$'\n  * '"$l"; done <<<"$h"; }
   # The plugin coordinator's (features/plugin-coordinator.md): each open plugin case is a line, so a new one is news;
   # by path, since list's order moves a case another session saw again.
   if [ "$(plugin_root)" = "$ROOT" ]; then
@@ -2169,7 +2173,7 @@ if [ "${1:-}" = --changes ]; then
         /^was:   ".*" \(.*attach [0-9a-f]+\)( — blocked: .*)?$/ { match($0, /attach [0-9a-f]+\)/); id = substr($0, RSTART + 7, RLENGTH - 8)
           if (id in live && live[id] != "done") drop[NR] }
         END {
-          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(act on each, then mark it read: session-status --inbox --read N\):|Held:|Feedback \(feedback list --plugin\):|Issues \(feedback issues\):|Under .*-coordinator:)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
+          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(act on each, then mark it read: session-status --inbox --read N\):|Feedback \(feedback list --plugin\):|Issues \(feedback issues\):|Under .*-coordinator:)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
           for (i = 1; i <= NR; i++) if (!(i in drop)) print line[i] }'; echo "$ev"; } | grep . || echo "no changes"
   else
     echo "$new"; [ -z "$ev" ] || printf '\n%s\n' "$ev"
