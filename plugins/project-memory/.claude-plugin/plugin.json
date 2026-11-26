@@ -1,6 +1,6 @@
 {
   "name": "project-memory",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "What one Claude Code session learns, the next one knows: a project memory index with topic files, a /graduate pass that moves proven entries into the docs, project friction cases, deferred tasks, skill drafts made skills on your yes, and guards that keep background sessions from waiting on a dialog nobody sees.",
   "author": { "name": "vargroozzz" },
   "license": "MIT",
