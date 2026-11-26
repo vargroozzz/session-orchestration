@@ -1,16 +1,22 @@
 #!/bin/bash
-# Retro launcher: starts one background session per retro scope in a project root, when a run is due.
+# Retro launcher: starts a retro run per scope in a project root, when it is due: one background session per section
+# group (retro.py sections --groups), and once they are all done one writer.
 #   retro-run ROOT [--scope project|plugin|both] [--now] [--dry-run]
-#                         start the scope's session(s) (retro.scope; both = one session each) whose run is due: its
-#                         stamp (last start) is older than retro.schedule's most recent due time. --now skips the
-#                         check; retro.schedule unset: no check (the caller is the schedule, e.g. an old cron line).
-#                         --dry-run prints the verdict and the start line and starts nothing. Each start prints
-#                         `started "NAME" (ID8) · retro M/E`, or `"NAME" didn't start: WHY`; exit 1 when any scope didn't.
+#                         start the run of each scope (retro.scope; both = one run each) that is due: its stamp (last
+#                         start) is older than retro.schedule's most recent due time. --now skips the check;
+#                         retro.schedule unset: no check (the caller is the schedule, e.g. an old cron line). A run gets
+#                         <R>/retro/<scope>-<N>/ with run.json, then one session per group. --dry-run prints the
+#                         verdict, the group plan and the start lines and starts nothing. Each start prints
+#                         `started "NAME" (ID8) · retro M/E`, or `"NAME" didn't start: WHY` (its group's status file
+#                         says `failed: didn't start`); exit 1 when any didn't. A call first joins its scope's open runs.
+#   retro-run --join DIR         a section's last step: under DIR/join.lock, start the writer once no group runs (a
+#                                status file: finished; none: running while its session is listed, else missing), once
 #   retro-run --install ROOT     write and load the LaunchAgent (features.retro true, retro.schedule set); run it again
 #                                after changing retro.schedule or retro.account
 #   retro-run --uninstall ROOT   unload and delete it
 #   retro-run --status [ROOT]    label, loaded, schedule, account, last start and next due, an overdue line when the
-#                                newest report is over 8 days old (no ROOT: every agent)
+#                                newest report is over 8 days old, and each open run (no report yet) with its groups'
+#                                and writer's state (no ROOT: every agent)
 # The agent calls `retro-run --scheduled ROOT` at its calendar time (launchd starts a time missed in sleep at wake) and
 # at each login (RunAtLoad: catches a time missed while off or logged out); the due check makes the extra calls no-ops.
 # Its first stamp is the newest report's time (retro-<scope>-<N>.md, rnd-run-<N>.md), else now: a missed run starts at
@@ -25,24 +31,25 @@ ss=$here/../orchestrating-sessions/session-status
 if [ "$(uname)" = Darwin ]; then logdir=$HOME/Library/Logs; else logdir=${XDG_STATE_HOME:-$HOME/.local/state}; fi
 LOG=${RETRO_LOG:-$logdir/retro-run.log}
 agents=$HOME/Library/LaunchAgents
-usage="usage: retro-run ROOT [--scope project|plugin|both] [--now] [--dry-run] | --install ROOT | --uninstall ROOT | --status [ROOT]"
+usage="usage: retro-run ROOT [--scope project|plugin|both] [--now] [--dry-run] | --join DIR | --install ROOT | --uninstall ROOT | --status [ROOT]"
 log() { mkdir -p "$(dirname "$LOG")"; echo "$(date '+%F %T') $*" >> "$LOG"; }
 # say LINE: a start's line on stdout and in the log; under the LaunchAgent stdout is the log, so only once
 say() { log "$1"; [ -n "$sched" ] || echo "$1"; }
 
-mode=run root= scope= now= dry= sched=
+mode=run root= scope= now= dry= sched= jdir=
 while [ $# -gt 0 ]; do
   case $1 in
     --install|--uninstall|--status) mode=${1#--} ;;
     --scheduled) sched=1 ;; --now) now=1 ;; --dry-run) dry=1 ;;
     --scope) scope=${2:?$usage}; shift ;;
+    --join) mode=join; jdir=${2:?$usage}; shift ;;
     -*) echo "$usage" >&2; exit 2 ;;
     *) root=$1 ;;
   esac
   shift
 done
 case $scope in ''|project|plugin|both) ;; *) echo "$usage" >&2; exit 2 ;; esac
-[ -n "$root" ] || [ "$mode" = status ] || { echo "$usage" >&2; exit 2; }
+[ -n "$root" ] || [ "$mode" = status ] || [ "$mode" = join ] || { echo "$usage" >&2; exit 2; }
 if [ -n "$root" ]; then
   r=$(cd "$root" 2>/dev/null && pwd -P) || { log "no project root $root"; echo "no project root $root" >&2; exit 1; }
   root=$r
@@ -91,6 +98,86 @@ scopes() {
   fi
   [ "$s" = both ] && echo project plugin || echo "$s"
 }
+iso() { python3 -I -c 'import sys,time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(sys.argv[1]))))' "$1"; }
+# words NAME: sets me to the start's model, effort, advisor and tool words, as session-status --kind gives them (a dry
+# run reads the config instead: --kind logs a start)
+words() {
+  local m a
+  if [ -n "$dry" ]; then
+    m=$(cfg plan.models.retro) && { a=$(cfg plan.advisor.retro 2>/dev/null) && (cd "$root" && advisor_ok "${m%%/*}" "$a") && a=" --advisor $a" || a=
+      m="--model ${m%%/*} --effort ${m#*/}$a$(cd "$root" && denied_tools retro)"; } || m=
+  else m=$(cd "$root" && bash "$ss" --kind retro "$1") || m=; fi
+  read -ra me <<<"$m"   # words, not globs: a [1m] model stays literal
+  [ ${#me[@]} = 0 ] || me=("${me[@]//\\/}")   # --kind prints them %q-escaped (opus\[1m\])
+}
+# start NAME TASK: one claude --bg in ROOT (--dry-run: print it); says its started or didn't-start line, sets sid (ID8).
+# stdout says what started, as session-status --launch does: a caller that sees nothing starts a duplicate.
+start() {
+  local out ok=0 line; words "$1"; sid=
+  if [ -n "$dry" ]; then printf '%q ' claude --bg ${me[@]+"${me[@]}"} -n "$1" "$2"; echo; return 0; fi
+  log "start $1 in $root${CLAUDE_CONFIG_DIR:+ under $CLAUDE_CONFIG_DIR}"
+  out=$(cd "$root" && claude --bg ${me[@]+"${me[@]}"} -n "$1" "$2" 2>&1) || ok=$?; [ -z "$out" ] || printf '%s\n' "$out" >> "$LOG"
+  sid=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1) || sid=; sid=${sid##* }
+  # exit 0 without the id still started (claude's wording may change): count it, or the next call starts it again
+  if [ -n "$sid" ] || [ "$ok" = 0 ]; then line="started \"$1\" (${sid:-no id}) · retro ${me[1]:+${me[1]}/${me[3]:-}}"; say "${line% }"
+  else say "\"$1\" didn't start: $(tail -1 <<<"${out:-claude --bg exited $ok}")"; return 1; fi
+}
+task() { echo "Session task: retro run, scope $1, $2, run $3. Use the session-orchestration:retro skill and follow it."; }
+# number SCOPE: sets N (this run: 1 + the highest of the scope's reports, project's rnd-run too, and run folders) and
+# BASE (the highest report's name, the baseline; none: empty), in R
+number() {
+  local x v hi=0 fs=("$R"/retro-"$1"-[0-9]*.md); BASE=
+  [ "$1" != project ] || fs+=("$R"/rnd-run-[0-9]*.md)
+  for x in "${fs[@]}"; do v=${x##*-}; v=${v%.md}; [ -e "$x" ] && [[ $v =~ ^[0-9]+$ ]] && (( v > hi )) && { hi=$v; BASE=${x##*/}; }; done
+  for x in "$R"/retro/"$1"-[0-9]*; do v=${x##*-}; [ -d "$x" ] && [[ $v =~ ^[0-9]+$ ]] && (( v > hi )) && hi=$v; done
+  N=$(( hi + 1 ))
+}
+# states DIR: GROUP<TAB>STATE per group of DIR's run.json: its status file's first line, else `running (ID8)` while
+# its session is listed and not done, stopped or failed, `missing (session ended)` once not, `unknown (no session listing)`
+# when the listing failed, `unknown (no session id)` before its start set one (or a start that printed none)
+states() {
+  local j g id st t listed=
+  j=$(cat "$1/run.json") || return 1
+  while IFS=$'\t' read -r g id; do
+    if [ -s "$1/sections/$g.status" ]; then st=$(head -1 "$1/sections/$g.status")
+    elif [ -z "$id" ]; then st="unknown (no session id)"   # still starting: never read as ended
+    else
+      if [ -z "$listed" ]; then t=$(mktemp -d); listed=$(cd "$root" && TMP=$t list_sessions | awk -F'\t' '$3 !~ /^(done|stopped|failed)$/ { print $1 }'); [ ! -e "$t/ask.failed" ] || listed=failed; rm -rf "$t"; listed=${listed:-none}; fi
+      if [ "$listed" = failed ]; then st="unknown (no session listing)"
+      elif grep -q "^$id" <<<"$listed"; then st="running ($id)"
+      else st="missing (session ended)"; fi
+    fi
+    printf '%s\t%s\n' "$g" "$st"
+  done < <(jq -r '.groups | to_entries[] | [.key, .value.id // ""] | @tsv' <<<"$j")
+}
+# join DIR [quiet]: the writer's start, once: under DIR/join.lock, when no group is running (or unknown) and
+# writer.started doesn't exist, it creates that stamp and starts the writer; a failed start removes it. Not quiet,
+# a join that starts nothing says why.
+join() {
+  local lk=$1/join.lock got= rc=0
+  [ -f "$1/run.json" ] || { echo "no run.json in $1" >&2; return 1; }
+  # a lock older than 2 minutes is a killed join's
+  for _ in $(seq 60); do mkdir "$lk" 2>/dev/null && { got=1; break; }
+    [ -z "$(find "$lk" -mmin +2 2>/dev/null)" ] || rmdir "$lk" 2>/dev/null || true; sleep 1; done
+  [ -n "$got" ] || { echo "busy: another join holds $lk" >&2; return 1; }
+  joined "$@" || rc=$?
+  rmdir "$lk" 2>/dev/null || true
+  return "$rc"
+}
+joined() {
+  local d=$1 j wn st
+  j=$(cat "$d/run.json"); st=$(states "$d"); wn=$(jq -r .writer.name <<<"$j")
+  if [ -e "$d/writer.started" ]; then [ -n "${2:-}" ] || echo "writer \"$wn\" started already ($(cat "$d/writer.started"))"
+  elif grep -qE $'\t(running|unknown) ' <<<"$st"; then
+    [ -n "${2:-}" ] || echo "writer waits for: $(awk -F'\t' '$2 ~ /^(running|unknown) / { printf "%s%s %s", n++ ? ", " : "", $1, $2 }' <<<"$st")"
+  else
+    : > "$d/writer.started"
+    if start "$wn" "$(task "$(jq -r .scope <<<"$j")" "write the report" "$d")"; then echo "${sid:-no id}" > "$d/writer.started"
+    else rm -f "$d/writer.started"; return 1; fi
+  fi
+}
+# open SCOPE: the scope's run folders whose report isn't written yet, in R
+open() { local x; for x in "$R"/retro/"$1"-[0-9]*/run.json; do [ -f "$x" ] && [ ! -e "$R/retro-$1-$(jq -r .n "$x").md" ] && echo "${x%/run.json}"; done; return 0; }
 
 case $mode in
 run)
@@ -101,7 +188,10 @@ run)
       { log "skip $root: features.retro off or retro.schedule unset (retro-run --uninstall $root)"; exit 0; }
   fi
   lock=; trap 'unlock' EXIT
+  R=$(replies)
   for sc in $(scopes); do
+    # an open run whose sections all ended (the last one died before its join) gets its writer now
+    [ -n "$dry" ] || while IFS= read -r d <&3; do [ -e "$d/writer.started" ] || join "$d" quiet || rc=1; done 3< <(open "$sc")
     f=$(stamp "$sc"); mkdir -p "$(dirname "$f")"
     # one start per due time: a second call at the same minute (a leftover cron line, a wake with RunAtLoad) waits here
     # and then sees the first one's stamp. A lock older than a minute is a crashed call's.
@@ -117,31 +207,46 @@ run)
         continue
       fi
     fi
-    name=retro-$sc-$(date +%F)
-    task="Session task: retro run, scope $sc. Use the session-orchestration:retro skill and follow it."
+    # the run: its number and folder, the window's end (every section measures the same window), the group plan
+    date=$(date +%F); number "$sc"; dir=$R/retro/$sc-$N
+    plan=$(cd "$root" && python3 -I "$here/retro.py" sections --groups "$sc" $(cfg retro.sections)) ||
+      { say "\"retro-$sc-$date\" didn't start: retro.py sections --groups $sc failed"; rc=1; unlock; continue; }
+    split=; [ -z "$BASE" ] || split=$(jq -r '.until // empty' "$R/retro/$sc-${BASE//[^0-9]/}/run.json" 2>/dev/null) || split=
+    [ -n "$split" ] || [ -z "$BASE" ] || split=$(iso "$(python3 -I -c 'import os,sys; print(int(os.path.getmtime(sys.argv[1])))' "$R/$BASE")")
+    j=$(jq -n --arg scope "$sc" --argjson n "$N" --arg root "$root" --arg until "$(iso "$(clock)")" --arg split "$split" \
+      --arg base "$BASE" --arg plan "$plan" --arg date "$date" '
+      [$plan | splits("\n") | capture("^(?<g>[^:]+): (?<s>.+)$")] as $p
+      | {scope: $scope, n: $n, root: $root, until: $until, split: (if $split == "" then null else $split end),
+         baseline: (if $base == "" then null else $base end), started: $until,
+         groups: ([$p[] | select(.g != "writer") | {key: .g, value: {sections: (.s | split(" ")), name: "retro-\($scope)-\($date)-\(.g)", id: null}}] | from_entries),
+         writer: {name: "retro-\($scope)-\($date)", sections: [$p[] | select(.g == "writer") | .s | split(" ")[]]}}')
+    groups=$(jq -r '.groups | keys_unsorted[]' <<<"$j")
     if [ -n "$dry" ]; then   # --config: no start line for a run that starts nothing
-      me=$(cfg plan.models.retro) && { a=$(cfg plan.advisor.retro 2>/dev/null) && (cd "$root" && advisor_ok "${me%%/*}" "$a") && a=" --advisor $a" || a=
-        me="--model ${me%%/*} --effort ${me#*/}$a$(cd "$root" && denied_tools retro)"; } || me=   # --kind's --advisor and tools, as the real run gets them
-    else me=$(cd "$root" && bash "$ss" --kind retro "$name") || me=; fi
-    read -ra me <<<"$me"   # words, not globs: a [1m] model stays literal
-    [ ${#me[@]} = 0 ] || me=("${me[@]//\\/}")   # --kind prints them %q-escaped (opus\[1m\])
-    cmd=(claude --bg ${me[@]+"${me[@]}"} -n "$name" "$task")
-    if [ -n "$dry" ]; then echo "due: $sc"; printf '%q ' "${cmd[@]}"; echo; command -v claude || true; continue; fi
-    log "start $name in $root${CLAUDE_CONFIG_DIR:+ under $CLAUDE_CONFIG_DIR}"
-    old=$(cat "$f" 2>/dev/null) || old=
-    clock > "$f"; unlock   # claimed before the start; given back when it fails
-    # stdout says what started, as session-status --launch does: a caller that sees nothing starts a duplicate
-    ok=0; out=$(cd "$root" && "${cmd[@]}" 2>&1) || ok=$?; [ -z "$out" ] || printf '%s\n' "$out" >> "$LOG"
-    id=$(grep -oE 'backgrounded · [0-9a-f]{8}' <<<"$out" | tail -1) || id=; id=${id##* }
-    # exit 0 without the id still started (claude's wording may change): keep the stamp, or the next call starts it again
-    if [ -n "$id" ] || [ "$ok" = 0 ]; then
-      line="started \"$name\" (${id:-no id}) · retro ${me[1]:+${me[1]}/${me[3]:-}}"; say "${line% }"
-    else
-      say "\"$name\" didn't start: $(tail -1 <<<"${out:-claude --bg exited $ok}")"; rc=1
-      if [ -n "$old" ]; then echo "$old" > "$f"; else rm -f "$f"; fi
+      echo "due: $sc"; echo "run: $dir${BASE:+ (baseline $BASE)}"
+      for g in $groups; do grep "^$g: " <<<"$plan"; start "retro-$sc-$date-$g" "$(task "$sc" "section group $g" "$dir")"; done
+      echo "writer: $(jq -r '.writer.sections | if length > 0 then join(" ") else "(no sections of its own)" end' <<<"$j"), when $(wc -w <<<"$groups" | tr -d ' ') groups are done"
+      start "retro-$sc-$date" "$(task "$sc" "write the report" "$dir")"; command -v claude || true; continue
     fi
+    old=$(cat "$f" 2>/dev/null) || old=
+    mkdir -p "$dir/sections"; printf '%s\n' "$j" > "$dir/run.json"
+    clock > "$f"; unlock   # claimed before the starts; given back when none starts
+    k=0
+    for g in $groups; do
+      if start "retro-$sc-$date-$g" "$(task "$sc" "section group $g" "$dir")"; then
+        k=$((k + 1)); jq --arg g "$g" --arg id "$sid" '.groups[$g].id = (if $id == "" then null else $id end)' "$dir/run.json" > "$dir/run.json.$$" && mv "$dir/run.json.$$" "$dir/run.json"
+      else echo "failed: didn't start" > "$dir/sections/$g.status"; rc=1; fi
+    done
+    if [ -z "$groups" ]; then join "$dir" || rc=1   # only the writer's sections: it starts now
+    elif [ "$k" = 0 ]; then
+      rm -rf "$dir"; if [ -n "$old" ]; then echo "$old" > "$f"; else rm -f "$f"; fi
+    else say "writer: starts when $k groups are done (retro-run --status $root)"; fi
   done
   exit "${rc:-0}" ;;
+
+join)
+  d=$(cd "$jdir" 2>/dev/null && pwd -P) && root=$(jq -r .root "$d/run.json" 2>/dev/null) && [ -d "$root" ] ||
+    { echo "no retro run in $jdir (its run.json names the project root)" >&2; exit 1; }
+  use_account; join "$d" ;;
 
 install)
   command -v launchctl >/dev/null || { echo "no launchctl: --install is macOS only; on Linux use a cron line (the retro skill's Scheduling)" >&2; exit 1; }
@@ -233,6 +338,13 @@ status)
         [ "$newest" = 0 ] || [ $(( $(clock) - newest )) -le $(( 8 * 86400 )) ] ||
           echo "  $sc: retro overdue: newest report $(( ($(clock) - newest) / 86400 )) days old"
       done
+      # the open runs, every scope's: no report yet
+      R=$(replies)
+      for sc in project plugin; do while IFS= read -r d <&3; do   # fd 3: claude agents never eats the list
+        w="writer not started (retro-run --join $d)"
+        if [ -e "$d/writer.started" ]; then w=$(cat "$d/writer.started"); w="writer started (${w:-no id}), no report yet"; fi
+        echo "  run ${d##*/}: $(states "$d" | awk -F'\t' '{ printf "%s %s · ", $1, $2 }')$w"
+      done 3< <(open "$sc"); done
     )
   done ;;
 esac

@@ -36,9 +36,11 @@ changes. It only measures and proposes; the user approves.
   A proposal the retro filed as a plugin feedback case is the plugin coordinator's, not yours.
 - **The schedule**: `retro.schedule` takes effect once the plugin's `skills/retro/retro-run --install ROOT` loaded
   its LaunchAgent (macOS; setup proposes it, and the retro skill's Scheduling has Linux). It starts one session per
-  scope when a run is due, a time missed in sleep or while off included; `retro-run --status ROOT` shows the agent and
-  each scope's next due time.
+  section group of each scope when a run is due, a time missed in sleep or while off included, and a writer once
+  they all end; only the writer reports. `retro-run --status ROOT` shows the agent, each scope's next due time and
+  each open run (no report yet). A run whose groups all ended without a writer (`writer not started`): `retro-run
+  --join DIR` with the DIR that line names (the scope's next `retro-run` call does it too).
 - **An overdue run**: `--init --check` (and `retro-run --status ROOT`) prints `retro overdue (SCOPE): newest report N
   days old`. Tell the user once, with `retro-run --status ROOT`'s lines (an agent not loaded is the usual cause), and
   on their yes start it with `retro-run ROOT --now` from the plugin's `skills/retro/`. Its `started "NAME" (ID8)` line is the
-  start: don't start it again while `claude agents` doesn't list it yet. Rerun only a scope whose line says `didn't start` (`--scope S`).
+  start (one per group): don't start it again while `claude agents` doesn't list it yet. Rerun only a scope whose line says `didn't start` (`--scope S`).

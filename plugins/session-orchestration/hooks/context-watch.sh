@@ -4,7 +4,8 @@
 # (its last 256K, else its last 300 lines).
 # - Kind, from the first user prompt: a `Chunk: KEY/N` line (lib.sh chunk_of) is a chunk, `Act as a coordinator` a
 #   coordinator, `Coordinate KEY` a sub-coordinator (lib.sh sub_key: KEY's own coordinator; handoff.at.coordinator,
-#   the self-handover with its handoff in KEY-coordinator.md; never turned coordinator), `Session task: KEY review` a review (no messages), else a task (its `Session task: KEY` line names
+#   the self-handover with its handoff in KEY-coordinator.md; never turned coordinator), `Session task: KEY review` a review (no messages), `Session task: retro run, scope S, section group G` a section (key retro-S-G, handoff.at.task, its own
+#   mark text: cut the section short, no handover), else a task (its `Session task: KEY` line names
 #   it, else a `Work on KEY` start (lib.sh first_key), or a bare `KEY:` one in a coordinated project (an adapter or
 #   key_pattern), else a `Work on NAME` start naming its own -n name (a tracker-less project: keyed by NAME); a session with none isn't coordinated: no messages, until its name_session call finds a later
 #   `Session task: KEY` line in its tail). A task
@@ -73,6 +74,9 @@ else
     kind=subcoordinator key=$sk
   elif grep -q '^Act as a coordinator' <<<"$first"; then kind=coordinator
   elif grep -qE '^Session task: [^ ]+ review([.,;:!)]|$)' <<<"$first"; then kind=review
+  # a retro section (retro-run's split run): keyed by scope and group, its own mark text, no handover
+  elif c=$(grep -m1 -E '^Session task: retro run, scope [a-z]+, section group [a-z0-9_-]+' <<<"$first"); then
+    [[ $c =~ scope\ ([a-z]+),\ section\ group\ ([a-z0-9_-]+) ]]; kind=section key=retro-${BASH_REMATCH[1]}-${BASH_REMATCH[2]}
   else kind=task
     if c=$(grep -m1 -E '^Session task: ' <<<"$first"); then key=${c#Session task: }; key=${key%% *}
       # retro-run's `retro run, scope S`: one key per scope, or two scopes at once share one handoff file
@@ -94,7 +98,8 @@ fi
 thresholds() {   # at, hard and note for $kind, cached
   declare -F config >/dev/null || { cd "${cwd:-.}" 2>/dev/null; . "$here/../lib.sh"; }
   [ -n "$coord_memo" ] || coord_memo=$(coord_json 2>/dev/null)   # one merge for every config read, not one each
-  at=$(config "handoff.at.${kind#sub}" 2>/dev/null); after=$(config handoff.hard_after 2>/dev/null)
+  local k=${kind#sub}; [ "$k" != section ] || k=task   # a section marks where a task does
+  at=$(config "handoff.at.$k" 2>/dev/null); after=$(config handoff.hard_after 2>/dev/null)
   room=$(config handoff.stop_room 2>/dev/null); expect=$(config compact.window 2>/dev/null)
   read -r w from < <(compact_window "${CLAUDE_PROJECT_DIR:-$cwd}")   # project settings live at its root, not a subfolder
   hard=$(( at + after )); small=
@@ -121,7 +126,8 @@ fi
 emit() { jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName: $e, additionalContext: $m}}'; }
 # The card goes out with this firing's other text (say), else on exit; a prompt that is a message counts as one.
 card=
-if [ "$kind" != coordinator ] && [ ! -e "$s.card" ] && { [ "$kind $key" != 'task -' ] || [ -e "$s.msg" ] ||
+# a retro section sends nothing unasked: like a keyless task, its card waits for a message
+if [ "$kind" != coordinator ] && [ ! -e "$s.card" ] && { { [ "$kind $key" != 'task -' ] && [ "$kind" != section ]; } || [ -e "$s.msg" ] ||
   [[ $ev = UserPromptSubmit && $input == *'<cross-session-message from='* ]]; } && claim "$s.card"; then
   card=$(cat "$here/reply-card.txt") && card=${card//'{dir}'/"${here%/hooks}/skills/orchestrating-sessions"}
   trap '[ -z "$card" ] || emit "$card"' EXIT
@@ -198,6 +204,12 @@ if [ "${out%% *}" = coordinator ]; then kind=coordinator key=- n= re= card=; rm 
 [[ $ctx =~ ^[0-9]+$ ]] || exit 0
 texts
 k=$(( ctx / 1000 ))K
+if [ "$kind" = section ]; then   # no handover: the section's file says what it got, the writer goes on from there
+  cut="your retro section ends here, without a handover: write its sections/GROUP.md from what you have, what's left as one candidate proposal (a research task), its status file \`done: cut at mark\`, then \`retro-run --join\` on the run folder (the retro skill's Section session). Then end your turn."
+  if (( ctx > hard )); then claim "$s.hard" || exit 0; touch "$s.soft"; say "Context is at $k, past the hard stop. Stop now: $cut"
+  elif (( ctx > at )) && claim "$s.soft"; then say "Context is at $k: $cut"; fi
+  exit 0
+fi
 if (( ctx > hard )); then
   claim "$s.hard" || exit 0; touch "$s.soft"
   say "Context is at $k, past the hard stop. Stop now: start nothing else, write the handoff ($where) from what's on disk.$edits$tell Then end your turn."
