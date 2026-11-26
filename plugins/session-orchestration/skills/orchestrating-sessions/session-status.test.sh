@@ -3290,6 +3290,9 @@ bg='{"run_in_background":true,"command":"sleep 9"}'
 { turn 1 'Work on ABC-12'; echo 'not json'; done_ 2; } | check idle 'a finished turn'
 { turn 1 'Work on ABC-12'; use 2 t1 mcp__session-orchestration__reply; res 3 t1 sent; done_ 4; } | check replied 'the reply tool'
 { turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 sent; done_ 4; } | check replied 'SendMessage'
+{ turn 1 'Session task: retro run'; use 2 t1 Bash '{"command":"/p/skills/retro/retro-run --join /r/retro/project-7"}'; res 3 t1 'writer waits for: waste'; done_ 4; } |
+  check replied 'a retro section that joined'
+{ turn 1 'Session task: retro run'; use 2 t1 Bash '{"command":"/p/skills/retro/retro-run --status /r"}'; res 3 t1 ok; done_ 4; } | check idle 'retro-run without --join'
 { turn 1 'Work on ABC-12'; use 2 t1 SendMessage; res 3 t1 sent; turn 4 'And ABC-13'; done_ 5; } | check idle 'a reply in an earlier turn'
 { turn 1 'Work on ABC-12'; use 2 t1 Bash "$bg"; res 3 t1 'Command running in background with ID: b1'; done_ 4; } |
   check waiting 'a background Bash, no notification'

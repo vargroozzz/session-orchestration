@@ -243,6 +243,12 @@ fire rp 'Session task: retro run, scope project. Use the retro skill.' 1000 >/de
 fire rg 'Session task: retro run, scope plugin. Use the retro skill.' 1000 >/dev/null
 read -r _ k _ < "$t/cache/session-status/handoff-rp.kind"; read -r _ k2 _ < "$t/cache/session-status/handoff-rg.kind"
 [ "$k $k2" = 'retro-project retro-plugin' ] || fail "retro scopes keyed $k $k2"
+# A retro section: keyed by scope and group, a task's mark, its own text: cut the section short, no handover.
+sec='Session task: retro run, scope project, section group units, run /r/retro/project-7. Use the retro skill.'
+out=$(fire rs "$sec" 146000); read -r kd k _ < "$t/cache/session-status/handoff-rs.kind"
+[ "$kd $k" = 'section retro-project-units' ] && grep -q 'at 146K: your retro section ends here.*done: cut at mark' <<<"$out" && ! grep -q -- --handover <<<"$out" && ! grep -q 'cross-session-message' <<<"$out" ||
+  fail "retro section: $kd $k $out"
+expect rs2 "$sec" 999000 'past the hard stop. Stop now: your retro section ends here'
 # A coordinator's .kind: no key (`-`), a `Coordinate …` that names none isn't a sub.
 fire ck "$coord" 1000 >/dev/null; fire ck2 'Coordinate the release.' 1000 >/dev/null
 read -r kd k _ < "$t/cache/session-status/handoff-ck.kind"; [ "$kd $k" = 'coordinator -' ] || fail "coordinator .kind: $kd $k"

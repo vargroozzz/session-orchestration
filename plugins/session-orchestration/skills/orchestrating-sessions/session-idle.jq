@@ -1,6 +1,6 @@
 # session-idle.jq: why a background session's turn ended, for session-status --watch's idle check. Input (jq -Rn, with
 # --argjson since MS, the session's start): its transcript. Output, one word: replied (its last turn sent the reply tool
-# or SendMessage), waiting (a background task it started since `since` hasn't notified its end yet), else idle.
+# or SendMessage, or a retro section's retro-run --join), waiting (a background task it started since `since` hasn't notified its end yet), else idle.
 def ms: try (capture("^(?<s>[^.Z]+)(?<f>\\.[0-9]+)?Z$") | ((.s + "Z") | fromdateiso8601) * 1000
   + ((("0" + (.f // "")) | tonumber) * 1000 | round)) catch 0;
 def text: if type == "string" then . else [.[]? | .text? // empty] | join(" ") end;
@@ -26,7 +26,9 @@ def ok($r): ($r.is_error // false | not) and ($r.content | text | contains("\"su
     and (.value.origin.kind? == "task-notification" or (.value.message.content | strings | startswith("<task-notification>"))))
     | .key] | last // $turn) as $seg
 | ([$rows[$seg:][] | select(.type == "assistant") | .message.content[]?
-    | select(.type? == "tool_use" and (.name == "mcp__session-orchestration__reply" or .name == "SendMessage"))
+    # a retro section session ends with `retro-run --join`, never a reply
+    | select(.type? == "tool_use" and (.name == "mcp__session-orchestration__reply" or .name == "SendMessage"
+        or (.name == "Bash" and (.input.command // "" | test("retro-run\"? +--join ")))))
     | select(ok($results[.id]))] | length > 0) as $replied
 | ([$uses[] | select(.ts >= $since) | $results[.id] as $r | select($r.is_error // false | not)
     # a Bash past its timeout is moved to the background with no run_in_background flag

@@ -56,9 +56,10 @@ paths are relative to this file's folder): read the file of each section this ru
 
 `python3 -I retro.py sections --groups <scope> $(session-status --config retro.sections)` prints the same sections as
 a group plan: one `GROUP: SECTION…` line per group (config `retro.groups`, else the defaults), then a `writer:` line
-for the sections no group lists. One session runs every group's sections: step 2 for all of them, then step 3,
-in the order `retro.py sections` prints (a section's commands may read another's files), and the report lists
-the headings in that order too.
+for the sections no group lists. Run by hand (`/retro`), one session runs every group's sections: step 2 for all of
+them, then step 3, in the order `retro.py sections` prints (a section's commands may read another's files), and the
+report lists the headings in that order too. A `retro-run` start splits them: one session per group, then a writer
+([Split run](#split-run)).
 
 ## Rules
 
@@ -98,12 +99,13 @@ the headings in that order too.
 - Reports, one series per scope, each with its own number, baselines and "Next run" section:
   `<R>/retro-project-<N>.md` and `<R>/retro-plugin-<N>.md`, an `.html` beside each. Data:
   `<R>/retro/<scope>-<N>/*.tsv`, a fresh folder per run.
-- A scheduled run's task key is `retro-<scope>` (one per scope, so `both` keeps two): its `reply` key, and its
-  handoff in `<R>/retro-<scope>.md`.
+- A scheduled run's task key is `retro-<scope>` (one per scope, so `both` keeps two): its writer's `reply` key, and
+  its handoff in `<R>/retro-<scope>.md`. A section session hands nothing over (Split run).
 - Numbering: the project series continues the old mixed reports. Its run is 1 + the highest N among
   `retro-project-<N>.md` and `rnd-run-<N>.md`, and its baseline is that highest report (an `rnd-run-<N>` is never
   renamed). The plugin series starts at 1 with no baseline: its first run measures two windows (Steps, 2) so
-  its table still has a "last run" column. Its baseline after that is the highest `retro-plugin-<N>.md`.
+  its table still has a "last run" column. Its baseline after that is the highest `retro-plugin-<N>.md`. In
+  either series N also counts the run folders `<R>/retro/<scope>-<N>/`, an open split run's included.
 - Refusals logged by the plugin's hook: `~/.cache/session-status/denied.jsonl`, one JSON line per
   refusal with `time`, `session` and `cwd`.
 
@@ -158,20 +160,53 @@ the headings in that order too.
 `retro-<scope>-<N>.md` and `.html` exist for each scope this run took, every section `retro.py sections` printed
 has its rows filled (or "no data" and why) and no other section appears, a plugin run has its "Other tools: last
 scanned" line, and the coordinator message is sent or skipped for a stated reason (never skipped when a page was published).
+That is the writer's and a by-hand run's; a section session is done when `sections/G.md` and `G.status` exist and its
+`retro-run --join` ran.
+
+## Split run
+
+`retro-run` makes the run's folder `<R>/retro/<scope>-<N>/` with `run.json` (scope, `n`, `root`, `until` the window's
+end, `split` last run's end, `baseline`, `groups` each with its `sections`, session `name` and `id`, and `writer` with
+its name and `sections`), then starts one session per group and, once every group has ended, one writer.
+
+**Section session** (first prompt `Session task: retro run, scope S, section group G, run DIR`): read `DIR/run.json`
+(its N, baseline and `until` are the run's: don't settle them again) and do steps 1 to 4 for `groups[G].sections` only, with `--until <run.json's until>` as the first argument of every `retro.py` call
+(`python3 -I retro.py --until <until> <command> …`; anywhere else it is ignored) and its
+data in DIR. Write `DIR/sections/G.md`, in report order: each section's heading and yardstick rows (last run beside
+this one); last run's proposals in its area, landed (with the commit) or not; up to 3 candidate proposals (problem,
+evidence with session ids, change, target, gain, risk); its "Next run" baseline lines; feedback drafts as the exact
+`feedback add` arguments, not run. It sends no message, writes no report and files no case. Last, write
+`DIR/sections/G.status` (`done`, `done: cut at mark` or `failed: WHY`) and run `retro-run --join DIR` (next to this
+file), then end the turn. At the context mark the hook says to cut it short: write `G.md` from what it has, what's left
+as one candidate (a research task), the status `done: cut at mark`, then the join; no handover.
+
+**Writer** (first prompt `Session task: retro run, scope S, write the report, run DIR`): its N and baseline are
+`run.json`'s `n` and `baseline` (the report is `retro-<scope>-<n>.md`, whatever the Numbering rule would give now). Read `run.json`, every
+`sections/*.md` and `*.status`, and the baseline report. Measure `run.json`'s `writer.sections` itself (steps 2 to 4,
+`--until` as above), then steps 3's Other tools line to 6 from the section files: the ranked proposals come from their
+candidates, the feedback drafts are filed in step 5. A group whose status is `failed: WHY`, or which has none (its
+session ended without one: name the session id from `run.json`), gets `no data: WHY` under each of its headings.
+
+`retro-run --join DIR` starts the writer once: under `DIR/join.lock`, when no group is running and `writer.started`
+doesn't exist yet. It prints `writer waits for: …`, `writer "NAME" started already` or the writer's start line. A
+group whose session ended without its join is caught by the next `retro-run` call for the scope, or by hand with
+`retro-run --join DIR` (`--status` lists the open runs).
 
 ## Scheduling the weekly run
 
-`retro-run`, next to this file, starts one background session per scope (`retro-<scope>-<date>`, on
-`plan.models.retro`) in a project root when a run is due, and logs to `retro-run.log` in `~/Library/Logs` on macOS,
+`retro-run`, next to this file, starts one background session per section group of each scope
+(`retro-<scope>-<date>-<group>`, on `plan.models.retro`) and later its writer (`retro-<scope>-<date>`, [Split
+run](#split-run)) in a project root when a run is due, and logs to `retro-run.log` in `~/Library/Logs` on macOS,
 else in `${XDG_STATE_HOME:-~/.local/state}` (`RETRO_LOG` overrides). It reads the person's `features.retro` and
 `retro` block (`features/retro.md`); the session needs the plugin enabled in `retro.account`.
 
 | Call | Does |
 |------|------|
-| `retro-run ROOT [--scope S] [--now] [--dry-run]` | starts the scope's session(s) whose run is due: its last start is older than `retro.schedule`'s most recent time. `--now` skips the check; `--dry-run` prints the verdict and the start line. Each start prints `started "NAME" (ID8) · retro M/E` on stdout, or `"NAME" didn't start: WHY`, one line per scope; exit 1 when any scope didn't start |
+| `retro-run ROOT [--scope S] [--now] [--dry-run]` | for each scope whose run is due (its last start is older than `retro.schedule`'s most recent time; `--now` skips the check): writes the run's folder and `run.json`, starts one session per group, and prints `writer: starts when K groups are done`; first it joins the scope's open runs whose sessions have all ended. `--dry-run` prints the verdict, the run's folder, the group plan and each start line, and starts nothing. Each start prints `started "NAME" (ID8) · retro M/E` on stdout, or `"NAME" didn't start: WHY` (that group's status becomes `failed: didn't start`); exit 1 when any didn't start. None started: no folder, the stamp given back |
+| `retro-run --join DIR` | the writer's start, once every group of the run in DIR has ended ([Split run](#split-run)) |
 | `retro-run --install ROOT` | writes `~/Library/LaunchAgents/session-orchestration.retro.<slug>-<6 hex>.plist` (needs `features.retro` true and `retro.schedule`) and loads it; again after changing `retro.schedule` or `retro.account`. Prints the command that removes an old cron line; it never edits the crontab |
 | `retro-run --uninstall ROOT` | unloads and deletes it |
-| `retro-run --status [ROOT]` | label, loaded or not, schedule, account, last start and next due per scope, and `SCOPE: retro overdue: …` when its newest report is over 8 days old (no ROOT: every agent) |
+| `retro-run --status [ROOT]` | label, loaded or not, schedule, account, last start and next due per scope, and `SCOPE: retro overdue: …` when its newest report is over 8 days old; then each open run (no report yet): `run S-N: GROUP STATE · … · writer not started (retro-run --join DIR)` or `writer started (ID8), no report yet`, a group's state its status line, `running (ID8)` or `missing (session ended)` (no ROOT: every agent) |
 
 - **Missed runs**: launchd starts a calendar time missed in sleep at wake; `RunAtLoad` calls the launcher at each
   login, for a time missed while off or logged out. The due check (a stamp per root and scope in the project's state
