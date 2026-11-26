@@ -2,7 +2,7 @@
 # UserPromptSubmit, part N of 3 (hooks.json runs one entry per part, in parallel): a coordinator's Start context in its
 # first prompt, as gastown's `gt prime` does, so Start needs no --start in the background, no wait for it and no
 # memory reads (orchestrating-sessions SKILL.md, Start).
-# - Fires only on a session's first prompt (no assistant line in its transcript yet) whose first line is `Act as a
+# - Fires only on a session's first prompt (no transcript file yet, or no assistant line in it) whose first line is `Act as a
 #   coordinator` (a successor's too), or `Coordinate KEY: …` (a sub-coordinator: the header alone, no --start). Not
 #   in a project with its own status command (adapter status-names): its Start runs that, as before.
 # - Part 1 runs `session-status --start` (env START_INJECT_BUDGET seconds, 120; past it the run goes on, never killed
@@ -17,8 +17,9 @@ part=${1:-1} input=$(cat)
 [[ $input =~ \"prompt\":[[:space:]]*\"(Act\ as\ a\ coordinator|[[:space:]]*Coordinate\ ) ]] || exit 0
 { read -r sid; read -r tp; read -r cwd; read -r agent; } < <(jq -r '.session_id // "", .transcript_path // "", .cwd // "",
   .agent_id // ""' <<<"$input" 2>/dev/null)
-[[ ${sid:-} =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "${tp:-}" ] && [ -z "${agent:-}" ] || exit 0
-! grep -q -m1 '"type":"assistant"' "$tp" || exit 0   # a resumed session: its Start is done
+# a new session's transcript doesn't exist yet at its first prompt: Claude Code writes it after this hook
+[[ ${sid:-} =~ ^[A-Za-z0-9_-]+$ ]] && [ -n "${tp:-}" ] && [ -z "${agent:-}" ] || exit 0
+! grep -q -m1 '"type":"assistant"' "$tp" 2>/dev/null || exit 0   # a resumed session: its Start is done
 prompt=$(jq -r '.prompt // ""' <<<"$input"); first=$(grep -m1 . <<<"$prompt")
 here=$(cd "$(dirname "$0")" && pwd); skill=${here%/hooks}/skills/orchestrating-sessions
 ss=${START_INJECT_SS:-$skill/session-status}

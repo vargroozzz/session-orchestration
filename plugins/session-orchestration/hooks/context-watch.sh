@@ -36,8 +36,12 @@
 here=$(cd "$(dirname "$0")" && pwd); input=$(cat)
 { read -r sid; read -r tp; read -r ev; read -r cwd; read -r src; read -r agent; } < <(jq -r '.session_id // "", .transcript_path // "",
   .hook_event_name // "", .cwd // "", .source // "", .agent_id // ""' <<<"$input" 2>/dev/null)
-[[ ${sid:-} =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "${tp:-}" ] && [ -z "${agent:-}" ] || exit 0
+# a new session's transcript doesn't exist yet at its first prompt (Claude Code writes it after UserPromptSubmit): that
+# prompt still classifies, detached, once the file holds it (below)
+[[ ${sid:-} =~ ^[A-Za-z0-9_-]+$ ]] && { [ -f "${tp:-}" ] || { [ -n "${tp:-}" ] && [ "$ev" = UserPromptSubmit ]; }; } &&
+  [ -z "${agent:-}" ] || exit 0
 d=${XDG_CACHE_HOME:-$HOME/.cache}/session-status; s=$d/handoff-$sid
+[ -f "$tp" ] || [ -n "${CW_DETACHED:-}" ] || [ ! -f "$s.kind" ] || exit 0
 emit() { jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName: $e, additionalContext: $m}}'; }
 # A relayed approval (approvals.md's block) in a peer message: each block checked now as the approval hook will
 # (verify-approval.sh; the sender is the from-name of the tag it came in, the key as approved-action.sh takes it: a
@@ -45,7 +49,7 @@ emit() { jq -nc --arg e "$ev" --arg m "$1" '{hookSpecificOutput: {hookEventName:
 # name), one line each: `relay verified: ACTION` (then what the script adds) or `relay rejected: REASON (ACTION)`.
 # Inline: hooks.json gives UserPromptSubmit 60 s; any other prompt pays one string test. The reply card waits for the
 # next firing.
-if [ -z "${CW_DETACHED:-}" ] && [ "$ev" = UserPromptSubmit ] && [[ $input == *'<cross-session-message from='*'APPROVAL relayed from the user'* ]]; then
+if [ -z "${CW_DETACHED:-}" ] && [ "$ev" = UserPromptSubmit ] && [ -f "$tp" ] && [[ $input == *'<cross-session-message from='*'APPROVAL relayed from the user'* ]]; then
   me=$(grep -F '"agent-name"' "$tp" 2>/dev/null | jq -r 'select(.type == "agent-name") | .agentName // empty' 2>/dev/null | tail -1) out=
   while IFS= read -r b; do
     { read -r from; read -r bsid; read -r scwd; read -r a; } < <(jq -r '.from, .sid, .scwd, .action' <<<"$b")
@@ -74,6 +78,9 @@ detach() {
   (set -m; CW_DETACHED=1 bash "$0" <<<"$input" >/dev/null 2>&1 &)
 }
 if [ -n "${CW_DETACHED:-}" ]; then trap 'rm -f "$s.classifying"' EXIT
+  # a first prompt that came before its transcript: wait (up to 20 s) for the file to hold a user line
+  i=0; while ! grep -qF '"type":"user"' "$tp" 2>/dev/null && (( i < 40 )); do sleep 0.5; i=$((i + 1)); done
+  [ -f "$tp" ] || exit 0
 elif [ "$ev" = SessionStart ]; then
   rm -f "$s.soft" "$s.hard" "$s.noted"; [ "$src" = compact ] || { rm -f "$s.kind" "$s.compact"; detach; exit 0; }
   rm -f "$s.card"; [ -e "$s.compact" ] && exit 0

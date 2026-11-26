@@ -269,6 +269,16 @@ expect rs2 "$sec" 999000 'past the hard stop. Stop now: your retro section ends 
 fire ck "$coord" 1000 >/dev/null; fire ck2 'Coordinate the release.' 1000 >/dev/null
 read -r kd k _ < "$t/cache/session-status/handoff-ck.kind"; [ "$kd $k" = 'coordinator -' ] || fail "coordinator .kind: $kd $k"
 read -r kd k _ < "$t/cache/session-status/handoff-ck2.kind"; [ "$kd $k" = 'task -' ] || fail "keyless Coordinate .kind: $kd $k"
+# A new session's first prompt: no transcript file yet (Claude Code writes it after UserPromptSubmit), classified from
+# the transcript once it appears (a second later here), its agent-name line too.
+for c in "nofile|$coord|coordinator -" "nofile2|Work on fix-login|task fix-login"; do
+  IFS='|' read -r sid p want <<<"$c"
+  jq -nc --arg s "$sid" --arg f "$t/$sid.jsonl" --arg c "$t/proj" --arg p "$p" '{session_id: $s, transcript_path: $f, hook_event_name: "UserPromptSubmit", cwd: $c, prompt: $p}' |
+    bash "$here/context-watch.sh" >/dev/null
+  [ ! -f "$t/cache/session-status/handoff-$sid.kind" ] || fail "$sid: classified before its transcript"
+  sleep 1; { echo '{"type":"agent-name","agentName":"fix-login"}'; jq -nc --arg p "$p" '{type: "user", message: {role: "user", content: $p}}'; } > "$t/$sid.jsonl"
+  waitkind "$sid"; read -r kd k _ < "$t/cache/session-status/handoff-$sid.kind"; [ "$kd $k" = "$want" ] || fail "$sid, no transcript yet: $kd $k"
+done
 # A window too small for the stop room: 60% and 80% of it; a window of 0 is unknown: config's at and hard.
 CLAUDE_CODE_AUTO_COMPACT_WINDOW=40000 expect w40 "$task" 4500 'at 4K: hand off.*too small for handoff.stop_room'
 CLAUDE_CODE_AUTO_COMPACT_WINDOW=40000 expect w40 "$task" 5700 'Stop now'
