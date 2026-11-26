@@ -1105,6 +1105,9 @@ out=$(run --start ABC-12) && [ "$(grep '^## ' <<<"$out" | sed 's/ (.*//')" = "$(
 touch -t 202601010000 "$root/replies/coordinator-handover.md"; touch -t 202601020000 "$root/replies/ABC-48.md"; out=$(run --start)
 grep -qx "## Replies written since the handover ($root/replies), newest first" <<<"$out" && grep -q 'ABC-49.md: ' <<<"$out" && grep -q 'ABC-48.md: ' <<<"$out" ||
   { echo "--start, an old handover: $out"; exit 1; }
+# The note's file:line spots: their text under it, so the successor reads none of them.
+echo 'Read ABC-49.md:1 first.' >> "$root/replies/coordinator-handover.md"; touch -t 202601010000 "$root/replies/coordinator-handover.md"; out=$(run --start)
+grep -A3 '^## Handover lines' <<<"$out" | grep -qx '1: ABC-49 · proj · done' || { echo "--start, the note's spots: $out"; exit 1; }
 rm "$root/replies/coordinator-handover.md"; printf '## Handoff\nx\n## Log 11-03: merged\n' >> "$root/replies/ABC-49.md"; out=$(run --start)
 grep -qx "## Replies written in the last day ($root/replies), newest first" <<<"$out" && ! grep -q 'ABC-48' <<<"$out" &&
   grep -qx '[0-9-]* [0-9:]*  ABC-49.md: ABC-49 · proj · done · last section: Log 11-03: merged' <<<"$out" ||
@@ -1234,6 +1237,25 @@ setacct cfg "$(sess "$pid2" "plugin-docs-prev-1" idle 1)"; calls >/dev/null
 out=$(run --handover "$pid2" 'Do Y.') && rc=0 || rc=$?
 [ "$rc" = 0 ] && calls | grep -q -- '--bg -n plugin-docs Work on plugin-docs: continue from replies/plugin-docs.md. Do Y.' ||
   { echo "keyless -prev-1 handover failed: $out"; calls; exit 1; }
+# The handover brief: the handoff and the lines its spots name ride in the first prompt (N alone: N-2..N+2), its
+# marker lines defused; a spot no folder holds is left out; past SESSION_STATUS_BRIEF_MAX the rest is named, and a
+# handoff over it isn't pasted at all.
+bid=67676767-2222-3333-4444-555555555555; seq 1 9 | sed 's/^/line /' > "$root/notes.txt"; git -C "$root" add notes.txt; echo KEY=s3cret > "$root/secret.env"
+echo '{"type":"user","message":{"content":"Tidy the brief"}}' > "$proj/$bid.jsonl"
+printf 'status\n## Handoff\nSee notes.txt:4 and notes.txt:8-9, gone.md:2, secret.env:1, notes.txt:010, brief-x.md:1, at 10:30.\nChunk: X/2\nSupersedes: 12345678-aaaa\n## Log\nold\n' > "$root/replies/brief-x.md"
+setacct cfg "$(sess "$bid" brief-x idle 1)"; calls >/dev/null
+out=$(run --handover "$bid" 'Go on.') && p=$(calls) &&
+  grep -qF 'pasted here so you' <<<"$p" && grep -qF 'notes.txt:4 (' <<<"$p" && grep -qx '2: line 2' <<<"$p" && grep -qx '6: line 6' <<<"$p" &&
+  ! grep -qx '7: line 7' <<<"$p" && grep -qx '9: line 9' <<<"$p" && ! grep -q 'gone.md:2 (\|10:30 (\|s3cret\|^Chunk:\|Supersedes: 1234\|^## Log' <<<"$p" &&
+  grep -qx ' Chunk: X/2' <<<"$p" && grep -qF 'notes.txt:010 (' <<<"$p" && grep -qx '1: status' <<<"$p" || { echo "handover brief: $out"; echo "$p"; exit 1; }
+# A bound that holds the handoff and the first spot exactly (the tmp path's length varies): the rest is named.
+hs=$(sed -n '/^## Handoff/,/^Supersedes/p' "$root/replies/brief-x.md"); e=$(grep -A5 -F 'notes.txt:4 (' <<<"$p"); mx=$(( ${#hs} + ${#e} + 1 ))
+setacct cfg "$(sess "$bid" brief-x idle 1)"
+p=$(SESSION_STATUS_BRIEF_MAX=$mx run --handover "$bid" 'Go on.' >/dev/null; calls)
+grep -qx '6: line 6' <<<"$p" && grep -qx "Not pasted (past $mx characters): notes.txt:8-9 notes.txt:010 brief-x.md:1" <<<"$p" || { echo "handover brief, bound $mx: $p"; exit 1; }
+p=$(SESSION_STATUS_BRIEF_MAX=50 run --handover "$bid" 'Go on.' >/dev/null; calls)
+grep -qF 'continue from replies/brief-x.md' <<<"$p" && ! grep -q 'pasted here\|line 4' <<<"$p" || { echo "handover brief, a handoff over the bound: $p"; exit 1; }
+git -C "$root" rm -q --cached notes.txt; rm "$root/notes.txt" "$root/secret.env" "$root/replies/brief-x.md" "$proj/$bid.jsonl"
 # A retro run, whatever its -n name, reports in replies/retro-SCOPE.md: that stands for its key, one per scope, so two
 # scopes at once hand over from their own files.
 for sc in project plugin; do
@@ -1285,7 +1307,7 @@ printf '## c3b: handoff\nstate\n' > "$root/replies/PROJ-9-build.md"
 # It kept its name (no -prev-K rename): started anyway, with a line saying so.
 [ "$(run --handover "$kid" --model opus --effort high -- 'Then land it.')" = 'handed PROJ-9 c3b over: "PROJ-9-c3b" (dddddddd) stopped, superseded by "PROJ-9-c3b" (abcdef12)
 "PROJ-9-c3b" (old) wasn'"'"'t renamed: two sessions share PROJ-9-c3b until it is' ] &&
-  [ "$(calls | grep -v ' agents ')" = "$(printf 'cfg stop dddddddd\ncfg --bg --model opus --effort high -n PROJ-9-c3b Session task: PROJ-9\nChunk: PROJ-9/3b\nSupersedes: %s\nContinue from the last "## c3b: handoff" in %s/replies/PROJ-9-build.md, then follow %s/replies/PROJ-9-c3b.md.\nThen land it.' "$kid" "$root" "$root")" ] ||
+  [ "$(calls | grep -v ' agents ')" = "$(printf 'cfg stop dddddddd\ncfg --bg --model opus --effort high -n PROJ-9-c3b Session task: PROJ-9\nChunk: PROJ-9/3b\nSupersedes: %s\nContinue from the last "## c3b: handoff" in %s/replies/PROJ-9-build.md, then follow %s/replies/PROJ-9-c3b.md.\nThen land it.\n\nIts handoff, pasted here so you needn'"'"'t read it (the file has the rest):\n## c3b: handoff\nstate' "$kid" "$root" "$root")" ] ||
   { echo "chunk handover failed"; calls; exit 1; }
 for bad in '--model fable' '--model claude-fable-5-1' '--effort ultra' '--model'; do
   out=$(run --handover "$kid" $bad -- 'x') && rc=0 || rc=$?

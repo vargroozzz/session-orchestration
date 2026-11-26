@@ -12,7 +12,8 @@ each waits on, and why the restart. Pane asks and their answers carry over by th
 lists an answer clicked before your note only when the note or the handoff file names its key: name each one you
 haven't acted on yet ([approvals.md](approvals.md#the-relay-block)). An approval the user gave you in chat or
 the question box that a session will still need: ask it again on the pane first. No rules and no files to read: the next
-coordinator's Start reads those, and each restated rule is re-sent on its every wake. Then start your successor:
+coordinator's Start reads those, and each restated rule is re-sent on its every wake. A `path:N-M` spot you name is
+pasted under the note in its `--start` (within 8000 characters with the note), so it reads none. Then start your successor:
 
 1. `session-status --successor` (`--account DIR` for the weekly-limit move): it opens a split of your own tab (a new
    tab when the terminal can't, or your tab isn't found) running an interactive

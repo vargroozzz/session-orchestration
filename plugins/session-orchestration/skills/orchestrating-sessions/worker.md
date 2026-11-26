@@ -239,7 +239,9 @@ The context-watch hook's soft line says how (the handoff heading, the command): 
 over with `session-status --handover --self -- '<next step>'`, coordinator or not. On a task that changes
 files, with none edited yet, the handoff holds the edits you decided on as text (per file, the text to replace and the
 new text, indented so no line of it starts with `## `): a successor given only files and lines re-reads them and
-reaches the mark again. The hard line asks the same. `--handover --self` starts your successor under
+reaches the mark again. The hard line asks the same. Your successor's first prompt carries the handoff and the text
+of each `path:N` or `path:N-M` spot it names, within 8000 characters ([status-reference.md](status-reference.md),
+`--handover`), so name the spots it needs that way, only those, and keep the handoff short. `--handover --self` starts your successor under
 your name (with no `--model`/`--effort`, on your plan row's model and effort, else yours); its last line names your
 `-prev-K` rename; then end your turn. You are stopped once idle. Send no message: the coordinator sees the successor
 in its status, and approvals relayed to you still verify for it. Don't hand over when this handoff makes no progress on

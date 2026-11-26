@@ -155,7 +155,8 @@
 #                       (first prompt, marker, review, maybe) with its state, first prompt line and markers
 #        session-status --handover ID|--self [--model M] [--effort E] [--escalate] [--] 'WHAT NEXT'   a task or chunk
 #                       session too big to resume is stopped and a fresh one takes its task over, under its name, from the replies
-#                       folder's KEY.md (a chunk: KEY-build.md's handoff); --self, a session hands itself over at its
+#                       folder's KEY.md (a chunk: KEY-build.md's handoff), the handoff and the lines it names pasted
+#                       into its first prompt (BRIEF_MAX); --self, a session hands itself over at its
 #                       context mark, coordinator or not (see the block)
 #        session-status --prev-name [NAME]   NAME-prev-K, the name a session renames itself to when it hands off: K the
 #                       lowest free number over every listed session name (NAME: the caller's own); --title also
@@ -1038,6 +1039,49 @@ if [ "${1:-}" = --link ]; then
   esac
 fi
 
+# The handover brief: a successor starts from the handoff and the text of the `file:N` / `file:N-M` spots it names,
+# not from Read calls. BRIEF_MAX caps the characters pasted (each is written to cache at 2x): a handoff over it isn't
+# pasted (the prompt names its file as before), spots past it are named, not pasted.
+BRIEF_MAX=${SESSION_STATUS_BRIEF_MAX:-8000}
+# handoff_section FILE HEADING: the last `## ` section of FILE whose line starts with HEADING, up to the next `## `.
+handoff_section() { awk -v h="$2" '/^## / { on = (index($0, h) == 1); if (on) s = "" } on { s = s $0 "\n" } END { printf "%s", s }' "$1" 2>/dev/null; }
+# handoff_excerpts CAP DIR…: for each spot named on stdin, its lines (N alone: N-2..N+2; at most 80), numbered, from
+# the first DIR holding the path (as given, else the one tracked file whose path ends in it); CAP characters in all,
+# the rest listed by name. Only a file git tracks (no .env or key file goes into a prompt), except under a
+# `plain:DIR` (the replies folder); an absolute or ~/ path only inside a DIR. A spot none holds (a time, a URL, a file
+# gone) is left out.
+tracked() { git -C "$(dirname "$1")" ls-files --error-unmatch -- "$(basename "$1")" >/dev/null 2>&1; }
+handoff_excerpts() {
+  local cap=$1 ref p r a b f d pl hit x out= left=; shift
+  while IFS= read -r ref; do
+    p=${ref%:*} a=${ref##*:}; b=${a#*-} a=${a%-*} f=
+    a=$((10#$a)) b=$((10#$b))   # 010 is line 10, not octal 8
+    [[ $p != '~/'* ]] || p=$HOME/${p#\~/}
+    for d in "$@"; do
+      pl=; [[ $d != plain:* ]] || { pl=1; d=${d#plain:}; }
+      r=$p; [[ $p != /* ]] || { [[ $p == "$d"/* ]] || continue; r=${p#"$d"/}; }
+      if [ -f "$d/$r" ] && { [ -n "$pl" ] || tracked "$d/$r"; }; then f=$d/$r
+      elif [ -z "$pl" ]; then   # a bare or partial path: the one tracked file whose path ends in it
+        hit=$(git -C "$d" ls-files -- "*/$r" 2>/dev/null | awk -v p="/$r" 'substr($0, length($0) - length(p) + 1) == p')
+        [ -z "$hit" ] || [ "$(grep -c . <<<"$hit")" != 1 ] || f=$d/$hit
+      fi
+      [ -z "$f" ] || break
+    done
+    [ -n "$f" ] && (( a > 0 && b >= a )) || continue
+    (( b > a )) || { a=$(( a > 2 ? a - 2 : 1 )); b=$(( b + 2 )); }
+    (( b - a < 80 )) || b=$(( a + 79 ))
+    x=$(awk -v a="$a" -v b="$b" 'NR > b { exit } NR >= a { print NR ": " $0 }' "$f")
+    [ -n "$x" ] || continue
+    x="$ref (${f/#$HOME/~}):"$'\n'"$x"$'\n'
+    if (( ${#out} + ${#x} <= cap )); then out+=$x; else left+=" $ref"; fi
+  done < <(grep -oE '[A-Za-z0-9_./~-]*[A-Za-z][A-Za-z0-9_./~-]*:[0-9]+(-[0-9]+)?' | awk '!s[$0]++')
+  printf '%s' "$out"; [ -z "$left" ] || printf 'Not pasted (past %s characters):%s\n' "$BRIEF_MAX" "$left"
+}
+# defuse: pasted text loses the lines that would read as a first prompt's own markers (lib.sh chunk_of, the
+# Supersedes and You succeed parsers, marks_of's Session task:, context-watch's coordinator test): a space or a colon
+# goes in.
+defuse() { sed -E 's/^(Act as a coordinator|Chunk:)/ \1/; s/(Session task|Supersedes):/\1 :/g; s/([Yy]ou) (replace|succeed) /\1 \2: /g'; }
+
 # Coordinator handover (handover.md), with NAME the coordinator's name:
 #   --successor [--account DIR]   the old coordinator starts NAME-next, interactive, in a split of its own tab
 #                                 (split_tty), else a tab, of the configured terminal under DIR (default its own account), first prompt `Act as a coordinator`,
@@ -1404,6 +1448,9 @@ if [ "${1:-}" = --start ]; then
   [ -z "$ended" ] || printf '\n## Ended while the background service was off (or failed), task still open\n%s\n' "$ended"
   [ ! -s "$TMP/ids" ] || echo "One ask for them all, key resume-after-restart (resuming.md, After a restart); on its yes: session-status --resume-ended $(sed 's/ $//' "$TMP/ids")"
   if [ -n "$h" ] && [ -f "$h" ]; then printf '\n## Handover (%s, written %s)\n' "$h" "$(epochfmt "$(mtime "$h")" '%m-%d %H:%M')"; cat "$h"
+    # the text of the spots the note names, within what's left of BRIEF_MAX: no Read call for them
+    hx=$(handoff_excerpts $(( BRIEF_MAX - $(wc -m < "$h") )) "$ROOT" "plain:$rd" < "$h")
+    [ -z "$hx" ] || printf '\n## Handover lines (the spots it names, as they read now)\n%s\n' "$hx"
   else printf '\n## Handover\n(none%s)\n' "${h:+: no $h}"; fi
   # Only the live answers that still need an action (--approvals lists them all), each rule on data at hand: not
   # relayed; the newest on its key (a later answer supersedes it); not a No nor a request to explain ("What's this?",
@@ -2873,6 +2920,20 @@ if [ -n "$HANDOVER" ]; then
     text="$([ "$hf" = "$key" ] && echo Work on || echo Coordinate) $key: continue from $rdir/$rf.md. ${next%.}. Supersedes: $id (transcript $f; read only the parts you need, never whole).${hist:+ The history of its handoff entry, if you need it: $hist (on demand, not up front).}"
     # a retro run keeps its retro-SCOPE-DATE name, which `Work on retro-SCOPE` doesn't match: context-watch keys it by marker
     [ -z "${rr:-}" ] || [ "$new" = "$key" ] || text=$text$'\nSession task: '$key
+  fi
+  # The handover brief: the handoff and the spots it names, pasted within BRIEF_MAX; a spot's file is read from the
+  # task's worktree (a branch named as the session, else as the key, in any of the project's repos), else the old
+  # session's folder, else the root, else the replies folder. Each excerpt names the file it came from.
+  # shortcut: a multi-repo handoff's root-relative spot (repo/src/x.ts) reads the main checkout, not the worktree;
+  # map it into the worktree if successors there misread.
+  if [ -n "$n" ]; then hs=$(handoff_section "$rd/$key-build.md" "## c$n: handoff"); else hs=$(handoff_section "$rd/$rf.md" '## Handoff'); fi
+  if [ -n "$hs" ] && (( ${#hs} <= BRIEF_MAX )); then
+    rps=$(adapter repos 2>/dev/null) || rps=.
+    wts=(); while IFS= read -r w; do wts+=("$w"); done < <(while read -r r; do [ -z "$r" ] || { [[ $r == /* ]] || r=$ROOT/$r; git -C "$r" worktree list --porcelain 2>/dev/null; }; done <<<"$rps" |
+      awk -v k="$base" -v n="$key" '/^worktree /{p=substr($0,10)} /^branch refs\/heads\//{b=substr($0,19); if (b==k) print 1, p; else if (b==n) print 2, p}' | sort -s -k1,1 | cut -d' ' -f2-)
+    ex=$(handoff_excerpts $(( BRIEF_MAX - ${#hs} )) ${wts[@]+"${wts[@]}"} "$cwd" "$ROOT" "plain:$rd" <<<"$hs")
+    text+=$'\n\n'"Its handoff, pasted here so you needn't read it (the file has the rest):"$'\n'"$(defuse <<<"$hs")"
+    [ -z "$ex" ] || text+=$'\n\n'"The lines it names, as they read at the handover (each from the file named beside it):"$'\n'"$(defuse <<<"$ex")"
   fi
   # The caller's account, not the old one's: that one may be at its weekly limit, and only the caller's sessions can
   # message the coordinator (features/accounts.md). Unless features.accounts_weekly_switch is on, the caller's is past
