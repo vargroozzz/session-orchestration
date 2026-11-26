@@ -105,7 +105,10 @@ Plugin
     seen`) instead of filing.
   - **Re-check** the ledger's rows: `grep -H '^- status' CASE…`. `fixed`, `sent` or open, the question-1 test on the
     installed plugin: shipped means **drop** the source line and its ledger row. `dropped` (won't fix): a `declined`
-    row; the line is a project line again.
+    row; the line is a project line again. A PR row (`#N`, own repo below): `gh pr view N --json state`; `MERGED` takes
+    the question-1 test, `CLOSED` is `dropped`, `OPEN` waits.
+  - In the plugin's own repo (Apply), a doc row's yes is to the doc edit, not case text: put its file, section and
+    exact old → new text in the proposal file instead of a case draft (`→ PR, worker.md "…"`).
   - The source line stays until the installed plugin has the fix: it is the workaround sessions need meanwhile.
   - The public text is the rule and its mechanism in plugin terms, as session-orchestration's
     `orchestrating-sessions/feedback.md` Capture says; evidence is counts only ("kept 9 days by one project's memory,
@@ -138,10 +141,10 @@ Only the numbers the user approved; ask again for anything new you find on the w
     [--suggested TEXT]` (`--found` may say `a CLAUDE.local.md line` or `a project case`), with the approved text;
     exit 3 on the same case: `feedback seen FILE`. A misfiled project case: `feedback mark FILE dropped` once its
     plugin case is filed.
-  - In the plugin's own repo (`session-status --config feedback.repo_dir` is the root `cases root` prints), a doc
-    `upstream` row files no case: it is an edit to the doc it names, all of them in one PR from the pass's worktree,
-    under that repo's `CLAUDE.md` checks. Its ledger row names the PR in the case column; the source line leaves on
-    the next pass after that release is installed, by the re-check's question-1 test. Bug rows stay cases.
+  - In the plugin's own repo (`cd "$(session-status --config feedback.repo_dir)" && pwd -P` is the root `cases root`
+    prints), a doc `upstream` row files no case: it is the approved edit to the doc it names, all of them in one PR
+    from a worktree on a new branch off `origin/main` (the branch and landing as that repo's `CLAUDE.md` says, under
+    its checks). Its ledger row names the PR (`#N`) in the case column. Bug rows stay cases.
   - `link`: `feedback seen FILE`. An outdated case: `feedback mark FILE fixed '<what shipped>'`.
   - Each `upstream` and `link` appends its ledger row (the first one creates the file with Write, the rest with Edit).
   - `drop` and the re-check's drops: delete the memory line and the ledger row. A source line in a person file is a
