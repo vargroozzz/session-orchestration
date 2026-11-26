@@ -32,7 +32,8 @@ coordinator's Start reads those, and each restated rule is re-sent on its every 
 ## The successor
 
 Your name is `NAME-next`. In Desktop your first prompt says to run `session-status --successor --started NAME` first:
-it records your id, so you count as `NAME-next` even when the app named you otherwise. Run Start as usual (`open_pane` keeps your name while the old one holds `NAME`), then
+it records your id, so you count as `NAME-next` even when the app named you otherwise. Run Start as usual (your first
+prompt brings its Start context as any coordinator's does; `open_pane` keeps your name while the old one holds `NAME`), then
 arm `--await name` (Bash, background), your one wait. It wakes you when `NAME` is free and the old coordinator is idle and done forwarding,
 having closed its tab (only its split, when the tab has others, as when you opened as a split of its tab; when it runs in the background, the tab it was moved
 out of, or a `claude attach` to it). Then call `name_session` with `NAME`, as its last line says, and tell the user
