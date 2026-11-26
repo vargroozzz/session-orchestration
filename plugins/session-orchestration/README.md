@@ -149,6 +149,10 @@ Installing the plugin adds these to every Claude Code session, in every project:
   `claude -p` and `--bg` runs included, those commands run as without the plugin.
 - **Context watch** (`hooks/context-watch.sh`): asks a task or coordinator session to hand off before it compacts;
   a session that isn't coordinated gets nothing.
+- **Start context** (`hooks/start-inject.sh`): at a coordinator's first prompt (`Act as a coordinator`), runs
+  `session-status --start` and puts its output and the project memory in the session's context, so its Start doesn't
+  run and wait for them itself. The first prompt waits for it (under 2 minutes; a slower run is stopped and the
+  coordinator runs `--start` itself). A sub-coordinator's first prompt (`Coordinate KEY: …`) gets a one-line pointer.
 - **Coordinator guard** (`hooks/coordinator-guard.sh`): in a coordinator session only, refuses a Bash command that
   starts with `cd`, and an edit of a project file outside `.claude/`, the replies folder, the handoff file and the
   project memory: those belong to a task session. It also refuses Claude Code Desktop's `start_session` (a sidebar

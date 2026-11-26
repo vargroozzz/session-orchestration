@@ -25,13 +25,15 @@ here are read when their event comes up: the index at the end.
 Every coordinator session, before anything else; the user shouldn't have to ask.
 
 1. One batch: ToolSearch `mcp__session-orchestration__open_pane` (that schema only: load any other tool's when you
-   first call it); the status command with `--start`, as Bash `run_in_background: true` (the slowest step, so it
-   runs while you read; which command: above); and one Read each of the project's coordinator doc if its `CLAUDE.md`
-   names one, the memory index and its coordinator topic file. Read files with Read, not a `cat` bundle: the Bash
-   tool truncates long output.
+   first call it) and a Read of the project's coordinator doc if its `CLAUDE.md` names one. At your first prompt a
+   hook (`hooks/start-inject.sh`) has already put `--start`'s output, the memory index and its coordinator topic file
+   in your context ("Start context, part N of M"); its last part may name a file holding the rest: Read it in this
+   batch. No Start context, or it says `--start` didn't finish: add the status command with `--start` as Bash
+   `run_in_background: true` (which command: above), and a Read each of the memory files it lacks. Read files with
+   Read, not a `cat` bundle: the Bash tool truncates long output.
 2. Call `open_pane`. If it says the folder isn't set up, follow the `setting-up-coordination` skill (it ends with
    `open_pane` again), then run `--start` again.
-3. When `--start` finishes (its completion notice; don't poll it), read its output and do what each section and
+3. With `--start`'s output (the Start context, else its completion notice; don't poll it), do what each section and
    feature line names, plus whatever the project's coordinator doc adds. Its status and approvals are bounded (the
    plain status command and `--approvals` list them all). Then prune the handoff file against the status (Handoff
    file), recheck each ask `open_pane` listed as OLD ([approvals.md](approvals.md), Asking), and read a reply whole
