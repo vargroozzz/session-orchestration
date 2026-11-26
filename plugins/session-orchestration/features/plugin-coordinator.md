@@ -64,6 +64,9 @@ yourself, and take the version from it):
 3. Call `reload_plugins`.
 4. Tell the user that other running coordinators keep the old version until they call `reload_plugins` themselves.
 
+A graduate pass's PR ([graduate](../../project-memory/skills/graduate/SKILL.md), Apply) has no cases to mark: its
+ledger rows and source lines leave on the next pass after the install.
+
 **New cases while you run.** The watcher prints each new open case under `Feedback (feedback list --plugin)`, and
 each upstream issue without a case or PR under `Issues (feedback issues)` (GitHub is asked at most every 15 minutes).
 Triage it, then add it to a batch you've proposed or propose a new one (with `at_once`: start it as its own batch).
