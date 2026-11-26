@@ -1596,6 +1596,16 @@ all_landed() {
   c=$(git -C "$1" cherry "$2" HEAD 2>/dev/null) && ! grep -q '^+' <<<"$c" &&
     [ "$(git -C "$1" rev-list --merges --count "$2..HEAD" 2>/dev/null)" = 0 ]
 }
+# on_remote WT: every commit of WT's HEAD is on some branch of origin (as last fetched: fetch_once first; only origin
+# is fetched and pruned, so another remote's stale refs don't count)
+on_remote() { local c; c=$(git -C "$1" rev-list -1 HEAD --not --remotes=origin 2>/dev/null) && [ -z "$c" ]; }
+# fetch_once REPO: one fetch per sweep and repo, with --prune so a remote branch deleted since no longer counts for
+# on_remote; succeeds when this sweep's fetch of REPO did.
+fetch_once() {
+  local f; f=$TMP/fetched.$(tr / _ <<<"$1")
+  [ -e "$f" ] || { : > "$f"; fetch_quick "$1" --prune && : > "$f.ok"; }
+  [ -e "$f.ok" ]
+}
 # link_free WT REPO < `git status --porcelain` lines: without an untracked symlink to REPO's same path. A dir-only
 # ignore rule (node_modules/) never matches a link, so git lists WT/node_modules -> REPO/node_modules untracked; removing
 # WT drops only the link. git counts it untracked, so removal deletes these links first (waived_links), keeping
@@ -2033,19 +2043,23 @@ if [ "${1:-}" = --changes ]; then
       r=$("$SELF" --stop "$id" </dev/null 2>/dev/null) && [[ $r == stopped* ]] || { kept+="$kl"$'\n'; continue; }
       stopped+="  * $kl — \"$name\" (${id:0:8})"$'\n'
       usage stop auto
-      new=$(grep -vE " stop ${id:0:8}\$" <<<"$new")   # and from the baseline: its going isn't news beside Stopped
-      [ ! -f "$last" ] || { grep -vE " stop ${id:0:8}\$" "$last" > "$last.$$"; mv "$last.$$" "$last"; }
+      # its lines (Leftovers; Waiting on you and Stale for one whose last turn asked), and from the baseline: its going
+      # isn't news beside Stopped
+      sre=" stop ${id:0:8}\$| attach ${id:0:8}\)| \(${id:0:8}\).*: decision not on the pane\$"
+      new=$(grep -vE "$sre" <<<"$new")
+      [ ! -f "$last" ] || { grep -vE "$sre" "$last" > "$last.$$"; mv "$last.$$" "$last"; }
     done < "$last.fin.$$"
   fi
   # Then each finished task's worktree that loses nothing (the sweep's removable: clean, landed, no live session on the
   # key but ones it stops) goes with its local branch, checked again first; one whose key kept a session (--stop
   # refused) stays. -D: a rebase merge leaves the branch unmerged by SHA, and landed checked its patches. git worktree
-  # remove refuses a worktree that turned dirty meanwhile, and then the branch stays too. A peek lists them.
+  # remove refuses a worktree that turned dirty meanwhile, and then the branch stays too. A peek lists them. A finished
+  # task's branch pushed but never merged goes too: every commit stays on its remote branch (on_remote).
   while IFS=$'\t' read -r r wt br kl rel base ln; do
     [ -z "${SESSION_STATUS_PEEK:-}" ] || { stopped+="  * would remove: $kl — worktree $rel, branch $br"$'\n'; continue; }
     [ -n "${SESSION_STATUS_FORWARD:-}" ] && ! grep -qxF "$kl" <<<"${kept:-}" || continue
     [ "$(git -C "$wt" symbolic-ref --short HEAD 2>/dev/null)" = "$br" ] && keeps_nothing "$wt" "$r" &&
-      all_landed "$wt" "$base" && { waived_links "$wt" "$r" | while IFS= read -r p; do rm -f "$wt/$p"; done
+      { all_landed "$wt" "$base" || { [ "$kl" != "no task" ] && on_remote "$wt"; }; } && { waived_links "$wt" "$r" | while IFS= read -r p; do rm -f "$wt/$p"; done
         git -C "$r" worktree remove "$wt" </dev/null >/dev/null 2>&1; } || continue
     if git -C "$r" branch -D "$br" </dev/null >/dev/null 2>&1; then stopped+="  * $kl — removed worktree $rel and branch $br"$'\n'
     else stopped+="  * $kl — removed worktree $rel (branch $br kept: git branch -D failed)"$'\n'; fi
@@ -2054,9 +2068,9 @@ if [ "${1:-}" = --changes ]; then
     new=$(grep -vxF "  $ln" <<<"$new")
     [ ! -f "$last" ] || { grep -vxF "  $ln" "$last" > "$last.$$"; mv "$last.$$" "$last"; }
   done < <(cat "$last.fin.$$.wt" 2>/dev/null)
-  # a Leftovers header with nothing left under it goes too
+  # a header with nothing left under it goes too
   [ -z "$stopped" ] || [ -n "${SESSION_STATUS_PEEK:-}" ] ||
-    new=$(awk '$0 == "Leftovers (task finished):" { h = $0; next } h != "" && /^  / { print h } { h = ""; print }' <<<"$new")
+    new=$(awk '$0 ~ /^(Leftovers \(task finished\)|Waiting on you|Stale):$/ { h = $0; next } h != "" && /^  / { print h } { h = ""; print }' <<<"$new")
   rm -f "$last.fin.$$" "$last.fin.$$.wt"
   # A worker under another account with no live socket can't SendMessage this coordinator (features/accounts.md): its
   # report reaches only the replies folder. With accounts on, each <KEY>.md written there since the last run (else in
@@ -3379,8 +3393,8 @@ reported_done() {
       pr|pushed) top=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) &&
         base=$(git -C "$top" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null) &&
         [ "$(git -C "$top" symbolic-ref --short -q HEAD)" != "${base#origin/}" ] && [ -z "$(git -C "$top" status --porcelain)" ] &&
-        { all_landed "$top" "$base" || { gd=$(git -C "$top" rev-parse --path-format=absolute --git-common-dir) && f=$TMP/fetched.$(tr / _ <<<"${gd%/.git}") &&
-            [ ! -e "$f" ] && : > "$f" && [ -z "$(find "$gd/FETCH_HEAD" -mmin -5 2>/dev/null)" ] && fetch_quick "$top" && all_landed "$top" "$base"; }; } &&
+        { all_landed "$top" "$base" || { gd=$(git -C "$top" rev-parse --path-format=absolute --git-common-dir) &&
+            [ ! -e "$TMP/fetched.$(tr / _ <<<"${gd%/.git}")" ] && [ -z "$(find "$gd/FETCH_HEAD" -mmin -5 2>/dev/null)" ] && fetch_once "${gd%/.git}" && all_landed "$top" "$base"; }; } &&
         { echo landed; return 0; } ;;
     esac
   done
@@ -3490,7 +3504,7 @@ done)
 # branch names no key, so nothing ties it to a session: only one idle RESOLVE_S counts (a fresh worktree on main is
 # clean and landed too, and its session may work from the main checkout by path).
 leftover_wt() {
-  local r=$1 wt=$2 kl=$3 held=$4 orphan=${5:-} base dirty unmerged br local_only rel repo t m old kn fo ln f
+  local r=$1 wt=$2 kl=$3 held=$4 orphan=${5:-} base dirty unmerged br local_only rel repo t m old kn fo ln
       # Idle: its last commit and the folder itself (a file added or removed) both older than RESOLVE_S.
       [ -d "$wt" ] || return 0   # gone, not pruned: `git worktree prune`'s, nothing to remove here
       t=$(git -C "$wt" log -1 --format=%ct 2>/dev/null) || t=$NOW; m=$(mtime "$wt" 2>/dev/null) || m=0; [ "$m" -gt "$t" ] && t=$m
@@ -3530,13 +3544,13 @@ leftover_wt() {
       # branch naming no open row's key (a key-pattern match equal to one: grep -w would take a row claude-x for a
       # word of the branch claude-x-s2), not the main checkout, no live session on the key or in the folder (any
       # session dir) but this key's ones it stops, and everything landed (a stale base is fetched once per repo, then
-      # checked again).
+      # checked again) or, a finished task's (not an orphan's: its open PR may be under review), every commit is on
+      # some remote branch after that fetch (on_remote: pushed to its own branch, never merged).
       if [ -n "${SESSION_STATUS_FINISHED_OUT:-}" ] && [ ! -e "$TMP/agents.failed" ] && [ "$dirty" = 0 ] && [ "$kn" = 1 ] &&
           [ -z "$held" ] && [ "$wt" != "$r" ] && [ "$br" != HEAD ] && ! grep -oE -- "$KEYRE" <<<"$br" | grep -qxF -f <(printf '%s\n' $keys | grep .) &&
           [ -z "$(awk -F'\t' -v w="$wt" '$6 == w || index($6, w "/") == 1 {print $1}' "$TMP/agents.every" |
             grep -vxF -f <(awk -F'\t' -v k="$kl" '$2 == k {print $1}' "$TMP/finished"))" ]; then
-        f=$TMP/fetched.$(tr / _ <<<"$r")
-        all_landed "$wt" "$base" || { [ ! -e "$f" ] && : > "$f" && fetch_quick "$r" && all_landed "$wt" "$base"; } &&
+        all_landed "$wt" "$base" || { fetch_once "$r" && { all_landed "$wt" "$base" || { [ -z "$orphan" ] && on_remote "$wt"; }; }; } &&
           printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$wt" "$br" "$kl" "$rel" "$base" "$ln" >> "$TMP/removable"
       fi
 }
@@ -3561,14 +3575,16 @@ if [ -s "$TMP/cand" ]; then
       grep -qxF "$id" "$TMP/superseded.ids" && continue   # Other sessions says it's superseded
       t=$(mtime "$TRANSCRIPTS/$id.jsonl" 2>/dev/null) || t=$NOW   # transcript elsewhere: not known idle
       # Only a session at rest (idle, or blocked with status idle and not under Waiting on you): one on a prompt or
-      # asking the user still waits on someone, however old.
-      on=0; grep -qxF "$id" "$TMP/listed.ids" && on=1
+      # asking the user still waits on someone, however old. Not one whose last turn only reads as asking (asks_user,
+      # verdict `on` with no prompt): its task is finished, so the coordinator already has its report (a turn after
+      # the done report answering a stray message, 2026-11-26).
+      on=0; grep -qxF "$id" "$TMP/listed.ids" && [ "$(verdict "$id")" != "on	" ] && on=1
       awk -F'\t' -v id="$id" -v kl="$kl" -v old=$((t < NOW - RESOLVE_S)) -v on=$on \
         '$1==id {printf "%s\t  %s — session \"%s\": %s stop %s\n", old && ($3 ~ /^(idle|done)$/ || ($3 == "blocked" && $8 == "idle" && !on)), kl, $2, $4, substr(id,1,8)}' "$TMP/agents"
       # For the watcher's stop (--changes): a background session at rest (finished its turn, not on a prompt), quiet
       # STOP_AFTER_S (its last steps had time), not waiting on the user, and neither the caller nor a coordinator (a
       # sub-coordinator is none: scan_one never marks it a watcher, so a finished key's sub stops like its workers).
-      grep -qxF "$id" "$TMP/listed.ids" || [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] || grep -q "/$id\.jsonl$" "$TMP/watchers" ||
+      [ "$on" = 1 ] || [ "$id" = "${CLAUDE_CODE_SESSION_ID:-}" ] || grep -q "/$id\.jsonl$" "$TMP/watchers" ||
         [ "$t" -gt $(( NOW - ${SESSION_STATUS_STOP_AFTER_S:-600} )) ] ||
         awk -F'\t' -v id="$id" -v kl="$kl" '$1==id && ($3 ~ /^(idle|done)$/ || ($3 == "blocked" && $8 == "idle")) && $7 == "background" && $8 != "busy" && $8 != "waiting" {print id "\t" kl "\t" $2}' "$TMP/agents" >> "$TMP/finished"
     done

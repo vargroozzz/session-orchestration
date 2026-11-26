@@ -132,8 +132,9 @@ each result (`Scheduled start (due …): …`). A background session stopped by 
 after the reset, with no wake (status-reference.md, `--watch`). Messages you send it during the wait aren't lost:
 the resume acts on them.
 
-The watcher stops a finished task's session at rest and removes its worktree when nothing can be lost, with no ask
-(the `--changes` row in status-reference.md); each section of a change that wakes you (`Stopped`, `Logins
+The watcher stops a finished task's session at rest (one whose last turn only reads as asking too) and removes its
+worktree when nothing can be lost (its commits landed, or all on its own remote branch), and a Resolved worktree on no
+task, with no ask (the `--changes` row in status-reference.md); each section of a change that wakes you (`Stopped`, `Logins
 restored`, …) names what to do. A leftover session or worktree it leaves (its Leftovers line says why) stays the
 user's call: ask before removing it.
 

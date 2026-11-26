@@ -765,6 +765,36 @@ out=$(SESSION_STATUS_FORWARD=1 run --changes) && [ ! -e "$root/wt13" ] && [ ! -e
   grep -qxF '  * no task — removed worktree wt15 and branch side-old' <<<"$out" && ! run | grep -q wt14 ||
   { echo "symlink / no-task worktree removal failed: $out"; exit 1; }
 git -C "$root" worktree remove --force "$root/wt14" && git -C "$root" branch -qD side-fresh && rm -rf "$root/nm"
+# Three leftovers a committing --watch run clears with a Stopped line and no ask: (1) a finished task's worktree whose
+# commits never landed but are all on its own remote branch (wt17), after a --prune fetch; (2) a Resolved worktree on
+# no task, clean+merged (wt20); (3) a finished key's session at rest whose last turn only reads as asking ("waits on
+# your approval", no prompt), listed under Waiting on you. Kept, still Leftovers lines: a pushed branch with one more
+# local commit (wt18), one with an uncommitted file (wt19), one whose remote branch was deleted since (wt21: the prune
+# drops origin/BR), and a no-task branch pushed but not merged (wt22: its PR may be under review).
+git init -q --bare "$tmp/o.git" && git -C "$root" push -q "$tmp/o.git" refs/remotes/origin/main:refs/heads/main && git -C "$root" remote add origin "$tmp/o.git"
+nw() { git -C "$root" worktree add -q -b "$2" "$root/$1" origin/main && echo "$1" > "$root/$1/$1" && git -C "$root/$1" add "$1" && gc "$root/$1" -m "$1" && git -C "$root/$1" push -q origin "$2"; }
+nw wt17 feature/ABC-34-pushed && nw wt18 feature/ABC-34-more && echo m > "$root/wt18/m" && git -C "$root/wt18" add m && gc "$root/wt18" -m m &&
+  nw wt19 feature/ABC-34-wip && touch "$root/wt19/notes" && nw wt21 feature/ABC-34-gone && git -C "$root" push -q origin :feature/ABC-34-gone &&
+  GIT_COMMITTER_DATE=2020-01-01T00:00:00 nw wt22 side-pushed && touch -t 202001010000 "$root/wt22"
+git -C "$root" worktree add -q -b side-done "$root/wt20" origin/main && touch -t 202001010000 "$root/wt20"
+s3=12121212-0000-0000-0000-000000000007
+printf '%s\n' '{"type":"user","message":{"content":"Work on ABC-34"}}' '{"type":"assistant","message":{"content":[{"type":"text","text":"The design task is still finished, and stage 1 waits on your approval."}]}}' > "$proj/$s3.jsonl"
+cp "$tmp/agents.json" "$tmp/agents.keep"; jq --argjson a "[$(fs $s3 'ABC-34 design' blocked idle)]" '. + $a' "$tmp/agents.keep" > "$tmp/agents.json"
+b=$(run); grep -qxF '  "ABC-34 design" (claude attach 12121212)' <<<"$b" && grep -qF 'no task — worktree clean+merged: git -C . worktree remove wt20' <<<"$(sed -n '/^Resolved/,/^$/p' <<<"$b")" ||
+  { echo "the three leftovers' setup: $b"; exit 1; }
+run --changes >/dev/null; : > "$tmp/stops"
+out=$(SESSION_STATUS_FORWARD=1 run --changes) && [ "$(cat "$tmp/stops")" = 12121212 ] && [ ! -e "$root/wt17" ] && [ ! -e "$root/wt20" ] &&
+  ! git -C "$root" rev-parse -q --verify feature/ABC-34-pushed >/dev/null &&
+  grep -qxF '  * ABC-34 Done — "ABC-34 design" (12121212)' <<<"$out" && grep -qxF '  * ABC-34 Done — removed worktree wt17 and branch feature/ABC-34-pushed' <<<"$out" &&
+  grep -qxF '  * no task — removed worktree wt20 and branch side-done' <<<"$out" && ! grep -q 'attach 12121212\|^Waiting on you' <<<"$out" &&
+  b=$(run | sed -n '/^Leftovers/,/^$/p') && grep -qF 'worktree wt18 has 1 commit(s) not pushed' <<<"$b" && grep -qF 'worktree wt19 has 1 uncommitted file(s)' <<<"$b" &&
+  grep -qF 'worktree wt21 has 1 commit(s) not pushed' <<<"$b" && grep -qF 'no task — worktree clean, 1 unmerged commit(s) all on origin/side-pushed' <<<"$b" &&
+  [ -d "$root/wt18" ] && [ -f "$root/wt19/notes" ] && [ -d "$root/wt21" ] && [ -d "$root/wt22" ] &&
+  [ "$(SESSION_STATUS_FORWARD=1 run --changes)" = "no changes" ] || { echo "the three leftovers not cleared, or work lost: $out / ${b:-}"; exit 1; }
+for w in wt18 wt19 wt21 wt22; do git -C "$root" worktree remove --force "$root/$w"; done
+git -C "$root" remote remove origin   # it takes origin/main and origin/HEAD with it: put them back
+git -C "$root" update-ref refs/remotes/origin/main "$c" && git -C "$root" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+mv "$tmp/agents.keep" "$tmp/agents.json"; rm "$proj/$s3.jsonl"
 mv "$tmp/claude.keep" "$tmp/bin/claude"; unset SESSION_STATUS_STOP_AFTER_S
 fi
 
