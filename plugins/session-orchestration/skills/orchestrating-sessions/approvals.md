@@ -22,8 +22,10 @@ Source: <your sessionId> <your cwd>
 
 For a pane answer, `session-status --relay KEY [ACTION]` (none: the ask's `action`) writes the block (KEY's newest answer of the last 24h, Source
 filled in) once it passes the check below, and never for a "No, …" answer (exit 1 says why). Send its output as is
-once its Quote approves ACTION. The auto-mode classifier may refuse the call (it reads a merge or post Action as the
-act): don't reword it or call it again unasked, `hand_command` it (key KEY) so the user's Run press is the consent; the
+once its Quote approves ACTION. Run it plain, this plugin's `session-status` (next to this file) by its full path with nothing chained, piped or
+substituted, and ACTION in quotes with no `$`, backtick or backslash: the coordinator guard hook allows that call
+before the auto-mode classifier sees it. Any other form may be refused by the classifier (it reads a merge or post
+Action as the act): don't reword it or call it again unasked, `hand_command` it (key KEY) so the user's Run press is the consent; the
 Run's outcome brings the block whole ([pane.md](pane.md), Handed-over commands, which also says what to do when the
 Run is refused). `session-status --approvals` lists the live pane answers with the hours left and
 their relays, and `--start` shows those still to act on. A typed or question-box answer's block you write yourself, with your

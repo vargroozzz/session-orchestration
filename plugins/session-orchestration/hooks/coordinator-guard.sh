@@ -6,6 +6,7 @@
 #   Bash tool keeps it, and `claude --bg` then starts outside the project). A quoted `; cd` is refused too.
 # - Bash holding a relay block (`APPROVAL relayed from the user`) with `--resume`, `-r` or `--send-when-idle`: refused
 #   (approvals.md: a relay is a SendMessage once the session is reachable; the worker's hook can't verify it otherwise).
+# - Bash that is only this plugin's `session-status --relay KEY [ACTION]` by its full path: allowed, past the classifier.
 # - Claude Code Desktop's start_session or hand_off_to_session (a sidebar session): refused, in a subagent too, unless it is the call
 #   `--successor` prints (title NAME-next, its prompt running `--successor --started NAME`). A task goes to
 #   `claude --bg`: a sidebar session is in no listing the status reads. Config start.sidebar true (a person key,
@@ -175,7 +176,20 @@ if [ "$tool" = Bash ]; then
     deny "Coordinator rule: never cd in your shell, not later in a chain either; use absolute paths or git -C. The Bash tool keeps a cd across calls, and claude --bg then starts the new session in that folder, outside the project's settings. Run it again without the cd." cd
   grep -q 'APPROVAL relayed from the user' <<<"$cmd" && grep -qE -e '--send-when-idle|claude[^;&|]*[[:space:]](--resume|-r)[[:space:]]' <<<"$cmd" &&
     deny "Coordinator rule: a relay goes as a SendMessage once the session is reachable, never inside a resume prompt or a --send-when-idle text (approvals.md, Relaying): the worker's hook can't verify it there. Resume or wake the session without the relay block, then send the block with SendMessage." relay-resume
-  [ -n "$skey" ] || exit 0
+  if [ -z "$skey" ]; then
+    # A plain relay (approvals.md): this plugin's session-status by its full path, --relay KEY [ACTION], one line, no
+    # chain, pipe, redirection or substitution. It only prints a block verify-approval.sh passes, so it skips the
+    # classifier, which reads a merge Action as the act.
+    # shortcut: a path given quoted, with ~ or through a symlink isn't matched; it falls through to the classifier
+    ss=$(cd "${0%/*}/../skills/orchestrating-sessions" 2>/dev/null && pwd) && ss=$ss/session-status || ss=
+    # [[:blank:]], never [[:space:]]: a newline between words would start a second command
+    q=$'\'[^\'\n]*\'|"[^"$`\\\n]*"'
+    re="^[[:blank:]]+--relay[[:blank:]]+[A-Za-z0-9._-]+([[:blank:]]+($q|[A-Za-z0-9._/#:-]+))?[[:blank:]]*\$"
+    r=${cmd#"${cmd%%[![:blank:]]*}"}
+    [ -n "$ss" ] && [[ $r == "$ss "* ]] && r=${r#"$ss"} && [[ $r =~ $re ]] &&
+      jq -nc '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "a plain session-status --relay (approvals.md)"}}'
+    exit 0
+  fi
   # A sub stops no other key's session: a `claude stop` whose target names another key.
   # shortcut: a target given by id isn't resolved to its name; resolve it if a sub stops another key's session by id
   [[ $cmd =~ claude[[:space:]]+stop[[:space:]]+([^[:space:]\;\&\|]+) ]] && o=$(other_key "${BASH_REMATCH[1]}") &&
