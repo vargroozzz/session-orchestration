@@ -913,7 +913,7 @@ test('asks group per key, one line each until opened; an open ask shows its body
   expect((await ui.find({ type: 'Button', key: 'askgrp-PROJ-1' }))?.text).toMatch(/^▸ PROJ-1 2 asks · 1 issue · 2 new · /)
   expect(await ui.find({ type: 'Button', key: 'askrow-1' })).toBeUndefined() // groups start closed
   await ui.press({ key: 'askgrp-PROJ-1' })
-  expect((await ui.find({ type: 'Button', key: 'askrow-1' }))?.text).toMatch(/^▸ NEW  ISSUE  post comment \/tmp\/c\.md on app#2 \(sha256 fb45bdda…\) .* #1$/)
+  expect((await ui.find({ type: 'Button', key: 'askrow-1' }))?.text).toMatch(/^▸ #1 NEW  ISSUE  post comment \/tmp\/c\.md on app#2 \(sha256 fb45bdda…\) /)
   expect(await ui.find({ type: 'Button', key: 'ask-1-0' })).toBeUndefined() // asks start closed
   await ui.press({ key: 'askrow-1' })
   expect((await ui.find({ type: 'Markdown', key: 'askbody-1' }))?.props.text).toBe('## Nit\n\nUse `foo()` here.\\x1b[31m\n') // the ESC shown, not sent
@@ -981,7 +981,7 @@ test('a review finding post names its kind; a group lists its other asks, then i
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: PROPS })
   expect((await ui.find({ type: 'Button', key: 'askgrp-PROJ-1' }))?.text).toMatch(/^▾ PROJ-1 6 asks · 1 issue · 1 suggestion · 2 questions · 6 new · /)
   // As drawn: the kindless post and the merge in queue order, then issues, suggestions, questions.
-  const rows = (await ui.findAll({ type: 'Button', text: /^▸ NEW / })).map(r => r.text.match(/^▸ NEW  (\w+)/)?.[1] ?? 'none')
+  const rows = (await ui.findAll({ type: 'Button', text: /^▸ #\d+ NEW / })).map(r => r.text.match(/^▸ #\d+ NEW  (\w+)/)?.[1] ?? 'none')
   expect(rows).toEqual(['none', 'none', 'ISSUE', 'SUGGESTION', 'QUESTION', 'QUESTION'])
   const ids = (as: { id: string }[]) => as.map(a => a.id)
   const a = (id: string, kind?: 'issue' | 'suggestion' | 'question') => ({ id, key: 'K', question: 'q', options: [], at: 0, ...(kind ? { kind } : {}) })
