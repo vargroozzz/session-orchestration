@@ -200,8 +200,10 @@ It reads the section files, not their TSVs, and does steps 5 and 6 from them:
    by section order; two sections' candidates for one change merge into one, both sections named. Each keeps its
    `Section:`.
 5. File cases (step 5's rules: plugin scope, the ranked ones; project scope, the plugin-fix drafts) with
-   `python3 -I retro.py writer DIR --file K…`: a draft whose open case already exists gets `feedback seen` on it
-   instead of a new file, so a rerun or two sections drafting one case file it once. Name each case by its title.
+   `python3 -I retro.py writer DIR --file K…`: a draft whose open case already exists (same title) gets `feedback
+   seen` on it instead of a new file, so a rerun or two sections drafting one case file it once. A `similar K: PATH…`
+   line is yours to settle: read those cases, then `feedback seen FILE` or `feedback add --new …`. Name each case by
+   its title.
 6. Write the report and its `.html` and send step 6's one message, `reply` key `retro-<scope>`.
 
 `retro-run --join DIR` starts the writer once: under `DIR/join.lock`, when no group is running and `writer.started`

@@ -90,7 +90,9 @@ usage: python3 -I retro.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args] [--project
                                   (no status or no sections/G.md: names its session id), then the feedback drafts
                                   (`feedback add …` lines in sections/*.md), numbered, exact repeats dropped. --file
                                   files drafts K… (all with none) by ../orchestrating-sessions/feedback: one whose open
-                                  case exists gets `feedback seen` on it instead; prints `filed|seen K PATH`
+                                  case has its title gets `feedback seen` on it instead, one only like an open case
+                                  is left to the writer; prints `filed|seen K PATH` or `similar K: PATH…`, and keeps
+                                  DIR/filed.tsv so a rerun files nothing twice
   html IN.md OUT.html             Markdown report -> self-contained HTML
 
 Transcripts: <account>/projects/*/*.jsonl for every account dir ($CLAUDE_CONFIG_DIR, ~/.claude, ~/.claude-*),
@@ -2737,9 +2739,9 @@ def writer(d="", *args):
     for g, v in (run.get("groups") or {}).items():
         st = os.path.join(d, "sections", g + ".status")
         md = os.path.join(d, "sections", g + ".md")
-        state = open(st).read().strip().splitlines()[0] if os.path.isfile(st) and os.path.getsize(st) else ""
+        state = (open(st).read().strip().splitlines() or [""])[0] if os.path.isfile(st) else ""
         sid = (v.get("id") or "no id")[:8]
-        why = (state[len("failed:"):].strip() if state.startswith("failed")
+        why = (state[len("failed:"):].strip() or "the section failed and gave no reason" if state.startswith("failed")
                else "" if state.startswith("done") and os.path.isfile(md)
                else f"section session {v.get('name', g)} ({sid}) wrote no sections/{g}.md" if state.startswith("done")
                else f"section session {v.get('name', g)} ({sid}) ended without a result")
@@ -2749,10 +2751,11 @@ def writer(d="", *args):
                 print(f"## {s.capitalize()}\nno data: {why}")
         if not why:
             for line in open(md):
-                m = re.search(r"(?:^|[\s`/])feedback add (.+)", line)
+                # a draft names its category first (prose that mentions feedback add doesn't); a backticked one ends there
+                m = re.search(r"(?:^|[\s`/])feedback add ((?:--new |--project )*(?:bugfixes|features|refactorings) .+)", line)
                 if m:
                     try:
-                        a = shlex.split(m.group(1).strip().rstrip("`"))
+                        a = shlex.split(m.group(1).split("`")[0] if "`" in line[:m.start(1)] else m.group(1))
                     except ValueError as e:
                         print(f"draft skipped ({g}): {e}: {clip(line.strip())}", file=sys.stderr)
                         continue
@@ -2763,19 +2766,37 @@ def writer(d="", *args):
     if not args:
         return
     fb = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "orchestrating-sessions", "feedback")
+    if not all(k.isdigit() and 1 <= int(k) <= len(drafts) for k in args[1:]):
+        sys.exit(f"usage: retro.py writer DIR --file [K…]  (K: a draft's number, 1–{len(drafts)})")
     pick = [int(k) for k in args[1:]] or range(1, len(drafts) + 1)
+    # what this run filed, so a resumed writer files nothing twice and adds no second seen date
+    log = os.path.join(d, "filed.tsv")
+    done = dict(l.rstrip("\n").split("\t", 1) for l in open(log) if "\t" in l) if os.path.isfile(log) else {}
     rc = 0
     for k in pick:
-        if not 1 <= k <= len(drafts):
-            sys.exit(f"no draft {k} (1–{len(drafts)})")
-        p = subprocess.run([fb, "add", *drafts[k - 1][1]], stdout=subprocess.PIPE, text=True)
-        if p.returncode == 0:
-            print(f"filed {k} {p.stdout.strip()}")
+        a = drafts[k - 1][1]
+        if shlex.join(a) in done:
+            print(f"filed {k} {done[shlex.join(a)]} (already)")
             continue
-        # exit 3: an open case is the same one (feedback add lists it first); it counts there, not as a new file
-        m = re.search(r"^\s+(\S+\.md) — ", p.stdout, re.M) if p.returncode == 3 else None
-        if m and subprocess.run([fb, "seen", m.group(1)]).returncode == 0:
-            print(f"seen {k} {m.group(1)}")
+        p = subprocess.run([fb, "add", *a], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        path = p.stdout.strip() if p.returncode == 0 else ""
+        if p.returncode == 3:
+            # a similar open case: the same one only when its title is the draft's; else the writer decides
+            title = [x for x in a if x not in ("--new", "--project")][1]
+            sim = re.findall(r"^\s+(.+\.md) — (.*)$", p.stdout, re.M)
+            same = [f for f, t in sim if t.strip() == title]
+            if not same:
+                print(f"similar {k}: {'; '.join(f for f, _ in sim)}"
+                      " (the same case: feedback seen FILE; a new one: feedback add --new …)")
+                continue
+            if subprocess.run([fb, "seen", same[0]]).returncode == 0:
+                path = same[0]
+                print(f"seen {k} {path}")
+        elif path:
+            print(f"filed {k} {path}")
+        if path:
+            with open(log, "a") as f:
+                f.write(f"{shlex.join(a)}\t{path}\n")
         else:
             print(f"failed {k}: {clip(p.stdout.strip())}"); rc = 1
     sys.exit(rc)
