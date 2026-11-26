@@ -180,6 +180,10 @@ The gated commands, edits included, and the action the hook names for each (ask 
   coordinator relays it with the Action ending in your session's name, `merge OWNER/REPO#ID (<session name>)` (within 24h of that approval; later, ask for the merge).
   Started by a yes given under another key that approved your landing too: `(<session name>, approved under <that
   key>)`, within 24h of that yes.
+  Started on the user's Yes in the coordinator pane (your brief says so): that Yes granted you the landing
+  ([approvals.md](approvals.md#grants)), so ask for no relay: run `gh pr merge ID -R OWNER/REPO --auto --rebase`
+  alone (gh refusing `--auto` on a clean PR: the same with `--rebase` only), then watch it land with `gh pr view` and
+  `gh run watch`. Denied: report `blocked`, and the coordinator relays as above.
   A GitHub PR lands in one command on that relay: `session-status --land OWNER/REPO#ID`, alone, with Bash's
   `run_in_background` (it takes minutes). It merges (`--auto --rebase`, plain `--rebase` on a clean PR, a retry on
   `Base branch was modified`), waits until merged, watches every CI run on its merge commit and ends with one line:

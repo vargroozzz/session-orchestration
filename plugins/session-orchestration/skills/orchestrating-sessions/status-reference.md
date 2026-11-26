@@ -429,11 +429,11 @@ the `body_file` when the ask is queued and shows its text as markdown with its s
 if markdown would hide a link target or HTML). Asks are grouped per task key, one line each, until
 the user opens one (NEW: never opened). An ask with a kind shows it as a coloured badge; a group
 lists its other asks (a merge, a post with no kind) first, then issues, suggestions, questions, and
-the group line counts each kind. `details`, `target`, `kind` and `session` (as `Runs in: <it>`, under the action)
-show only in the pane. A Yes click on an ask with `action` and `session` (**Approve all N merges…** included) writes
-its grant (`~/.cache/session-status/grants/act-*.json`, [approvals.md](approvals.md#grants)) before the answer is
-submitted, and removes it when the answer isn't sent; any answer for the key removes the grants of earlier answers
-for it. The pane refuses an ask whose
+the group line counts each kind. `details`, `target`, `kind` and `session` (as `Runs in: <it>`, under the action; with no action, a start ask's,
+`Starts, may land its PR: <it>`) show only in the pane. A Yes click on an ask with `action` and `session` (**Approve
+all N merges…** included) writes its grant (`~/.cache/session-status/grants/act-*.json`; a start ask's land grant,
+`land-*.json`, [approvals.md](approvals.md#grants)) before the answer is submitted, and removes it when the answer
+isn't sent; any answer for the key removes the action grants of earlier answers for it, never a land grant. The pane refuses an ask whose
 question names a sha256 that isn't its `body_file`'s, or names one with no `body_file`, and a `post comment`
 question or action, or a close with a comment, with no `body_file`. Queuing the same key and
 question again replaces the waiting ask (same id), never a second one. An ask's `still_applies: "OWNER/REPO#N"` (and

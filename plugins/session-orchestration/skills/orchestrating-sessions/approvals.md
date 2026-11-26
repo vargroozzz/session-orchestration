@@ -23,6 +23,13 @@ again: …`); the note approves nothing itself, the hook finds the grant. An ans
 words…) grants nothing. The relay block stays for the rest: an ask without `session`, a typed or question-box answer,
 no pane, a landing approved under another key.
 
+A start ask ([sessions.md](sessions.md), Propose first) carries `session` (the name it starts under) and no `action`:
+its answer ends `Starts: <session>`, and its Yes writes a land grant. That session's hook takes it once, only for
+`gh pr merge N -R OWNER/REPO --auto --rebase` or `--rebase` (alone, no other flag) on a PR in that repo whose head is
+the session's name or its cwd's branch, within 24h, when the writing coordinator's transcript holds the Yes it quotes.
+A later answer for the key leaves it, and one written by a background coordinator takes nothing. So the started task lands without a relay ([worker.md](worker.md#posting-and-merging)); past that, relay as
+before.
+
 ## The relay block
 
 To pass on an approval the user gave, send the session this block, one action per block, the Quote verbatim:
