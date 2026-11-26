@@ -26,6 +26,17 @@ where each one goes, applies what the user approves, and empties what it resolve
   session saw in 30 days and names them. Name them in the proposal too, so the user can ask for one back (`restore`).
   Memory entries that are the steps of one procedure: write them up as a draft (`skill-drafts add FILE graduate`) and
   propose it with the rest, the entries as drops once it's a skill.
+- **Plugin lessons** (with session-orchestration; its `feedback` files them): the candidates for the Plugin block
+  (Propose) are every memory entry, plus
+  - the setup section of `CLAUDE.local.md` or `CLAUDE.md` (`## Cross-session messages`, or the team section): only the
+    lines and words its template (`setting-up-coordination/templates/claude-section.md` of the installed plugin) doesn't
+    write. Template lines are the plugin's pointer and stay;
+  - any other `CLAUDE.md` or `CLAUDE.local.md` line that names a plugin script, hook or config key (a grep);
+  - project cases whose `where` or evidence is a plugin file (misfiled);
+  - a deferred task or skill draft about the plugin;
+  - the ledger `upstream.tsv`, private, beside the tasks folder `cases tasks` prints (never in git): one row per
+    earlier filing or link (date, source file, the line's exact text with tabs as spaces, case path, kind, and
+    `declined` once its case is dropped), for the re-check.
 - **The tracker**: does the project have one? The project's `CLAUDE.md` or config names it (session-orchestration's
   `tracker`: `jira` or `github`), or a GitHub remote with issues on. Note the CLI that files a ticket; none found: no
   tracker.
@@ -51,6 +62,10 @@ Deferred tasks
 Skill drafts
  9. skill     cut-release (seen 3×, last 2026-10-29) → .claude/skills/cut-release/
 10. drop      preview-deploy (seen once; docs/deploy.md covers it) → archived
+Plugin
+11. drop      memory/coordinator.md "never open a worker's HTML report" (orchestrating-sessions/SKILL.md Rules says it)
+12. upstream  CLAUDE.local.md "never pipe gh into sed" → features case, worker.md "Posting and merging" (draft below)
+13. link      memory/misc.md "a literal --start draws reports" → open case a-worker-reply-reached-… (feedback seen)
 ```
 
 - **graduate** names the doc and section that owns the situation (a `CLAUDE.md`, a doc, a skill); a topic past ~15
@@ -70,6 +85,32 @@ Skill drafts
   or a one-off). The yes is to the text that will ship: put each proposed skill's SKILL.md whole in the proposal file,
   after `skill-drafts scrub NAME` passes (reword a hit first). It goes to the project's `.claude/skills/`, committed, so
   every session and collaborator gets it.
+- **Plugin**: each candidate (Gather) takes three questions, in order:
+  1. **Does the installed plugin already say or do it?** A rule: grep its docs. A bug: the code at the case's `where`
+     in the installed copy (the plugin folder `feedback` runs from). Yes: **drop**. Trust the installed
+     plugin over a case's status line; a case it outdates gets its own row, `feedback mark FILE fixed '<what
+     shipped>'`.
+  2. **Is it about the plugin?** It names something the plugin ships or decides (a script, hook, skill step, config
+     key, the pane, reply or a tool, a file the plugin lays out, a template line), and swapped into any other project
+     using the plugin it still holds and helps. Its incident may be the project's: only the rule ships. A line whose
+     subject is this project's hosts, tools, files or people, or the person's machine or tastes, is not: ordinary
+     graduation, above. A person's preference stays theirs unless its reason is the plugin's behaviour. So is a line
+     the ledger marks `declined`.
+  3. **What kind?** **bug** (a workaround for the plugin doing the wrong thing): an `upstream` row, a `bugfixes`
+     case, at once. **doc** (works as designed, no doc says to use it so): an `upstream` row, a `features` case naming
+     the owning doc in `--suggested`, once past the index's thresholds, or at once when the user stated the rule. A
+     missing template line is a doc row naming `templates/claude-section.md`. **setting** (restates a config value,
+     `session-status --config KEY`): **drop**. A mixed line is split; the general half is the row.
+  - Before an `upstream` row, `feedback list --plugin` for an open case that is the same: **link** it (`feedback
+    seen`) instead of filing.
+  - **Re-check** the ledger's rows: `grep -H '^- status' CASE…`. `fixed`, `sent` or open, the question-1 test on the
+    installed plugin: shipped means **drop** the source line and its ledger row. `dropped` (won't fix): a `declined`
+    row; the line is a project line again.
+  - The source line stays until the installed plugin has the fix: it is the workaround sessions need meanwhile.
+  - The public text is the rule and its mechanism in plugin terms, as session-orchestration's
+    `orchestrating-sessions/feedback.md` Capture says; evidence is counts only ("kept 9 days by one project's memory,
+    cited by 4 sessions"). Write each `upstream` row's case text to its own scratch file, run `feedback scrub` on it
+    (reword a hit), and put it in the proposal file: the yes is to that text.
 
 ## 3. Apply, on the user's yes
 
@@ -92,11 +133,26 @@ Only the numbers the user approved; ask again for anything new you find on the w
 - **Skill**: in the checkout or worktree the change goes in, `skill-drafts promote NAME .claude/skills` (it archives the
   draft); a scrub hit: reword the draft and promote again, never copy it by hand. Then the project's checks and commit,
   as for a doc. Its PR turned down: `skill-drafts restore NAME`. **Drop** (a draft): `skill-drafts archive NAME`.
+- **Plugin**:
+  - `upstream`: `feedback add CATEGORY TITLE --where PATH --found 'graduate; a memory entry' --evidence TEXT
+    [--suggested TEXT]` (`--found` may say `a CLAUDE.local.md line` or `a project case`), with the approved text;
+    exit 3 on the same case: `feedback seen FILE`. A misfiled project case: `feedback mark FILE dropped` once its
+    plugin case is filed.
+  - `link`: `feedback seen FILE`. An outdated case: `feedback mark FILE fixed '<what shipped>'`.
+  - Each `upstream` and `link` appends its ledger row (the first one creates the file with Write, the rest with Edit).
+  - `drop` and the re-check's drops: delete the memory line and the ledger row. A source line in a person file is a
+    pair (below); one in a committed `CLAUDE.md` goes by the project's PR.
+- **Person files** (untracked `CLAUDE.local.md`, `.claude/coordination.local.json`): never edit them from a worktree
+  or background session, and never through a script or a full-file copy. Write each approved change in the report as
+  an exact old → new pair (new may be empty; old unique in the file); the coordinator applies it with Edit. With no
+  coordinator, the attended `/graduate` session makes the edit on the user's yes. A config key is the user's: name
+  the key and value. A committed team section or team memory changes by the team's PR, never directly.
 
 Every task file the pass resolved is deleted; the tasks folder holds only what the user chose to keep.
 
 ## 4. Report
 
-What moved where (doc and section), what was dropped, cases marked, tickets filed (keys or URLs), files deleted, skills added and drafts archived, and
-anything left for the user. With session-orchestration, the R&D run proposes graduation and a followups session
+What moved where (doc and section), what was dropped, cases marked, tickets filed (keys or URLs), files deleted, skills added and drafts archived,
+plugin cases filed or seen, a `Person-file edits (the coordinator's)` section with the old → new pairs, and anything
+left for the user. With session-orchestration, the R&D run proposes graduation and a followups session
 applies it with this skill.
