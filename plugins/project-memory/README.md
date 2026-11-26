@@ -7,14 +7,18 @@ What one Claude Code session learns, the next one knows. Works in any project, w
   trigger. Sessions read the index when they start a task, read only the topics that match, and append one line per
   decision or pitfall another task would need. `memory-init` sets it up.
 - **`/graduate`** (`graduate` skill): proposes, item by item, moving proven memory entries into the docs that own
-  them, dropping stale ones, turning open project cases into fixes and resolving deferred tasks (ticket it, fix it or
-  drop it), then applies what you approve.
+  them, dropping stale ones, turning open project cases into fixes, resolving deferred tasks (ticket it, fix it or
+  drop it) and making skill drafts skills, then applies what you approve.
 - **Project cases** (`cases`): friction the project caused a session (a host's sign-in, a misleading doc, a script
   that fails on a case it should handle), filed the moment it happens, deduplicated and counted, kept outside the
   repo in `~/.local/state` until a fix lands.
 - **Deferred tasks** (`defer-task` skill): an out-of-scope bug, feature, refactor or docs/setup gap (coding task or not) noticed mid-task goes to
   `<bugfixes|features|refactorings>/` in the project's tasks folder (`cases tasks`: under `~/.local/state`, outside the
   repo) instead of derailing the task.
+- **Skill drafts** (`skill-drafts`): a procedure of three or more steps that comes up a second time, with no skill or
+  doc covering it, is written up as a draft SKILL.md in the project's state folder, never the repo. `/graduate` shows
+  each draft for your yes; only then is it scrubbed (your home path, login, host, git name and email) and copied into
+  the project's `.claude/skills/`. A draft no session has seen in 30 days is archived, never deleted.
 - **Background-session guards** (hooks): in every `--bg` session, in every project, the question box, plan mode, an
   `EnterWorktree` outside the session's own `.claude/worktrees/`, and a compound Bash command about to raise a
   permission prompt are denied with what to do instead ([hooks/background-sessions.md](hooks/background-sessions.md)).

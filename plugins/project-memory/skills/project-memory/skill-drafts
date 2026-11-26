@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Skill drafts: a multi-step procedure sessions keep repeating, written as a SKILL.md for the user's review (the
+# graduate skill). A draft lives in the project's state folder, never in the repo, so no session loads it as a skill;
+# only promote, on the user's yes, copies it into a skills folder, and only once its scrub passes. Never sent anywhere.
+#
+# DIR: --dir DIR, else skill-drafts/ beside the deferred-task folder `cases tasks` prints (the project's state folder).
+# A draft: DIR/NAME/SKILL.md (plus any file beside it the skill refers to) and DIR/NAME/seen, one `DATE WHO` line per
+# sighting. An archived one: DIR/archive/NAME, the same files (the archive/ beside a thing, as project-memory's
+# `unused archive` keeps one).
+#
+# Usage: skill-drafts [--dir DIR] add FILE WHO   copies FILE, a SKILL.md whose frontmatter has `name: NAME`
+#                        (lowercase letters, digits and -) and a one-line description, to DIR/NAME as a draft WHO (the task)
+#                        saw today; prints its path. NAME taken, by a draft or an archived one: exit 3.
+#        skill-drafts seen NAME WHO      a sighting: `TODAY WHO` added to its seen file (once a day per WHO)
+#        skill-drafts list [--archived]  times seen, last seen (- for never), path, description (tabs), most seen
+#                                        first
+#        skill-drafts archive NAME       moves it to DIR/archive (the user's no); never deleted
+#        skill-drafts restore NAME       moves it back, seen today by `restored`
+#        skill-drafts sweep [--days N]   archives each draft no one saw in the last N days (default 30), printing its
+#                                        name
+#        skill-drafts scrub NAME         lines naming this machine's person: the home folder, login, host, git user
+#                                        name (each part) and email, or the ERE in $SCRUB_DENY (else the first line of
+#                                        ${XDG_CONFIG_HOME:-~/.config}/scrub-deny); exit 1 on any, 2 on an ERE
+#                                        grep can't read
+#        skill-drafts promote NAME DEST  the scrub (a hit: exit 1, reword the draft and rerun), then the draft without
+#                                        its seen file copied to DEST/NAME and the draft archived; prints the new
+#                                        SKILL.md. DEST/NAME there already: exit 3
+#        skill-drafts dir                DIR
+set -uo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+TODAY=$(date +%F)
+die() { echo "$*" >&2; exit 2; }
+DIR=
+[ "${1:-}" = --dir ] && { [ -n "${2:-}" ] || die "--dir needs a folder"; DIR=$2; shift 2; }
+[ -n "$DIR" ] || DIR=$(dirname "$("$here/cases" tasks)")/skill-drafts
+A=$DIR/archive
+# fm KEY FILE: a frontmatter field's value.
+fm() { awk -v k="$1" 'NR == 1 && $0 != "---" { exit } NR > 1 && $0 == "---" { exit }
+  NR > 1 && index($0, k ":") == 1 { v = substr($0, length(k) + 2); sub(/^ +/, "", v); print v; exit }' "$2"; }
+# ok NAME: a skill's name, which is also a folder name here, so no path, and not the archive's.
+ok() { [[ ${1:-} =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] && [ "$1" != archive ] ||
+  die "a draft's name: lowercase letters, digits and -, up to 64, not archive (not '${1:-}')"; }
+has() { ok "$1"; [ -f "$DIR/$1/SKILL.md" ] || die "no draft $1 (skill-drafts list)"; }
+one_line() { [ -n "$1" ] && [[ $1 != *$'\n'* ]] || die "WHO: one line"; }
+# rows FOLDER: times seen (restore's and promote's lines aren't sightings), last seen (- for never: read splits on
+# tabs, so no field may be empty but the last), path, description, one row per draft in it.
+rows() {
+  local d last
+  for d in "$1"/*/; do
+    d=${d%/}; [ -f "$d/SKILL.md" ] || continue
+    last=$(cut -d' ' -f1 "$d/seen" 2>/dev/null | grep . | sort | tail -1)
+    printf '%s\t%s\t%s\t%s\n' "$(cat "$d/seen" 2>/dev/null | grep -cvE '^$| restored$| promoted to ')" "${last:--}" \
+      "$d/SKILL.md" "$(fm description "$d/SKILL.md")"
+  done
+}
+archive() { [ ! -e "$A/$1" ] || die "$A/$1 exists"; mkdir -p "$A" && mv "$DIR/$1" "$A/$1" || die "can't archive $1"; }
+scrub() { # NAME: `path:line:text` per hit; returns 2 on a deny pattern grep can't read, so nothing passes unchecked
+  local lit deny f
+  # Whole words, any case. A name part under 2 letters would hit every "a".
+  lit=$({ echo "$HOME"; id -un; hostname -s; git config user.email; git config user.name
+    git config user.name | tr -s ' ' '\n'; } 2>/dev/null | grep -E '..' | sort -u)
+  deny=${SCRUB_DENY:-$(grep -v '^#' "${XDG_CONFIG_HOME:-$HOME/.config}/scrub-deny" 2>/dev/null | grep -m1 .)}
+  if [ -n "$deny" ]; then
+    grep -E -- "$deny" </dev/null 2>/dev/null; [ $? = 1 ] || { echo "the deny pattern (SCRUB_DENY or scrub-deny) isn't an ERE grep reads" >&2; return 2; }
+  fi
+  find "$DIR/$1" -type f ! -name seen | sort | while read -r f; do
+    [ -z "$lit" ] || grep -HniwF -f <(printf '%s\n' "$lit") -- "$f"
+    [ -z "$deny" ] || grep -HniE -- "$deny" "$f"
+  done | sort -u
+  return 0
+}
+
+case ${1:-} in
+add)
+  f=${2:-} who=${3:-}; [ -f "$f" ] || die "usage: skill-drafts add FILE WHO"; one_line "$who"
+  name=$(fm name "$f"); ok "$name"
+  desc=$(fm description "$f"); [ -n "$desc" ] && ! [[ $desc =~ ^[\|\>][-+]?$ ]] || die "$f: its frontmatter needs a one-line description"
+  for d in "$DIR/$name" "$A/$name"; do
+    [ ! -e "$d" ] || { echo "$d exists: a sighting is skill-drafts seen $name WHO (and an Edit of its SKILL.md where it was wrong); an archived one, skill-drafts restore $name" >&2; exit 3; }
+  done
+  mkdir -p "$DIR/$name" && cp "$f" "$DIR/$name/SKILL.md" && echo "$TODAY $who" > "$DIR/$name/seen" || die "can't write $DIR/$name"
+  echo "$DIR/$name/SKILL.md" ;;
+seen)
+  has "${2:-}"; one_line "${3:-}"
+  grep -qxF -- "$TODAY $3" "$DIR/$2/seen" 2>/dev/null || echo "$TODAY $3" >> "$DIR/$2/seen" ;;
+list)
+  case ${2:-} in --archived) d=$A ;; '') d=$DIR ;; *) die "usage: skill-drafts list [--archived]" ;; esac
+  rows "$d" | sort -t$'\t' -k1,1nr -k2,2r ;;
+archive) has "${2:-}"; archive "$2" ;;
+restore)
+  ok "${2:-}"; [ -d "$A/$2" ] || die "no archived draft $2 (skill-drafts list --archived)"
+  [ ! -e "$DIR/$2" ] || die "$DIR/$2 exists"
+  mv "$A/$2" "$DIR/$2" && echo "$TODAY restored" >> "$DIR/$2/seen" ;;
+sweep)
+  days=30
+  [ "${2:-}" = --days ] && { days=${3:-}; [[ $days =~ ^[0-9]+$ ]] || die "--days needs a number"; }
+  # BSD date, else GNU's (CI runs Ubuntu).
+  cut=$(date -v-"$days"d +%F 2>/dev/null || date -d "$days days ago" +%F) || die "can't compute the date $days days ago"
+  rows "$DIR" | while IFS=$'\t' read -r _ last path _; do
+    [[ $last < $cut ]] || continue
+    name=$(basename "$(dirname "$path")"); archive "$name" && echo "$name"
+  done ;;
+scrub) has "${2:-}"; h=$(scrub "$2") || exit 2; [ -z "$h" ] || { echo "$h"; exit 1; } ;;
+promote)
+  has "${2:-}"; name=$2 dest=${3:-}; [ -n "$dest" ] || die "usage: skill-drafts promote NAME DEST"
+  [ "$(fm name "$DIR/$name/SKILL.md")" = "$name" ] || die "$DIR/$name/SKILL.md: its frontmatter name isn't $name"
+  h=$(scrub "$name") || exit 2; [ -z "$h" ] || { echo "$h"; echo "reword those lines in the draft and promote again" >&2; exit 1; }
+  [ ! -e "$dest/$name" ] || { echo "$dest/$name exists" >&2; exit 3; }
+  mkdir -p "$dest" && cp -R "$DIR/$name" "$dest/$name" && rm -f "$dest/$name/seen" || die "can't copy it to $dest/$name"
+  echo "$TODAY promoted to $dest/$name" >> "$DIR/$name/seen"; archive "$name"
+  echo "$dest/$name/SKILL.md" ;;
+dir) echo "$DIR" ;;
+*) sed -n '/^# Usage:/,/^set /p' "$0" | sed '$d; s/^# \{0,1\}//' >&2; exit 2 ;;
+esac

@@ -1,11 +1,11 @@
 ---
 name: graduate
-description: The graduate pass over a project's memory, friction cases and deferred tasks - proven entries into their docs, the rest pruned, cases fixed, task files resolved, each on the user's yes. Use for /graduate, when asked to graduate, prune or tidy project memory or review deferred tasks or cases, or when an R&D run's approved proposals include graduation.
+description: The graduate pass over a project's memory, friction cases, deferred tasks and skill drafts - proven entries into their docs, the rest pruned, cases fixed, task files resolved, drafts made skills or archived, each on the user's yes. Use for /graduate, when asked to graduate, prune or tidy project memory or review deferred tasks or cases, or when an R&D run's approved proposals include graduation.
 ---
 
 # Graduate
 
-Memory, cases and deferred tasks are inboxes: things land there cheaply and leave once acted on. This pass proposes
+Memory, cases, deferred tasks and skill drafts are inboxes: things land there cheaply and leave once acted on. This pass proposes
 where each one goes, applies what the user approves, and empties what it resolved. Nothing moves without a yes.
 
 ## 1. Gather
@@ -19,6 +19,11 @@ where each one goes, applies what the user approves, and empties what it resolve
   `refactorings/` of the tasks folder `cases tasks` prints (`${XDG_STATE_HOME:-~/.local/state}/session-orchestration/projects/<root, encoded>/tasks/`).
   Older setups kept them in `.claude/tasks/` of the main checkout or a worktree: sweep those too (with
   session-orchestration, `session-status --init --write --move` moves them).
+- **Skill drafts** ([project-memory](../project-memory/SKILL.md#skill-drafts)): `skill-drafts sweep` (beside the
+  project-memory skill), then `skill-drafts list`. The sweep is the one move without a yes: it archives the drafts no
+  session saw in 30 days and names them. Name them in the proposal too, so the user can ask for one back (`restore`).
+  Memory entries that are the steps of one procedure: write them up as a draft (`skill-drafts add FILE graduate`) and
+  propose it with the rest, the entries as drops once it's a skill.
 - **The tracker**: does the project have one? The project's `CLAUDE.md` or config names it (session-orchestration's
   `tracker`: `jira` or `github`), or a GitHub remote with issues on. Note the CLI that files a ticket; none found: no
   tracker.
@@ -40,6 +45,9 @@ Deferred tasks
  5. ticket    bugfixes/2026-10-28-retry-loop.md → Jira PROJ, Bug "Retry loop never backs off"
  6. fix       refactorings/2026-10-30-dup-parser.md → in this pass (small: one function)
  7. drop      features/2026-09-02-dark-mode.md (done in 4f2c1a0)
+Skill drafts
+ 8. skill     cut-release (seen 3×, last 2026-10-29) → .claude/skills/cut-release/
+ 9. drop      preview-deploy (seen once; docs/deploy.md covers it) → archived
 ```
 
 - **graduate** names the doc and section that owns the situation (a `CLAUDE.md`, a doc, a skill); a topic past ~15
@@ -53,6 +61,10 @@ Deferred tasks
     by default: the pass empties the folder).
   - **fix it**: small and clear enough to do in this pass, or in its own session/branch when it isn't (say which).
   - **drop it**: done already (name the commit), no longer true, or not worth doing.
+- **Skill drafts**: **skill** (a procedure worth having, its steps still right) or **drop** (covered elsewhere, wrong,
+  or a one-off). The yes is to the text that will ship: put each proposed skill's SKILL.md whole in the proposal file,
+  after `skill-drafts scrub NAME` passes (reword a hit first). It goes to the project's `.claude/skills/`, committed, so
+  every session and collaborator gets it.
 
 ## 3. Apply, on the user's yes
 
@@ -70,11 +82,14 @@ Only the numbers the user approved; ask again for anything new you find on the w
 - **Fix it**: fix it as the project's rules say, then delete the task file. Its own session: start or hand it over
   with the task file's content as the brief, and delete the file once that session has it.
 - **Drop it**: delete the task file.
+- **Skill**: in the checkout or worktree the change goes in, `skill-drafts promote NAME .claude/skills` (it archives the
+  draft); a scrub hit: reword the draft and promote again, never copy it by hand. Then the project's checks and commit,
+  as for a doc. Its PR turned down: `skill-drafts restore NAME`. **Drop** (a draft): `skill-drafts archive NAME`.
 
 Every task file the pass resolved is deleted; the tasks folder holds only what the user chose to keep.
 
 ## 4. Report
 
-What moved where (doc and section), what was dropped, cases marked, tickets filed (keys or URLs), files deleted, and
+What moved where (doc and section), what was dropped, cases marked, tickets filed (keys or URLs), files deleted, skills added and drafts archived, and
 anything left for the user. With session-orchestration, the R&D run proposes graduation and a followups session
 applies it with this skill.
