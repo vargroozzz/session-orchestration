@@ -694,4 +694,38 @@ echo '[{"number":5,"createdAt":"2026-10-12T09:00:00Z","mergedAt":"2026-10-12T10:
 out=$(retro merges "$tmp/w" "$tmp/w/prs.json" 7 o/r 2>&1)
 grep -q '^merge rows 3 distinct 2 dup \[5\] not merged \[6\]' <<<"$out" && grep -q '^host: merged in window 1 opened 2' <<<"$out" ||
   fail "merges: distinct, dup, not merged, host counts" "$out"
+# merges quality. #5 (task session dddddddd): a CI failure after it opened (one before it, and one after its merge, don't
+# count), changes requested, its branch came back as #8. #7 (a reviewer merged it): a re-run, follow-up fix #9; #10's
+# "fixture" and #13 (after the window) are no follow-ups. #11 (dddddddd too): a fork's PR, CI unmeasured; dddddddd's $4
+# splits over its two PRs. zzzzzzzz has no transcript.
+mkdir -p "$tmp/q"
+printf '%s\n' $'kind\tid\tsession\tts\tcommand' $'merge\to/r#5\tdddddddd\t2026-10-12T10:00:00\tgh pr merge 5' \
+  $'merge\to/r#7\thost\t2026-10-12T11:00:00\to/r: merged on the code host' \
+  $'merge\to/r#11\tdddddddd\t2026-10-12T11:00:00\tgh pr merge 11' $'merge\to/r#12\tzzzzzzzz\t2026-10-12T11:00:00\tgh pr merge 12' > "$tmp/q/units.tsv"
+printf '%s\n' $'session\tname\tstart\tusd\tfirst_prompt' $'dddddddd\ta\t2026-10-12T08:00\t4\tWork on ABC-1' > "$tmp/q/sessions.tsv"
+cat > "$tmp/q/prs.json" <<'EOF'
+[{"number":5,"createdAt":"2026-10-12T09:00:00Z","mergedAt":"2026-10-12T10:30:00Z","headRefName":"t-a","title":"a","reviews":[{"state":"CHANGES_REQUESTED"},{"state":"APPROVED"}]},
+ {"number":7,"createdAt":"2026-10-12T09:00:00Z","mergedAt":"2026-10-12T11:30:00Z","headRefName":"t-b","title":"b","reviews":[]},
+ {"number":11,"createdAt":"2026-10-12T09:00:00Z","mergedAt":"2026-10-12T11:30:00Z","headRefName":"main","isCrossRepository":true,"title":"e","reviews":[]},
+ {"number":12,"createdAt":"2026-10-12T09:00:00Z","mergedAt":"2026-10-12T11:30:00Z","headRefName":"t-f","title":"f","reviews":[]},
+ {"number":8,"createdAt":"2026-10-13T09:00:00Z","mergedAt":null,"headRefName":"t-a","title":"a again","reviews":[]},
+ {"number":9,"createdAt":"2026-10-13T09:00:00Z","mergedAt":null,"headRefName":"t-c","title":"c","body":"Fixes #7's parser","reviews":[]},
+ {"number":10,"createdAt":"2026-10-13T09:00:00Z","mergedAt":null,"headRefName":"t-d","title":"d","body":"Adds a fixture for #7","reviews":[]},
+ {"number":13,"createdAt":"2026-10-14T09:00:00Z","mergedAt":null,"headRefName":"t-g","title":"Reverts #5","reviews":[]}]
+EOF
+cat > "$tmp/q/runs.json" <<'EOF'
+[{"headBranch":"t-a","conclusion":"failure","createdAt":"2026-10-12T08:00:00Z"},{"headBranch":"t-a","conclusion":"failure","createdAt":"2026-10-12T09:01:00Z"},
+ {"headBranch":"t-a","conclusion":"success","createdAt":"2026-10-12T09:20:00Z"},{"headBranch":"t-a","conclusion":"failure","createdAt":"2026-10-13T09:01:00Z"},
+ {"headBranch":"t-b","conclusion":"cancelled","createdAt":"2026-10-12T09:01:00Z"},{"headBranch":"t-b","conclusion":"success","attempt":2,"createdAt":"2026-10-12T09:05:00Z"},
+ {"headBranch":"main","conclusion":"failure","createdAt":"2026-10-12T09:30:00Z"}]
+EOF
+out=$(retro merges "$tmp/q" "$tmp/q/prs.json" 7 o/r "$tmp/q/runs.json" 2>&1)
+grep -q $'^quality\t#5\ttask\t1\t0\t1\t#8$' <<<"$out" && grep -q $'^quality\t#7\thost\t1\t0\t0\t#9$' <<<"$out" &&
+  grep -q $'^quality\t#11\ttask\t-\t-\t0\t-$' <<<"$out" && grep -q $'^quality\t#12\tunknown\t-\t-\t0\t-$' <<<"$out" &&
+  grep -q '^quality task n=2: first-try green 0/1, CHANGES_REQUESTED 1 in 1 PRs, follow-up 1, merging session.s \$ per PR merged median 2.00$' <<<"$out" &&
+  grep -q '^quality host n=1: first-try green 0/1, CHANGES_REQUESTED 0 in 0 PRs, follow-up 1, merging session.s \$ per PR merged median -$' <<<"$out" ||
+  fail "merges: per-PR quality (CI fails, review rounds, follow-up) and per kind" "$out"
+out=$(retro merges "$tmp/q" "$tmp/q/prs.json" 7 o/r 2>&1)
+grep -q $'^quality\t#7\thost\t-\t-\t0\t#9$' <<<"$out" && grep -q 'task n=2: first-try green 0/0' <<<"$out" ||
+  fail "merges: quality without RUNS_JSON leaves CI unmeasured" "$out"
 echo ok

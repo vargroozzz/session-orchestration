@@ -32,9 +32,16 @@ usage: python3 -I retro.py [--until YYYY-MM-DDTHH:MM[:SS]] CMD [args] [--project
   waste DIR [days=7]              the waste counts of a retro folder's sessions/events/waits/usage.tsv (each
                                   optional) and the denial log: spend totals, denials by class and their retries,
                                   hook blocks (on landing commands too), `!` handoffs, waits by class, usage faults
-  merges DIR PRS_JSON [days=7]    DIR/units.tsv's merge rows against the host's PR list (number, createdAt,
-                                  mergedAt): distinct, duplicate, not merged, merge command -> merged, open -> merged,
-                                  session start -> merge command, the host's merged/opened in the window, $ per PR
+  merges DIR PRS_JSON [days=7] [OWNER/REPO] [RUNS_JSON]
+                                  DIR/units.tsv's merge rows against the host's PR list (number, createdAt, mergedAt):
+                                  distinct, duplicate, not merged, merge command -> merged, open -> merged, session
+                                  start -> merge command, the host's merged/opened in the window, $ per PR; then a
+                                  `quality` row per merged PR: #N, the merging session's kind (host, unknown), CI runs
+                                  failed or re-run between open and merge, first-try green 1/0, CHANGES_REQUESTED
+                                  reviews, follow-up PRs (same branch later, or fixes/reverts/follow-up next to #N); `-`
+                                  when none or unmeasured. PRS_JSON adds headRefName, isCrossRepository, reviews, title,
+                                  body; RUNS_JSON: headBranch, conclusion, attempt, createdAt. A `quality KIND n=…` line
+                                  per kind ends with the merging sessions' median $ per PR they merged
   spend [days=7] DIR              where the window's spend went, as Markdown: by account, project, session, kind,
                                   model, trigger and context size; rebuilds of big contexts, wakes, test runs, gh
                                   calls, handovers. Writes DIR/spend-{req,sess,wakes,ev}.tsv first
@@ -1971,11 +1978,12 @@ def waste(d="", days=7, opening_chars=24):
         print("usage faults:", "; ".join(f"{u['kind']} {u['feature']} {u['uses']}" for u in f))
 
 
-def merges(d="", prs_json="", days=7, repo=""):
+def merges(d="", prs_json="", days=7, repo="", runs_json=""):
     """The merge rows of DIR's units.tsv against the host's PR list (PRS_JSON: number, createdAt, mergedAt): how long a
-    merge command took to land, and $ per merged PR. OWNER/REPO drops merge rows that name another repo."""
+    merge command took to land, and $ per merged PR. OWNER/REPO drops merge rows that name another repo. Then
+    quality()'s rows (PRS_JSON with headRefName, reviews, title, body; RUNS_JSON the host's CI runs)."""
     if not d or not prs_json:
-        sys.exit("usage: retro.py merges DIR PRS_JSON [days=7] [OWNER/REPO]")
+        sys.exit("usage: retro.py merges DIR PRS_JSON [days=7] [OWNER/REPO] [RUNS_JSON]")
     window(days)
     prs = {p["number"]: p for p in json.load(open(prs_json))}
     s = tsv(d, "sessions.tsv")
@@ -2008,6 +2016,54 @@ def merges(d="", prs_json="", days=7, repo=""):
     gm = [p for p in prs.values() if inwin(p.get("mergedAt"))]
     print(f"host: merged in window {len(gm)} opened {sum(inwin(p.get('createdAt')) for p in prs.values())}")
     print(f"$ per merged PR: ran {usd_all / max(1, len(nums) - len(notm)):.2f} host {usd_all / max(1, len(gm)):.2f}")
+    quality(ms, prs, s, runs_json)
+
+
+def quality(ms, prs, s, runs_json=""):
+    """Per merged PR of the merge rows: CI runs on its branch from its opening to its merge that failed or were re-run
+    (first-try green when none; `-` without RUNS_JSON, runs, or for a fork's PR), CHANGES_REQUESTED reviews, and
+    follow-ups opened by the window's end: a later PR on the same branch (the task reopened) or one whose title or body
+    says fixes/reverts/follow-up next to #N. Its kind is the merging session's, as spend reads it (`host`: a reviewer
+    merged; `unknown`: no transcript). Then one line per kind, with n and the merging sessions' median $ per PR merged."""
+    runs = collections.defaultdict(list)
+    for r in json.load(open(runs_json)) if runs_json else []:
+        runs[r.get("headBranch")].append(r)
+    usd = {r["session"]: float(r["usd"] or 0) for r in s}
+    sids = {r["session"] for r in ms}
+    kinds = {os.path.basename(f)[:8]: scan(f)["kind"] for f in transcripts() if os.path.basename(f)[:8] in sids}
+    rows, seen = [], set()
+    for r in ms:
+        n = int(r["id"].rpartition("#")[2])
+        p = prs.get(n) or {}
+        if n in seen or not p.get("mergedAt"):
+            continue
+        seen.add(n)
+        br, done, fork = p.get("headRefName"), p["mergedAt"], p.get("isCrossRepository")
+        # a reused branch: runs after its previous PR's merge only
+        prev = max([q["mergedAt"] for q in prs.values() if q.get("headRefName") == br and q.get("mergedAt")
+                    and q["mergedAt"] < done] + [p.get("createdAt") or ""])
+        rs = [] if fork else [x for x in runs.get(br, []) if prev <= (x.get("createdAt") or "") <= done]
+        # gh lists a run's last attempt only: a re-run means an earlier attempt didn't pass
+        fails = sum((x.get("conclusion") in ("failure", "timed_out", "startup_failure")) + max(0, (x.get("attempt") or 1) - 1)
+                    for x in rs)
+        rounds = sum(v.get("state") == "CHANGES_REQUESTED" for v in p.get("reviews") or [])
+        fix = re.compile(rf"(?i)\b(fix(es)?|reverts?|follow-?up( to| for| of)?)\W+(\S+\W+)?#{n}\b|#{n}\b\W+follow-?up\b")
+        fu = [q["number"] for q in prs.values() if done < (q.get("createdAt") or "") <= END_ISO + "Z"
+              and ((q.get("headRefName") == br and not fork and not q.get("isCrossRepository"))
+                   or fix.search(f"{q.get('title', '')}\n{q.get('body') or ''}"))]
+        sid = r["session"]
+        kind = kinds.get(sid) or ("host" if sid == "host" else "unknown")
+        rows.append([kind, n, fails if rs else None, rounds, fu, sid])
+        print("\t".join(map(str, ["quality", f"#{n}", kind, "-" if not rs else fails, "-" if not rs else int(not fails),
+                                  rounds, ",".join(f"#{x}" for x in fu) or "-"])))
+    merged = collections.Counter(x[5] for x in rows)
+    for k in sorted({x[0] for x in rows}):
+        g = [x for x in rows if x[0] == k]
+        ci = [x for x in g if x[2] is not None]
+        cost = [usd[x[5]] / merged[x[5]] for x in g if x[5] in usd and x[5] in kinds]
+        print(f"quality {k} n={len(g)}: first-try green {sum(not x[2] for x in ci)}/{len(ci)}, CHANGES_REQUESTED "
+              f"{sum(x[3] for x in g)} in {sum(x[3] > 0 for x in g)} PRs, follow-up {sum(bool(x[4]) for x in g)}, "
+              f"merging session's $ per PR merged median {f'{med(cost):.2f}' if cost else '-'}")
 
 
 TEST_RX = [(k, re.compile(rx)) for k, rx in [

@@ -8,12 +8,21 @@ usage). Where reviewers press merge, a session's merge command never runs: write
 `units 7 P --keys keys.txt > /dev/null 2>&1`, then from the project root the adapter's merges for them to `merged.txt`
 (`.claude/session-status-adapter yesterday <window start, epoch s> $(cat keys.txt)`), and pass `--merged merged.txt`
 to both `units` calls. An adapter without `yesterday`, or a non-zero exit: leave it out and say merges count only the
-ones sessions ran (`merge_ran`). Time to merge, with a GitHub host: the PR list to `prs.json` (`gh pr list --state all
---limit 1000 --json number,createdAt,mergedAt -R OWNER/REPO`), then `merges <dir> prs.json 7 OWNER/REPO P >
-merges.txt` (`waste`'s `sessions.tsv` first: it reads it for $ per PR).
+ones sessions ran (`merge_ran`). Time to merge and quality, with a GitHub host: the PR list to `prs.json` (`gh pr list
+--state all --limit 1000 --json number,createdAt,mergedAt,headRefName,isCrossRepository,reviews,title,body -R
+OWNER/REPO`) and its CI runs to `runs.json` (`gh run list --limit 1000 --json headBranch,conclusion,attempt,createdAt
+-R OWNER/REPO`), then `merges <dir> prs.json 7 OWNER/REPO runs.json P > merges.txt` (`waste`'s `sessions.tsv` first:
+it reads it for $ per PR).
 
 ## Measure
 
 $ and tokens (output + cache write + cache read) per merged PR, per finished ticket and per review posted: `units.tsv`
 and its totals line, counted from the sessions' own transcripts (only commands that ran), not a tracker sweep. Time to
 done: review written → posted, "merge it" → merged. Weekly $ only as context, one line.
+
+Quality beside cost, from `merges.txt`'s `quality` lines: per kind, with n, first-try CI green, PRs with changes
+requested, and follow-ups (the branch came back as a new PR, or a later PR fixes or reverts it), next to the merging
+session's $ per PR it merged (the merger's cost: where a reviewer or the coordinator merges, `host` or the
+coordinator's kind, not the author's). A cheaper kind whose PRs need more CI rounds, reviews or follow-ups is not cheaper: say so, and
+rank a proposal on cost and quality together. Under 5 PRs a kind, or one CI flake, is noise: give n and don't rank on
+it alone.
