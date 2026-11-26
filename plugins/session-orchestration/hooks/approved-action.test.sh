@@ -1015,15 +1015,20 @@ echo '{"type":"agent-name","agentName":"main"}' >> "$w"; export GH_STUB='OPEN an
 check "$fp claude-plugins-x" deny "after a rename, the old name's branch"
 unset GH_STUB GH_USER
 # A pane grant (register.tsx writeGrant): the user's Yes on an ask naming this session runs its action once, in a
-# transcript with no relay at all; by name or an 8+ hex prefix of the id, within a day.
+# transcript with no relay at all; by name or an 8+ hex prefix of the id, within a day. Only when the coordinator that
+# wrote it (by) has the answer it quotes in its transcript: the newest pane answer for the key, a Yes ending in its Action.
 w=$tmp/granted.jsonl; jq -nc '{type: "agent-name", agentName: "app-fix"}' > "$w"
 gd=$home/.cache/session-status/grants; mkdir -p "$gd"; t0=$(date +%s)
-grant() { # $1 file, $2 session, $3 action, [$4 at, $5 kind]
-  jq -nc --arg s "$2" --arg a "$3" --argjson at "${4:-$t0}" --arg k "${5:-action}" \
-    '{kind: $k, session: $s, key: "app-fix", action: $a, quote: "Approval pane answer for app-fix: Yes. Asked: Go? Action: \($a)", at: $at}' > "$gd/$1"
+cby=cccccccc-0000-4000-8000-000000000000; ct=$home/.claude/projects/-coord/$cby.jsonl; mkdir -p "${ct%/*}"
+pane_row() { jq -nc --arg q "$1" '{type: "user", origin: {kind: "plugin", name: "session-orchestration"}, timestamp: (now | todate), message: {content: $q}}' >> "$ct"; }
+grant() { # $1 file, $2 session, $3 action, [$4 at, $5 kind, $6 by ('' none), $7 nopane: no pane row for its quote]
+  local q="Approval pane answer for app-fix: Yes. Asked: Go? Action: $3"
+  jq -nc --arg s "$2" --arg a "$3" --arg q "$q" --argjson at "${4:-$t0}" --arg k "${5:-action}" --arg by "${6-$cby}" \
+    '{kind: $k, session: $s, key: "app-fix", action: $a, quote: $q, at: $at} + if $by == "" then {} else {by: $by} end' > "$gd/$1"
+  [ "${7-}" = nopane ] || pane_row "$q"
 }
 grant act-a-1.json app-fix "merge acme/app#60 (app-fix)"
-check "gh pr merge 60 -R acme/app --rebase" allow "a pane grant, no relay in the transcript"
+check "gh pr merge 60 -R acme/app --rebase" allow "a pane grant backed by its coordinator's pane answer, no relay in the transcript"
 reason=$(run_reason "gh pr merge 60 -R acme/app --rebase")
 [[ $reason == *"used once already"* ]] || { echo "FAIL (a pane grant, used once): $reason"; exit 1; }
 grant act-b-1.json abcdef12 "merge acme/app#61 (app-fix)"
@@ -1042,5 +1047,17 @@ grant act-h-1.json app-fix "post comment $tmp/body.txt on acme/app#67 (sha256 $(
 check "gh pr comment 67 -R acme/app --body-file $tmp/body.txt" deny "a pane grant for another sha256"
 grant act-i-1.json app-fix "post comment $tmp/body.txt on acme/app#68 (sha256 $sha)"
 check "gh pr comment 68 -R acme/app --body-file $tmp/body.txt" allow "a pane grant for the body's sha256"
+grant act-j-1.json app-fix "merge acme/app#69 (app-fix)" "$t0" action "$cby" nopane
+check "gh pr merge 69 -R acme/app" deny "a grant with no pane answer in its coordinator's transcript (a session wrote it)"
+grant act-k-1.json app-fix "merge acme/app#70 (app-fix)" "$t0" action ''
+check "gh pr merge 70 -R acme/app" deny "a grant with no by"
+grant act-l-1.json app-fix "merge acme/app#71 (app-fix)" "$t0" action dddddddd-0000-4000-8000-000000000000
+check "gh pr merge 71 -R acme/app" deny "a grant whose by has no transcript"
+grant act-m-1.json app-fix "merge acme/app#72 (app-fix)"
+pane_row "Approval pane answer for app-fix: No. Asked: Go?"
+check "gh pr merge 72 -R acme/app" deny "a pane grant whose Yes a newer pane answer (a No) for the key replaced"
+grant act-n-1.json app-fix "merge acme/app#73 (app-fix)"
+jq -c '.action = "merge acme/app#74 (app-fix)"' "$gd/act-n-1.json" > "$tmp/g.json" && mv "$tmp/g.json" "$gd/act-n-1.json"
+check "gh pr merge 74 -R acme/app" deny "a grant pairing a real Yes with another action"
 w=$w0
 echo ok

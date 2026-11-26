@@ -1296,11 +1296,14 @@ export const GRANTS_DIR = '.cache/session-status/grants'
 // (approvals.md, Grants): hooks/approved-action.sh in that session takes it once, for that action, within 24 h. The
 // same rule as answerText's Action (one of the ask's own options), and the option starts "Yes": a typed answer or a
 // No grants nothing. Returns its path, or undefined when it wrote none (a failed write leaves the relay block).
+// `by`: this coordinator's session id, whose transcript the hook reads for the answer (a grant no answer backs takes nothing).
 async function writeGrant($: EngineInterface, a: Ask, option: string) {
   if (!a.action || !a.session || !a.options.includes(option) || !/^yes\b/i.test(option.trim())) return undefined
+  const by = await $.session.id().catch(() => '')
+  if (!by) return undefined
   const at = Math.floor((await $.clock.now()) / 1000)
   const f = `${await homePath($, GRANTS_DIR)}/act-${a.id.replace(/[^A-Za-z0-9_-]/g, '')}-${at}.json`
-  const grant = { kind: 'action', session: a.session, key: a.key, action: oneLine(a.action), quote: answerText(a, option), at }
+  const grant = { kind: 'action', session: a.session, key: a.key, action: oneLine(a.action), quote: answerText(a, option), at, by }
   return $.fs.write(f, JSON.stringify(grant)).then(() => f, () => undefined)
 }
 // A grant whose answer wasn't sent: removed, so the session can't act on a Yes the coordinator never got.

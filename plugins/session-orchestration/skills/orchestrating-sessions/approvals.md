@@ -14,8 +14,10 @@ attach <id>`), a plan approval in that session.
 An ask for a hook-gated action a session runs (its `needs your approval: <action>`) carries `action` and `session`:
 the session's name as its messages show it, or its id (whole, or its first 8 or more characters); the pane shows
 "Runs in: <it>". The user's click on one of its options starting "Yes" writes a grant that session's approval hook
-takes once, for that action only, within 24h: no quote to verify, no Source. A later answer for the key (a No
-included) voids it. `session-status --relay KEY` then prints,
+takes once, for that action only, within 24h. The grant records the coordinator's session id, and the hook takes it
+only when that session's transcript holds the pane answer it quotes, a Yes ending in its Action, as the newest pane
+answer for the key: a later answer (a No included) voids it, and a grant file a session writes itself takes nothing.
+`session-status --relay KEY` then prints,
 instead of the block, the go note to send as is (`Approved on the pane, granted to S: ACTION. Run the same command
 again: …`); the note approves nothing itself, the hook finds the grant. An answer typed in the pane (In your own
 words…) grants nothing. The relay block stays for the rest: an ask without `session`, a typed or question-box answer,

@@ -117,6 +117,15 @@ coordinated() {
   fi
   [ -z "$c" ] || echo "$sz" > "$c"; return 1
 }
+# jq -n: pane_texts(SINCE) gives {t, id} for each pane answer a transcript holds from SINCE (epoch s) on: a row this
+# plugin's pane submitted (the engine sets that origin; no other plugin or session can), or its queued copy.
+pane_def='def pane: (. // {}) | .kind == "plugin" and .name == "session-orchestration";
+  def pane_texts($since): inputs | . as $e
+    | (if .type == "user" and (.origin | pane) then (.message.content | if type == "string" then . else ([.[]? | .text? // empty] | join(" ")) end)
+       elif .type == "attachment" and .attachment.type == "queued_command" and (.attachment.origin | pane) then .attachment.prompt | tostring
+       else empty end) as $t
+    | select(($e.timestamp // "" | sub("\\.[0-9]+Z$"; "Z") | try fromdate catch 0) >= $since)
+    | {t: $t, id: "\($e.uuid // $e.timestamp)"};'
 # A link message (session-status --link send, features/remote.md, Links) leaves for another person's coordinator, and
 # a renew keeps that link open: each runs alone, and only on the user's Yes in this session's own pane (no relay: the
 # coordinator acts itself), whose question names the action ("send link message FILE to PEER (sha256 SHA)", "renew
@@ -142,20 +151,14 @@ if [[ $raw =~ $kpre ]]; then
   else
     decide deny "Blocked: run session-status --link send PEER --kind K [--re N] /abs/FILE (or --link renew PEER [DAYS]) alone, as its own plain command, so the approval hook can name it."
   fi
-  # The pane's click: a row this plugin submitted (the engine sets that origin; no other plugin or session can), its
-  # option a yes, its question naming the action.
-  row=$([ -f "$tp" ] && jq -rn --arg a "$action" --argjson since "$(( $(date +%s) - 86400 ))" '
-    def pane: (. // {}) | .kind == "plugin" and .name == "session-orchestration";
-    inputs | . as $e
-    | (if .type == "user" and (.origin | pane) then (.message.content | if type == "string" then . else ([.[]? | .text? // empty] | join(" ")) end)
-       elif .type == "attachment" and .attachment.type == "queued_command" and (.attachment.origin | pane) then .attachment.prompt | tostring
-       else empty end) as $t
-    | select(($e.timestamp // "" | sub("\\.[0-9]+Z$"; "Z") | try fromdate catch 0) >= $since)
+  # The pane's click (pane_texts), its option a yes, its question naming the action.
+  row=$([ -f "$tp" ] && jq -rn --arg a "$action" --argjson since "$(( $(date +%s) - 86400 ))" "$pane_def"'
+    pane_texts($since) | .t as $t
     | select($t | startswith("Approval pane answer for "))
     | ($t | index(". Asked: ")) as $i | select($i != null)
     | select($t[:$i] | sub("^Approval pane answer for [^:]*: "; "") | test("^yes\\b"; "i"))
     | select($t[$i + 9:] | contains($a))
-    | "\($e.uuid // $e.timestamp)"' "$tp" 2>/dev/null | tail -1)
+    | .id' "$tp" 2>/dev/null | tail -1)
   [ -n "$row" ] || attended "Blocked: $action needs your user's Yes on your pane first (a link to another person's coordinator): $how."
   used=~/.cache/session-status/approved/$(printf 'link|%s|%s|%s' "$tp" "$action" "$row" | shasum -a 256 | cut -c1-32)
   [ ! -e "$used" ] || attended "Blocked: that Yes was used already; $how."
@@ -824,16 +827,31 @@ done
 # "merge"/"approve" with no sha256 for a merge or bare approval (a gh review: its kind and "review" too); then the quote must verify, with the task key the Action names.
 tried= me=$(grep -F '"agent-name"' "$tp" 2>/dev/null | jq -r 'select(.type == "agent-name") | .agentName // empty' 2>/dev/null | tail -1) now=$(date +%s)
 # The user's Yes on the coordinator pane to an ask that names this session as the one that runs its action: the pane
-# wrote a grant (register.tsx writeGrant; coordinator-guard keeps sessions from writing one), good for a day, to this
-# session's name or an 8+ hex prefix of its id. Last line: tried first.
+# wrote a grant (register.tsx writeGrant), good for a day, to this session's name or an 8+ hex prefix of its id.
+# A session can write a grant file too, so it counts only when the answer it quotes is the newest pane answer for its
+# key, a Yes ending in its Action, in the transcript of the coordinator that wrote it (`by`): a row only the pane
+# writes (pane_texts). Last line: tried first.
+grant_backed() { # $1 the grant, as JSON
+  local by bt
+  by=$(jq -r '.by // ""' <<<"$1")
+  [[ $by =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  for bt in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$by".jsonl; do [ -f "$bt" ] && break; done
+  [ -f "$bt" ] || return 1
+  grep -F "Approval pane answer for $(jq -r .key <<<"$1"): " "$bt" 2>/dev/null |
+    jq -en --argjson g "$1" --argjson since $(( now - 86400 )) "$pane_def"'
+      ("Approval pane answer for \($g.key): ") as $p
+      | [pane_texts($since) | .t | select(startswith($p))] | last
+      | . == $g.quote and endswith(" Action: \($g.action)") and (.[($p | length):] | test("^yes\\b"; "i"))' >/dev/null 2>&1
+}
 for g in ~/.cache/session-status/grants/act-*.json; do
   [ -f "$g" ] || continue
   l=$(jq -c --arg me "$me" --arg sid "$sid" --argjson now "$now" --arg f "$g" '
     select(.kind == "action" and ([.action, .quote, .session, .key] | all(type == "string")) and (.at | type == "number")
       and .at >= $now - 86400 and .at <= $now + 5
       and (.session as $s | ($s == $me and $me != "") or (($s | test("^[0-9a-f]{8}[0-9a-f-]*$")) and ($sid | startswith($s)))))
-    | {grant: 1, name: .session, quote, action, tp: $f}' "$g" 2>/dev/null) || continue
-  [ -z "$l" ] || relays=${relays:+$relays
+    | {grant: 1, name: .session, quote, action, key, by, tp: $f}' "$g" 2>/dev/null) || continue
+  [ -n "$l" ] && grant_backed "$l" || continue
+  relays=${relays:+$relays
 }$l
 done
 while IFS= read -r r; do
@@ -854,7 +872,7 @@ while IFS= read -r r; do
     [ "$kind" != prpost ] || [ -z "$host$fj" ] || ! grep -qiw review <<<"$nb" || continue
     [ "$kind" != review ] || { grep -qiE "(^|[^a-z-])$mode([^a-z-]|$)" <<<"$nb" && grep -qiw review <<<"$nb"; } || continue
   fi
-  # A pane grant is the user's click itself, written by the pane: no quote to verify.
+  # A pane grant's quote was checked in its coordinator's transcript (grant_backed): no relay to verify.
   if [ "$(jq -r '.grant // empty' <<<"$r")" = 1 ]; then v="verified: the user's Yes on the coordinator pane: $(jq -r .quote <<<"$r")"
   else
     # (A send's key from outside its action: a subject or id there may hold words like UTF-8.)

@@ -293,6 +293,7 @@ test('an ask answered in the user\'s own words submits them as the answer', asyn
 test('a Yes click on an ask with action and session writes its grant before the answer; a No, typed words or a dropped answer leave none, and a later answer for the key voids it', async ($, on) => {
   mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/h' })
+  on('session.id', async () => ({ value: 'sess-c' }))
   const order: string[] = []
   const dir = '/h/.cache/session-status/grants'
   const grants = new Map<string, string>() // the grants folder: path to text
@@ -338,7 +339,7 @@ test('a Yes click on an ask with action and session writes its grant before the 
   await click('PROJ-1', 'ask-1-0', { session: 'PROJ-1-fix' })
   const quote = 'Approval pane answer for PROJ-1: Yes, merge it. Asked: Land PROJ-1? Action: merge acme/app#2 (PROJ-1)'
   expect(order).toEqual([
-    `grant /h/.cache/session-status/grants/act-1-1000.json ${JSON.stringify({ kind: 'action', session: 'PROJ-1-fix', key: 'PROJ-1', action: 'merge acme/app#2 (PROJ-1)', quote, at: 1000 })}`,
+    `grant /h/.cache/session-status/grants/act-1-1000.json ${JSON.stringify({ kind: 'action', session: 'PROJ-1-fix', key: 'PROJ-1', action: 'merge acme/app#2 (PROJ-1)', quote, at: 1000, by: 'sess-c' })}`,
     `submit ${quote}`,
   ])
   order.length = 0
