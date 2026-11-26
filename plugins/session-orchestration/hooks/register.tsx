@@ -1007,6 +1007,7 @@ const REPLY_SCHEMA = {
     to: { type: 'string', description: 'A received message\'s `from`, or a session name. Left out: this project\'s coordinator' },
     report: { type: 'string', description: 'Your status report in full (markdown). Written first to <KEY>.md in the replies folder (key, else this session\'s name), replacing the report at its top and keeping its `## Handoff` (a `# ` section it drops, such as a deliverable, moves to <KEY>-archive.md), so you never write that file by hand; text can then be the short message. Not written: nothing is sent' },
     done: { type: 'string', enum: DONE_KINDS, description: 'Only on the report that says the task is done; the reply is sent once what this kind needs holds, else it comes back with what is missing. pr: the worktree is clean, its commits are on the remote, the board shows a PR for key with no failing checks or conflict. pushed: clean and pushed, no PR (a branch someone else releases). report: no code; every file path the text names exists, and each .html it names, made by retro.py html (its generator mark) when a same-name .md is beside it, is opened for the user, once (the text gains `opened: yes`, or `opened: no (PATHS)`)' },
+    hold: { type: 'boolean', description: 'true on an unasked report that needs nothing from the coordinator now (a status, a done with no decision): while its watcher runs it waits in the coordinator inbox and reaches it within ~3 min in one wake with the others held meanwhile; else it is sent now. Never on blocked, an approval or decision for the user, or handoff ready. Not with to' },
     key: { type: 'string', description: 'Your task key: with done pr, the key whose PR the board shows; with report, the file is <key>.md' },
     worktree: { type: 'string', description: 'With done pr or pushed: the task\'s worktree (absolute path), when it isn\'t this session\'s cwd' },
     artifact: {
@@ -1854,8 +1855,10 @@ export const register: Register = on => {
   // coordinators (session-status --coordinator, newest first) until one takes it. That runs from the project root, as
   // the Bash tool's run did: from a worktree under it, session-status could take the worktree for the project.
   on('tool.call', { tool: 'mcp__session-orchestration__reply' }, async ($, e) => {
-    const { text, to, done, key, worktree, report, artifact } = e
+    const { text, to, done, key, worktree, report, artifact, hold } = e
     if (typeof text !== 'string' || !text.trim()) return { deny: 'reply needs text.' }
+    if (hold !== undefined && typeof hold !== 'boolean') return { deny: 'reply: hold is true or false.' }
+    if (hold && typeof to === 'string' && to.trim()) return { deny: 'reply: hold is for an unasked report to the coordinator: leave to out, or drop hold.' }
     if (report !== undefined && (typeof report !== 'string' || !report.trim())) return { deny: 'reply: report, when given, is the report text.' }
     const here = await $.session.cwd()
     const cwd = here.replace(/\/\.(claude\/)?worktrees\/.*$/, '')
@@ -1920,6 +1923,13 @@ export const register: Register = on => {
       if (r?.exitCode === 3) { body = `${msg}\n\n${report}`; filed += ' No replies folder, so the report went with the message.' }
       else if (r?.exitCode === 0) filed += ` Report written to ${r.stdout.trim()}.`
       else return { deny: `reply: not sent, the report wasn't written (${oneLine(r?.stderr ?? '') || (r ? `exit ${r.exitCode}` : 'no run')}). Fix that and reply again.` }
+    }
+    // Held (the sender's call: nothing needed now): into the inbox, which the coordinator's running watcher delivers
+    // with the others held meanwhile, as one wake. No watcher (exit 4) or a failed add: sent now, as unheld.
+    if (hold && !toName) {
+      const r = await runBash($, [`${$.plugin.root}/skills/orchestrating-sessions/session-status`, '--inbox-add', '--hold', id],
+        { cwd, stdin: msg, timeoutMs: 60_000 }).catch(() => undefined)
+      if (r?.exitCode === 0) return { result: `Held in ${r.stdout.trim()}: the coordinator's watcher delivers it within ~3 min, with any other held reports. Don't send it again.${filed}` }
     }
     const names = toName ? [toName]
       : (await runStatus($, ['--coordinator'], { cwd, env: { CLAUDE_CODE_SESSION_ID: id } }))

@@ -164,8 +164,10 @@
 #        session-status --successor [--account DIR] | --successor --done | --await ready|renamed|name|done [--timeout S] |
 #                       --name-check NAME   a coordinator hands itself over to NAME-next it starts (see the block;
 #                       handover.md)
-#        session-status --inbox [--read N…|all] | --inbox-add [--from WHO] [SENDER_ID] < TEXT   the coordinator
-#                       inbox: messages no live coordinator took (the reply tool's backstop), unread ones printed
+#        session-status --inbox [--read N…|all] | --inbox-add [--from WHO] [--hold] [SENDER_ID] < TEXT   the coordinator
+#                       inbox: messages no live coordinator took (the reply tool's backstop), unread ones printed;
+#                       --hold: the reply tool's held report, queued only while the coordinator's watcher runs (else
+#                       exit 4), which wakes with every held one's text about CONFIRM_S later (--watch)
 #        session-status --inbox-add --root DIR < TEXT   a coordinator queues TEXT in DIR's project coordinator inbox,
 #                       under any account (features/accounts.md, Messaging another project's coordinator)
 #        session-status --inbox --sent   what this coordinator queued that way, each marked unread, read or gone; the
@@ -542,6 +544,17 @@ inbox_unread() {   # the unread entries, heading and text, oldest first
   local f; f=$(inbox_file) && [ -f "$f" ] || return 0
   awk '/^## [0-9]+ · / { on = index($0, " · unread · ") > 0 } on' "$f"
 }
+# Held reports (the reply tool's hold: nothing needed from the coordinator now) wait in the inbox, their heading ending
+# ` · held`, while the coordinator's unscoped watcher runs: it touches WATCHING at each tick and drops it on exit, and
+# an add touches HOLD_WAKE, which ends its nap so it confirms and wakes once with all of them (--watch).
+WATCHING=~/.cache/session-status/$ENC.watching HOLD_WAKE=~/.cache/session-status/$ENC.hold-wake
+# held_out: a wake's held entries in full, marked read: the wake delivered them, as a direct message would have.
+held_out() {
+  local f t; f=$(inbox_file) && [ -f "$f" ] || return 0
+  t=$( inbox_lock "$f"; awk '/^## [0-9]+ · / { on = index($0, " · unread · ") > 0 && / · held$/ } on' "$f"
+    awk '/^## [0-9]+ · unread · .* · held$/ { sub(/ · unread · /, " · read · ") } { print }' "$f" > "$f.$$" && mv "$f.$$" "$f" )
+  [ -z "$t" ] || printf '\nHeld reports (sent together; already marked read):\n%s\n' "$t"
+}
 # inbox_lock FILE: an add and a --read's rewrite never interleave (an add between the read and the mv was lost; two adds
 # took one number). A flock(2) on FILE.flock, held on fd 9 until this process exits, so a killed run frees it at once:
 # the old mkdir lock's stale-owner takeover let two waiters in together. perl takes it (no flock CLI on macOS); the lock
@@ -626,7 +639,11 @@ if [ "${1:-}" = --inbox-add ]; then
     --from) from=${2:-}; shift 2 ;;
     --root) to=${2:-}; [ -n "$to" ] && [ $# = 2 ] || { echo "$usage" >&2; exit 2; }; shift 2 ;;
   esac
+  hold=; [ "${1:-}" != --hold ] || { hold=1; shift; }
   body=$(cat); [ -n "${body//[[:space:]]/}" ] && [ "${1:-}" != --root ] || { echo "$usage" >&2; exit 2; }
+  # no watcher ticked in 5 minutes (none armed, or the coordinator is mid-turn): the sender sends it now instead
+  [ -z "$hold" ] || { [ -f "$WATCHING" ] && [ $(( $(date +%s) - $(mtime_named "$WATCHING" | cut -d' ' -f1) )) -lt 300 ]; } ||
+    { echo "no coordinator watcher running: send it now" >&2; exit 4; }
   if [ -n "$to" ]; then
     # --root DIR: another project's coordinator inbox, under any account (features/accounts.md, Messaging another
     # project's coordinator). Coordinator to coordinator only, never an approval, never into a folder git would commit.
@@ -655,8 +672,9 @@ if [ "${1:-}" = --inbox-add ]; then
   k=$(( $(awk '/^## [0-9]+ · / { n = $2 } END { print n + 0 }' "$f") + 1 ))
   # a `#` line in the text would read as a heading: indented
   w=$(date '+%m-%d %H:%M')
-  printf '\n## %s · unread · %s · from %s\n%s\n' "$k" "$w" "$(tr -d '\n' <<<"${from:-unknown}")" "$(sed 's/^#/ #/' <<<"$body")" >> "$f" ||
+  printf '\n## %s · unread · %s · from %s%s\n%s\n' "$k" "$w" "$(tr -d '\n' <<<"${from:-unknown}")" "${hold:+ · held}" "$(sed 's/^#/ #/' <<<"$body")" >> "$f" ||
     { echo "couldn't write $f" >&2; exit 1; }
+  [ -z "$hold" ] || touch "$HOLD_WAKE"
   # --root: logged, so --inbox --sent and the status footer show it until the other coordinator reads it
   [ -z "$to" ] || { mkdir -p "${SENT_LOG%/*}"; printf '%s\t%s\t%s\t%s\n' "$f" "$k" "$d" "$w" >> "$SENT_LOG"; }
   echo "$f #$k"; exit 0
@@ -1696,7 +1714,7 @@ idle_check() {
   done <<<"$all"
   [ -n "$keep" ] || [ -f "$seen" ] && { mkdir -p ~/.cache/session-status; printf '%s' "$keep" > "$seen"; }
   [ ${#out[@]} -gt 0 ] || return 0
-  usage wake wake "${#out[@]}"; printf '%s\n' "${out[@]}"; exit 0
+  usage wake wake "${#out[@]}"; printf '%s\n' "${out[@]}"; [ -n "${IDLE_SCOPE:-}" ] || held_out; exit 0
 }
 # nap SECS: sleep SECS in pieces of at most SESSION_STATUS_TICK_S, running idle_check after each.
 # Unscoped and with links (features/remote.md, Links), it fetches them every LINK_POLL_S too: a new message lands in the
@@ -1710,7 +1728,9 @@ nap() {
     # start now, and a start's result is the wake. Only its stdout: a warning on stderr with nothing due would end the
     # watcher at every tick.
     if [ -z "${IDLE_SCOPE:-}" ]; then
-      out=$("$SELF" --launch --due); [ -z "$out" ] || { usage wake wake "$(grep -c . <<<"$out")"; echo "$out"; exit 0; }
+      out=$("$SELF" --launch --due); [ -z "$out" ] || { usage wake wake "$(grep -c . <<<"$out")"; echo "$out"; held_out; exit 0; }
+      # a held report ends a long nap, not the confirm one: reports held meanwhile join the same wake
+      touch "$WATCHING"; [ -n "$seen" ] || [ ! -f "$HOLD_WAKE" ] || { rm -f "$HOLD_WAKE"; return 0; }
     fi
     if [ -z "${IDLE_SCOPE:-}" ] && [ "$(date +%s)" -ge "$link_next" ] && compgen -G "$LINKS/*.json" >/dev/null; then
       link_next=$(( $(date +%s) + LINK_POLL_S )); [ -z "$("$SELF" --link fetch 2>/dev/null)" ] || return 0
@@ -1733,6 +1753,10 @@ if [ "${1:-}" = --watch ]; then
   fails=0 seen=
   # idle_check's scope: the args that are keys (a sub's `--watch KEY`); a live sub's own sessions skip the parent's
   IDLE_KEYRE=$(key_re "$(adapter_path "$ROOT")") IDLE_SCOPE=$(for a in "$@"; do grep -xE "$IDLE_KEYRE" <<<"$a"; done | paste -sd'|' -)
+  # the coordinator's watcher: the reply tool holds reports for it only while it runs (held_out)
+  if [ -z "$IDLE_SCOPE" ]; then
+    mkdir -p "${WATCHING%/*}"; touch "$WATCHING"; rm -f "$HOLD_WAKE"; trap 'r=$?; rm -f "$WATCHING"; exit_fault $r' EXIT
+  fi
   while :; do
     if [ -n "$seen" ]; then out=$(SESSION_STATUS_FORWARD=1 "$SELF" --changes "$@"); else out=$(SESSION_STATUS_PEEK=1 "$SELF" --changes "$@"); fi; rc=$?
     if [ "$rc" != 0 ]; then
@@ -1745,7 +1769,7 @@ if [ "${1:-}" = --watch ]; then
     fi
     fails=0
     if [ "$out" = "no changes" ]; then seen=; nap "$every"
-    elif [ -n "$seen" ]; then usage wake wake "$(grep -c . <<<"$out")"; echo "$out"; exit 0
+    elif [ -n "$seen" ]; then usage wake wake "$(grep -c . <<<"$out")"; echo "$out"; [ -n "${IDLE_SCOPE:-}" ] || held_out; exit 0
     else seen=1; nap "$confirm"
     fi
   done
@@ -2034,7 +2058,10 @@ if [ "${1:-}" = --changes ]; then
   fi
   # The coordinator inbox's unread headings (a message no live coordinator took): one appearing is news.
   u=$(inbox_unread | grep '^## ' | cut -c4-)
+  h=$(grep ' · held$' <<<"$u"); u=$(grep -v ' · held$' <<<"$u")
   [ -z "$u" ] || { new+=$'\nInbox (act on each, then mark it read: session-status --inbox --read N):'; while IFS= read -r l; do new+=$'\n  * '"$l"; done <<<"$u"; }
+  # held reports: their text follows the watcher's wake (held_out)
+  [ -z "$h" ] || { new+=$'\nHeld:'; while IFS= read -r l; do new+=$'\n  * '"$l"; done <<<"$h"; }
   # The plugin coordinator's (features/plugin-coordinator.md): each open plugin case is a line, so a new one is news;
   # by path, since list's order moves a case another session saw again.
   if [ "$(plugin_root)" = "$ROOT" ]; then
@@ -2186,7 +2213,7 @@ if [ "${1:-}" = --changes ]; then
         /^was:   ".*" \(.*attach [0-9a-f]+\)( — blocked: .*)?$/ { match($0, /attach [0-9a-f]+\)/); id = substr($0, RSTART + 7, RLENGTH - 8)
           if (id in live && live[id] != "done") drop[NR] }
         END {
-          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(act on each, then mark it read: session-status --inbox --read N\):|Feedback \(feedback list --plugin\):|Issues \(feedback issues\):|Under .*-coordinator:)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
+          for (i = 1; i <= NR; i++) if (line[i] ~ /^(was|now): (Waiting on you:|Notices:|Stale:|Reports:|Weekly limit:|Inbox \(act on each, then mark it read: session-status --inbox --read N\):|Held:|Feedback \(feedback list --plugin\):|Issues \(feedback issues\):|Under .*-coordinator:)?$/|| line[i] == "was: Leftovers (task finished):") drop[i]
           for (i = 1; i <= NR; i++) if (!(i in drop)) print line[i] }'; echo "$ev"; } | grep . || echo "no changes"
   else
     echo "$new"; [ -z "$ev" ] || printf '\n%s\n' "$ev"

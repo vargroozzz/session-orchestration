@@ -125,7 +125,8 @@ polls, a failure that lasted three, an `Idle:` line (checked every minute from t
 or the timeout: it retries Jira/Bitbucket/jq blips and ignores working↔idle
 flips itself, so never wrap it in a loop or filter. Report what changed, then re-arm it. One watcher at a time: skip
 arming if one already runs. Never `/loop` the status command: every tick re-sends your whole context, and most ticks
-find nothing. A `PR events` section in its output: [sessions.md](sessions.md), PR events. It also starts the
+find nothing. Workers' reports that need nothing from you now are held for it (`hold`) and arrive together in
+one wake, under `Held reports`, already marked read: act on each as on a message. A `PR events` section in its output: [sessions.md](sessions.md), PR events. It also starts the
 scheduled starts that are due (`session-status --launch … --at`, sessions.md, Starting a session) and wakes you with
 each result (`Scheduled start (due …): …`). A background session stopped by the 5-hour limit is resumed a minute
 after the reset, with no wake (status-reference.md, `--watch`). Messages you send it during the wait aren't lost:

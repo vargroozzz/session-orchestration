@@ -1349,6 +1349,35 @@ test('reply answers the from it is given, else tries the live coordinators the p
     'proj-coordinator: PROJ-1 · b · blocked', 'old-coordinator: PROJ-1 · b · blocked', 'proj-coordinator: PROJ-1 · b · done', 'PROJ-2-x: PROJ-2 go'])
 })
 
+test('reply with hold waits in the inbox for the coordinator\'s watcher, and goes now when none runs', async ($, on) => {
+  on('session.cwd', async () => ({ value: '/work/proj' }))
+  on('session.id', async () => ({ value: 'sess-3' }))
+  let held = { exitCode: 0, stdout: '/work/docs/replies/coordinator-inbox.md #4\n', stderr: '' }
+  const added: unknown[] = []
+  on('process.run', async (_, e) => {
+    if (e.argv[2] === '--inbox-add') {
+      added.push([e.argv.slice(2), e.init?.stdin])
+      return { value: { ...held, isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    return { value: { exitCode: 0, stdout: 'proj-coordinator\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const sent: string[] = []
+  on('session.send', async (_, e) => {
+    sent.push(`${e.to}: ${e.text}`)
+    return { isDelivered: true }
+  })
+  const reply = (input: Record<string, unknown>) => $.tool.call({ tool: 'mcp__session-orchestration__reply', ...input })
+  expect((await reply({ text: 'x', hold: 'yes' })).deny).toBe('reply: hold is true or false.')
+  expect((await reply({ text: 'x', hold: true, to: 'proj-coordinator' })).deny).toBe('reply: hold is for an unasked report to the coordinator: leave to out, or drop hold.')
+  expect((await reply({ text: 'PROJ-1 · b · idle', hold: true })).result).toBe('Held in /work/docs/replies/coordinator-inbox.md #4: the coordinator\'s watcher delivers it within ~3 min, with any other held reports. Don\'t send it again.')
+  expect(sent).toEqual([])
+  // no watcher running (exit 4): sent now
+  held = { exitCode: 4, stdout: '', stderr: 'no coordinator watcher running: send it now' }
+  expect((await reply({ text: 'PROJ-1 · b · done', hold: true })).result).toBe('Sent to proj-coordinator.')
+  expect(added).toEqual([[['--inbox-add', '--hold', 'sess-3'], 'PROJ-1 · b · idle'], [['--inbox-add', '--hold', 'sess-3'], 'PROJ-1 · b · done']])
+  expect(sent).toEqual(['proj-coordinator: PROJ-1 · b · done'])
+})
+
 test('the model\'s SendMessage by a name the engine refused goes to the socket of the one session under another account carrying it', async ($, on) => {
   on('session.cwd', async () => ({ value: '/work/proj/.worktrees/PROJ-1' }))
   // --address NAME --other: other-coord lives under another account, here-coord under this one (exit 4), down a
