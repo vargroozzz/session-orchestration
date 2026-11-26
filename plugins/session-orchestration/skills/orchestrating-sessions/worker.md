@@ -84,7 +84,10 @@ coordinators get restarted: pass it as `to` only when `reply` says `Pass to` (it
 mid-handover, or it is under another Claude account with no live socket; with one, `--coordinator` prints its `uds:`
 address after the names and `reply` sends there): `reply` queues it in the coordinator inbox
 (`<replies>/coordinator-inbox.md`) and says so; the next coordinator reads it there, so don't send it again. When it
-can't queue either, the replies file is the report, and the coordinator's `--watch` sees it. Without the tool, run
+can't queue either, the replies file is the report, and the coordinator's `--watch` sees it.
+Pass `hold: true` when it needs nothing from the coordinator now, such as a done with no decision for the user. Each wake re-sends the coordinator's whole context, so its running watcher delivers held reports
+together, within ~3 min. Never hold blocked, an approval or a decision for the user, or `handoff ready`: those go at
+once. With no watcher running, a held report goes at once too. Without the tool, run
 `bash <this file's folder>/session-status --coordinator` from the project root and `SendMessage` the first line it
 prints (a name, or a `uds:` address as it is), then the next.
 
