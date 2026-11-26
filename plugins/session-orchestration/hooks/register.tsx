@@ -2898,13 +2898,13 @@ export const register: Register = on => {
           <Button key={`askrow-${a.id}`} plain onPress={setOpen(`ask-${a.id}`, !aOpen)}>
             <Text>{draw(clip([
               seg(aOpen ? '▾ ' : '▸ ', { color: 'permission' }),
+              seg(`#${a.id} `, { dimColor: true }), // ask_approval's id, so the user and coordinator can name the ask; first, so clip never cuts it
               ...(isNew(a) ? [seg('NEW ', { color: 'permission', bold: true })] : []),
               ...(isOld(a, now) ? [seg('OLD ', { color: 'warning', bold: true })] : []),
               ...(why ? [seg(`STALE · ${why} `, { color: 'warning', bold: true })] : []),
               ...kindBadge(a),
               seg(shortShas(oneLine(clean(a.question))), aOpen ? { bold: true } : undefined),
               seg(` ${ago(now - a.at)}`, isOld(a, now) ? { color: 'warning' } : { dimColor: true }),
-              seg(` #${a.id}`, { dimColor: true }), // ask_approval's id, so the user and coordinator can name the ask
             ], cols - 8))}</Text>
           </Button>
           {aOpen && (
