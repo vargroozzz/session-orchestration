@@ -2904,6 +2904,7 @@ export const register: Register = on => {
               ...kindBadge(a),
               seg(shortShas(oneLine(clean(a.question))), aOpen ? { bold: true } : undefined),
               seg(` ${ago(now - a.at)}`, isOld(a, now) ? { color: 'warning' } : { dimColor: true }),
+              seg(` #${a.id}`, { dimColor: true }), // ask_approval's id, so the user and coordinator can name the ask
             ], cols - 8))}</Text>
           </Button>
           {aOpen && (
