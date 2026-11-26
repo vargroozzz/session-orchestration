@@ -913,7 +913,7 @@ test('asks group per key, one line each until opened; an open ask shows its body
   expect((await ui.find({ type: 'Button', key: 'askgrp-PROJ-1' }))?.text).toMatch(/^▸ PROJ-1 2 asks · 1 issue · 2 new · /)
   expect(await ui.find({ type: 'Button', key: 'askrow-1' })).toBeUndefined() // groups start closed
   await ui.press({ key: 'askgrp-PROJ-1' })
-  expect((await ui.find({ type: 'Button', key: 'askrow-1' }))?.text).toMatch(/^▸ NEW  ISSUE  post comment \/tmp\/c\.md on app#2 \(sha256 fb45bdda…\) /)
+  expect((await ui.find({ type: 'Button', key: 'askrow-1' }))?.text).toMatch(/^▸ NEW  ISSUE  post comment \/tmp\/c\.md on app#2 \(sha256 fb45bdda…\) .* #1$/)
   expect(await ui.find({ type: 'Button', key: 'ask-1-0' })).toBeUndefined() // asks start closed
   await ui.press({ key: 'askrow-1' })
   expect((await ui.find({ type: 'Markdown', key: 'askbody-1' }))?.props.text).toBe('## Nit\n\nUse `foo()` here.\\x1b[31m\n') // the ESC shown, not sent
