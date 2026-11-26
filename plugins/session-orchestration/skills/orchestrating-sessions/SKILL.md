@@ -28,8 +28,8 @@ Every coordinator session, before anything else; the user shouldn't have to ask.
    first call it) and a Read of the project's coordinator doc if its `CLAUDE.md` names one. At your first prompt a
    hook (`hooks/start-inject.sh`) has already put `--start`'s output, the memory index and its coordinator topic file
    in your context ("Start context, part N of M"); its last part may name a file holding the rest: Read it in this
-   batch. No Start context, or it says `--start` didn't finish: add the status command with `--start` as Bash
-   `run_in_background: true` (which command: above), and a Read each of the memory files it lacks. Read files with
+   batch; it says `--start` is still running: add the wait it names. No Start context: add the status command with
+   `--start` as Bash `run_in_background: true` (which command: above), and a Read each of the memory files. Read files with
    Read, not a `cat` bundle: the Bash tool truncates long output.
 2. Call `open_pane`. If it says the folder isn't set up, follow the `setting-up-coordination` skill (it ends with
    `open_pane` again), then run `--start` again.

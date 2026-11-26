@@ -38,8 +38,14 @@ for i in 1 2; do grep -q "part $i of 2" "$tmp/out.$i" || fail "two parts: part $
 [ "$(cat "$tmp/out.1" "$tmp/out.2" | grep -c '^row ')" = 150 ] || fail 'no row lost or doubled across parts'
 LINES_N=400 run s5 new.jsonl 'Act as a coordinator.'
 grep -q 'Read .*start-s5.md from line [0-9]' "$tmp/out.3" || fail 'part 3 points to the file when more pieces are needed'
-SLEEP=5 START_INJECT_BUDGET=1 run s6 new.jsonl 'Act as a coordinator.'
-grep -q 'not finished in 1 s' "$tmp/out.1" && grep -q 'MEMORY INDEX' "$tmp/out.1" || fail 'a slow --start: the cheap part and what still runs'
+SLEEP=3 START_INJECT_BUDGET=1 run s6 new.jsonl 'Act as a coordinator.'
+grep -q 'still running after 1 s' "$tmp/out.1" && grep -q 'MEMORY INDEX' "$tmp/out.1" || fail 'a slow --start: the cheap part and what still runs'
+o=$(sed -nE 's/.*writing ([^:]+): .*/\1/p' "$tmp/out.1"); sleep 4
+grep -q 'sid=s6' "$o" && [ -e "$o.rc" ] || fail 'a slow --start runs on to the end, never killed'
+# an earlier try's text (a first prompt interrupted, then sent again) is never served
+mkdir -p "$tmp/.cache/session-status"; echo STALE > "$tmp/.cache/session-status/start-s8.md"; touch -t 202001010000 "$tmp/.cache/session-status/start-s8.md"
+LINES_N=150 run s8 new.jsonl 'Act as a coordinator.'
+! grep -q STALE "$tmp/out.1" "$tmp/out.2" && grep -q 'part 2 of 2' "$tmp/out.2" || fail 'a stale text from an earlier try'
 run s7 new.jsonl 'Coordinate PROJ-12: run the plan.'
 grep -q "PROJ-12's sub-coordinator" "$tmp/out.1" && ! grep -q 'sid=' "$tmp/out.1" || fail 'a sub-coordinator: header, no --start'
 echo ok
